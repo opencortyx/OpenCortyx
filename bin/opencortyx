@@ -303,7 +303,8 @@ release_tag() {
 }
 
 cmd_update() {
-  local channel="${OPENCORTYX_CHANNEL:-$(env_or OPENCORTYX_CHANNEL stable)}" latest current
+  local channel latest current
+  channel="${OPENCORTYX_CHANNEL:-$(env_or OPENCORTYX_CHANNEL stable)}"
   case "${1:-}" in
     "") ;;
     --channel) channel="${2:-}" ;;

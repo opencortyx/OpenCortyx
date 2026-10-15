@@ -15,7 +15,9 @@ const nextConfig = {
     return [
       {
         source: "/api/backend/:path*",
-        destination: `${process.env.NEXT_PUBLIC_API_URL}/api/v2/:path*`,
+        // Same default as the Dockerfile and compose.yaml; without one, a plain `next build` (CI)
+        // fails on an "undefined/api/v2" rewrite.
+        destination: `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/v2/:path*`,
       },
     ];
   },

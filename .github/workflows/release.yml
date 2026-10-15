@@ -74,6 +74,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Two-architecture builds of the API image (torch, Docling) need more room than the runner has free.
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+
       - name: Image tags
         id: tags
         env:

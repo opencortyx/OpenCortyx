@@ -15,7 +15,6 @@ and graph-tree code, no database, no model. What is pinned:
   * the graph view then places a chat under the asset it used instead of floating beside it
 """
 import uuid
-from datetime import datetime, timezone
 
 import pytest
 

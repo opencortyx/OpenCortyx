@@ -22,7 +22,9 @@ export default defineConfig({
   projects: [
     {
       name: "e2e",
-      testIgnore: /screenshots\.spec\.ts/,
+      // e2e/regression/ needs the throwaway tenant `bin/opencortyx regression` creates, and runs
+      // under playwright.regression.config.ts instead.
+      testIgnore: [/screenshots\.spec\.ts/, /[\\/]regression[\\/]/],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
     {
