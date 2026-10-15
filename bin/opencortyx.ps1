@@ -126,6 +126,8 @@ function Invoke-Init {
     foreach ($key in @("POSTGRES_PASSWORD", "JWT_SECRET", "NEXTAUTH_SECRET")) {
         if (-not (Get-EnvValue $key)) { Set-EnvValue $key (New-Secret); Info "Generated $key" }
     }
+    # The release channel `update` follows; the installer passes the one it installed from.
+    if ($env:OPENCORTYX_CHANNEL) { Set-EnvValue "OPENCORTYX_CHANNEL" $env:OPENCORTYX_CHANNEL }
     # Which models run is chosen on the Models page, not in .env. The only install-time decision
     # is whether to start the local vLLM server, and only for a new .env.
     if ($fresh) {
@@ -289,6 +291,53 @@ function Invoke-Restore($dir) {
     Info "Restore complete"
 }
 
+# Newest of the given tags. versionsort.suffix ranks v1.0.0-beta.2 below v1.0.0; git's plain
+# version sort puts it above, which would move a stable install back onto a beta.
+function Get-NewestTag {
+    & git -c versionsort.suffix=- tag -l @args --sort=-v:refname | Select-Object -First 1
+}
+
+# Newest release on a channel: stable is vX.Y.Z only, beta also takes vX.Y.Z-beta.N.
+function Get-ReleaseTag($channel) {
+    $pattern = if ($channel -eq "beta") { '^v\d+\.\d+\.\d+(-beta\.\d+)?$' } else { '^v\d+\.\d+\.\d+$' }
+    & git -c versionsort.suffix=- tag -l "v*" --sort=-v:refname | Where-Object { $_ -match $pattern } | Select-Object -First 1
+}
+
+function Invoke-Update($argv) {
+    $channel = $env:OPENCORTYX_CHANNEL
+    if (-not $channel) { $channel = Get-EnvValue "OPENCORTYX_CHANNEL" }
+    if (-not $channel) { $channel = "stable" }
+    if ($argv.Count -gt 0) {
+        if ($argv[0] -eq "--channel" -and $argv.Count -gt 1) { $channel = $argv[1] }
+        elseif ($argv[0] -like "--channel=*") { $channel = $argv[0].Substring(10) }
+        else { Die "Usage: bin\opencortyx update [--channel stable|beta]" }
+    }
+    if ($channel -notin @("stable", "beta")) { Die "Unknown channel '$channel': use stable or beta" }
+    & git fetch --tags --quiet
+    if ($LASTEXITCODE -ne 0) { Die "git fetch failed" }
+    & git symbolic-ref -q HEAD *> $null
+    if ($LASTEXITCODE -eq 0) {
+        # A branch checkout (a clone of main) follows its branch, not a release channel.
+        & git pull --ff-only
+        if ($LASTEXITCODE -ne 0) { Die "git pull failed" }
+    } else {
+        $latest = Get-ReleaseTag $channel
+        $current = "v$(Read-Version)"
+        if (-not $latest) {
+            Warn "No $channel release yet; staying on $current (beta releases: bin\opencortyx update --channel beta)"
+        } elseif ($latest -ne $current -and (Get-NewestTag $latest $current) -eq $current) {
+            Warn "$current is newer than the latest $channel release ($latest); staying on it"
+        } else {
+            & git checkout --quiet $latest
+            if ($LASTEXITCODE -ne 0) { Die "git checkout $latest failed" }
+            Info "Checked out $latest ($channel channel)"
+        }
+    }
+    if (Test-Path $EnvFile) { Set-EnvValue "OPENCORTYX_CHANNEL" $channel }
+    $env:OPENCORTYX_VERSION = Read-Version
+    Invoke-Up
+}
+
 function Invoke-Reset {
     Assert-Docker
     if ($env:OPENCORTYX_YES -ne "1") {
@@ -314,7 +363,8 @@ Usage: bin\opencortyx <command> [args]
   logs [service]          Follow logs
   doctor                  Check host, services, database, LLM and embeddings
   connect <client> <key>  Connect an MCP client (claude, cursor, vscode, json)
-  update                  Pull the latest code and restart
+  update [--channel stable|beta]
+                          Move to the newest release on the channel (default stable, remembered) and restart
   backup [dir]            Back up the database, the graph and the vectors (stops the stack briefly)
   restore <dir>           Restore a backup directory
   reset                   Delete all data
@@ -333,7 +383,7 @@ switch ($Command) {
     "logs" { Assert-Docker; Invoke-Compose logs -f --tail=200 @Rest }
     "doctor" { Invoke-Doctor }
     "connect" { Invoke-Connect ($Rest | Select-Object -First 1) ($Rest | Select-Object -Skip 1 -First 1) }
-    "update" { Invoke-Update }
+    "update" { Invoke-Update $Rest }
     "backup" { Invoke-Backup ($Rest | Select-Object -First 1) }
     "restore" { Invoke-Restore ($Rest | Select-Object -First 1) }
     "reset" { Invoke-Reset }

@@ -5,8 +5,10 @@ name: Regression
 # Every scenario runs as a throwaway tenant, so the job needs no admin account and no seeded data.
 
 on:
-  schedule:
-    - cron: "0 2 * * *"
+  # Nightly run paused while the repository is private: private repos have a monthly Actions
+  # minutes budget (this job alone can take three hours). Restore it when the repository goes public.
+  # schedule:
+  #   - cron: "0 2 * * *"
   workflow_dispatch:
     inputs:
       corpus:

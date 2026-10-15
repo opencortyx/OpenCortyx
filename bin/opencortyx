@@ -116,6 +116,8 @@ cmd_init() {
   for key in POSTGRES_PASSWORD JWT_SECRET NEXTAUTH_SECRET; do
     [ -n "$(env_get "$key")" ] || { env_set "$key" "$(secret)"; info "Generated $key"; }
   done
+  # The release channel `update` follows; the installer passes the one it installed from.
+  [ -z "${OPENCORTYX_CHANNEL:-}" ] || env_set OPENCORTYX_CHANNEL "$OPENCORTYX_CHANNEL"
   # Which models run is chosen on the Models page, not in .env. The only install-time decision
   # is whether to start the local vLLM server, and only for a new .env: an operator who cleared
   # COMPOSE_PROFILES on a GPU host meant it.
@@ -287,15 +289,45 @@ cmd_reset() {
   info "All data removed. Run bin/opencortyx up to start fresh."
 }
 
+newest_tag() {
+  # Newest of the given tags. versionsort.suffix ranks v1.0.0-beta.2 below v1.0.0; git's plain
+  # version sort puts it above, which would move a stable install back onto a beta.
+  git -c versionsort.suffix=- tag -l "$@" --sort=-v:refname | sed -n 1p
+}
+
+release_tag() {
+  # Newest release on a channel: stable is vX.Y.Z only, beta also takes vX.Y.Z-beta.N.
+  local pattern='^v[0-9]+\.[0-9]+\.[0-9]+$'
+  [ "$1" = beta ] && pattern='^v[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$'
+  git -c versionsort.suffix=- tag -l 'v*' --sort=-v:refname | { grep -E "$pattern" || true; } | sed -n 1p
+}
+
 cmd_update() {
+  local channel="${OPENCORTYX_CHANNEL:-$(env_or OPENCORTYX_CHANNEL stable)}" latest current
+  case "${1:-}" in
+    "") ;;
+    --channel) channel="${2:-}" ;;
+    --channel=*) channel="${1#--channel=}" ;;
+    *) die "Usage: bin/opencortyx update [--channel stable|beta]" ;;
+  esac
+  case "$channel" in stable|beta) ;; *) die "Unknown channel '$channel': use stable or beta" ;; esac
   git fetch --tags --quiet
   if git symbolic-ref -q HEAD >/dev/null; then
+    # A branch checkout (a clone of main) follows its branch, not a release channel.
     git pull --ff-only
   else
-    local latest
-    latest="$(git tag -l 'v*' --sort=-v:refname | head -1)"
-    [ -n "$latest" ] && git checkout --quiet "$latest" && info "Checked out $latest"
+    latest="$(release_tag "$channel")"
+    current="v$(read_version)"
+    if [ -z "$latest" ]; then
+      warn "No $channel release yet; staying on $current (beta releases: bin/opencortyx update --channel beta)"
+    elif [ "$latest" != "$current" ] && [ "$(newest_tag "$latest" "$current")" = "$current" ]; then
+      warn "$current is newer than the latest $channel release ($latest); staying on it"
+    else
+      git checkout --quiet "$latest"
+      info "Checked out $latest ($channel channel)"
+    fi
   fi
+  [ ! -f .env ] || env_set OPENCORTYX_CHANNEL "$channel"
   OPENCORTYX_VERSION="$(read_version)"
   export OPENCORTYX_VERSION
   cmd_up
@@ -354,7 +386,8 @@ Usage: bin/opencortyx <command> [args]
   logs [service]       Follow logs
   doctor               Check host, services, database, LLM and embeddings
   connect <client> <key>  Connect an MCP client (claude, cursor, vscode, json)
-  update               Pull the latest code and restart
+  update [--channel stable|beta]
+                       Move to the newest release on the channel (default stable, remembered) and restart
   backup [dir]         Back up the database, the graph and the vectors (stops the stack briefly)
   restore <dir>        Restore a backup directory
   reset                Delete all data
@@ -377,7 +410,7 @@ main() {
     logs) require_docker; compose logs -f --tail=200 "$@" ;;
     doctor) cmd_doctor ;;
     connect) cmd_connect "$@" ;;
-    update) cmd_update ;;
+    update) cmd_update "$@" ;;
     backup) cmd_backup "$@" ;;
     restore) cmd_restore "$@" ;;
     reset) cmd_reset ;;

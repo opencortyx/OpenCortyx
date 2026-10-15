@@ -3,8 +3,10 @@ name: E2E
 on:
   push:
     branches: [main]
-  schedule:
-    - cron: "0 3 * * *"
+  # Nightly run paused while the repository is private: private repos have a monthly Actions
+  # minutes budget. Restore it when the repository goes public.
+  # schedule:
+  #   - cron: "0 3 * * *"
   workflow_dispatch:
 
 permissions:

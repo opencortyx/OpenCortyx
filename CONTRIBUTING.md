@@ -121,15 +121,32 @@ The `setup` service applies migrations automatically on start. See [docs/MIGRATI
 
 ## Releasing
 
-1. Set the new version in `VERSION`, `apps/api/pyproject.toml`, `apps/api/opencortyx/__init__.py`
-   and `apps/web/package.json` (CI fails if they differ).
-2. Move the `Unreleased` entries in `CHANGELOG.md` under a `## X.Y.Z` heading.
-3. Merge to `main`, then tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+Two channels, chosen by the tag:
 
-The `Release` workflow builds `linux/amd64` and `linux/arm64` images for the API, web app and MCP
-server, pushes them to `ghcr.io/<owner>/opencortyx-{api,web,mcp}:X.Y.Z` and `:latest`, and creates
-the GitHub release from the changelog. `bin/opencortyx up` on a release checkout pulls those images
-instead of building.
+| Tag | Channel | Images | GitHub release |
+|---|---|---|---|
+| `vX.Y.Z-beta.N` | beta | `:X.Y.Z-beta.N` and `:beta` | pre-release |
+| `vX.Y.Z` | stable | `:X.Y.Z` and `:latest` | normal ("Latest") |
+
+A version ships as betas (`-beta.1`, `-beta.2`, ...) until one passes the checks below, then the
+same code is released as `vX.Y.Z`. Never put `dev` in a release version: `bin/opencortyx up` builds
+from source for any version containing it, and the workflow refuses it.
+
+1. Set the new version in `VERSION`, `apps/api/pyproject.toml`, `apps/api/opencortyx/__init__.py`,
+   `apps/web/package.json` and the two `version` fields at the top of `apps/web/package-lock.json`
+   (CI fails if the first four differ).
+2. Move the `Unreleased` entries in `CHANGELOG.md` under a `## X.Y.Z` (or `## X.Y.Z-beta.N`) heading.
+3. Merge to `main`, then tag and push: `git tag vX.Y.Z-beta.N && git push origin vX.Y.Z-beta.N`.
+   Tags are immutable: never move or reuse one; fix forward with the next number.
+
+The `Release` workflow runs the CI checks on the tagged commit, then builds `linux/amd64` and
+`linux/arm64` images for the API, web app and MCP server, pushes them to
+`ghcr.io/<owner>/opencortyx-{api,web,mcp}`, and creates the GitHub release from the changelog.
+`bin/opencortyx up` on a release checkout pulls those images instead of building.
+
+Before promoting a beta to stable: CI, E2E and the regression suite pass on its commit; a fresh
+install works on Windows, macOS and Linux; `bin/opencortyx update` from the previous release keeps
+the data; no known release blockers are open.
 
 ## Reporting bugs
 

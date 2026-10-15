@@ -1,9 +1,12 @@
 # OpenCortyx installer for Windows.
 #   irm https://raw.githubusercontent.com/opencortyx/OpenCortyx/main/install.ps1 | iex
+# Beta releases:
+#   $env:OPENCORTYX_CHANNEL = "beta"; irm https://raw.githubusercontent.com/opencortyx/OpenCortyx/main/install.ps1 | iex
 $ErrorActionPreference = "Stop"
 
 $Repo = if ($env:OPENCORTYX_REPO) { $env:OPENCORTYX_REPO } else { "https://github.com/opencortyx/OpenCortyx.git" }
 $Branch = $env:OPENCORTYX_BRANCH
+$Channel = if ($env:OPENCORTYX_CHANNEL) { $env:OPENCORTYX_CHANNEL } else { "stable" }
 $Dir = if ($env:OPENCORTYX_HOME) { $env:OPENCORTYX_HOME } else { Join-Path $HOME "opencortyx" }
 
 function Info($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
@@ -18,6 +21,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { Die "Install Dock
 if ($LASTEXITCODE -ne 0) { Die "Docker is not running. Start Docker Desktop and re-run the installer." }
 & docker compose version *> $null
 if ($LASTEXITCODE -ne 0) { Die "Docker Compose v2 is required." }
+if ($Channel -notin @("stable", "beta")) { Die "OPENCORTYX_CHANNEL must be stable or beta, not '$Channel'." }
 
 $here = $PSScriptRoot
 if ($here -and (Test-Path (Join-Path $here "compose.yaml")) -and (Test-Path (Join-Path $here "bin\opencortyx.ps1"))) {
@@ -33,10 +37,27 @@ if ($here -and (Test-Path (Join-Path $here "compose.yaml")) -and (Test-Path (Joi
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Die "git is required: https://git-scm.com/download/win" }
     if (-not $Branch) {
         $tags = & git ls-remote --tags --refs $Repo "v*" 2>$null | ForEach-Object { ($_ -split "/")[-1] }
-        $Branch = $tags | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } |
-            Sort-Object { [version]($_.TrimStart("v")) } -Descending | Select-Object -First 1
+        # Newest first; a release sorts above its own betas (v1.0.0 > v1.0.0-beta.2).
+        function Get-NewestTag($pattern) {
+            $tags | Where-Object { $_ -match $pattern } |
+                Sort-Object @{ e = { [version]($_ -replace '^v(\d+\.\d+\.\d+).*$', '$1') } },
+                            @{ e = { if ($_ -match '-beta\.(\d+)$') { [int]$matches[1] } else { [int]::MaxValue } } } -Descending |
+                Select-Object -First 1
+        }
+        $stable = '^v\d+\.\d+\.\d+$'
+        $beta = '^v\d+\.\d+\.\d+(-beta\.\d+)?$'
+        if ($Channel -eq "beta") {
+            $Branch = Get-NewestTag $beta
+        } else {
+            $Branch = Get-NewestTag $stable
+            if (-not $Branch) {
+                $Branch = Get-NewestTag $beta
+                if ($Branch) { $Channel = "beta"; Info "No stable release yet: installing beta $Branch" }
+            }
+        }
         if (-not $Branch) { $Branch = "main" }
     }
+    $env:OPENCORTYX_CHANNEL = $Channel
     Info "Downloading OpenCortyx $Branch to $Dir"
     & git clone --depth 1 --branch $Branch $Repo $Dir
     if ($LASTEXITCODE -ne 0) { Die "git clone failed" }

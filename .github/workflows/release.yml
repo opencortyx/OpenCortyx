@@ -1,5 +1,11 @@
 name: Release
 
+# A tag picks the channel:
+#   vX.Y.Z          stable  images :X.Y.Z and :latest, a normal GitHub release
+#   vX.Y.Z-beta.N   beta    images :X.Y.Z-beta.N and :beta, a GitHub pre-release
+#   vX.Y.Z-<other>  (alpha, rc, ...) images :X.Y.Z-<other> only, a GitHub pre-release
+# Tags are immutable: never move or reuse one, release the next number instead.
+
 on:
   push:
     tags: ["v*"]
@@ -9,7 +15,52 @@ permissions:
   packages: write
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      channel: ${{ steps.resolve.outputs.channel }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version and channel
+        id: resolve
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [ "$version" != "$(tr -d ' \r\n' < VERSION)" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match VERSION $(cat VERSION)" >&2
+            exit 1
+          fi
+          # bin/opencortyx builds from source for any version containing "dev", so a release
+          # named that way would never use the images published here.
+          case "$version" in
+            *dev*) echo "Release versions must not contain 'dev': $version" >&2; exit 1 ;;
+          esac
+          if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            channel=latest prerelease=false
+          elif [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]; then
+            channel=beta prerelease=true
+          elif [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.]+$ ]]; then
+            channel= prerelease=true
+          else
+            echo "Not a release version: $version (expected X.Y.Z or X.Y.Z-beta.N)" >&2
+            exit 1
+          fi
+          {
+            echo "version=$version"
+            echo "channel=$channel"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+
+  # The same checks as every pull request, on the tagged commit: nothing is published unless they pass.
+  ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   images:
+    needs: [version, ci]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -23,16 +74,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Resolve version
-        id: version
+      - name: Image tags
+        id: tags
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          CHANNEL: ${{ needs.version.outputs.channel }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          if [ "$version" != "$(tr -d ' \r\n' < VERSION)" ]; then
-            echo "Tag ${GITHUB_REF_NAME} does not match VERSION $(cat VERSION)" >&2
-            exit 1
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "prefix=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/opencortyx" >> "$GITHUB_OUTPUT"
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/opencortyx-${{ matrix.name }}"
+          {
+            echo "tags<<EOF"
+            echo "$image:$VERSION"
+            [ -z "$CHANNEL" ] || echo "$image:$CHANNEL"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -48,22 +102,21 @@ jobs:
           context: ${{ matrix.context }}
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ${{ steps.version.outputs.prefix }}-${{ matrix.name }}:${{ steps.version.outputs.version }}
-            ${{ steps.version.outputs.prefix }}-${{ matrix.name }}:latest
+          tags: ${{ steps.tags.outputs.tags }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
   github-release:
-    needs: images
+    needs: [version, images]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Release notes from CHANGELOG
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          awk -v v="$version" '
+          awk -v v="$VERSION" '
             $0 ~ "^## " { if (found) exit; if ($2 == v) { found = 1; next } }
             found { print }
           ' CHANGELOG.md > notes.md
@@ -72,4 +125,8 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --title "OpenCortyx $GITHUB_REF_NAME" --notes-file notes.md
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          if [ "$PRERELEASE" = "true" ]; then kind=--prerelease; else kind=--latest; fi
+          gh release create "$GITHUB_REF_NAME" --verify-tag "$kind" \
+            --title "OpenCortyx $GITHUB_REF_NAME" --notes-file notes.md

@@ -96,6 +96,9 @@ irm https://raw.githubusercontent.com/opencortyx/OpenCortyx/main/install.ps1 | i
 The installer downloads the latest release, generates secrets, picks a model backend, starts the
 stack and waits until it is healthy. Then open http://localhost:3000 and create your admin account.
 
+Until the first stable release it installs the newest beta. To follow beta releases after that, set
+`OPENCORTYX_CHANNEL=beta` for the installer, or run `bin/opencortyx update --channel beta`.
+
 | Environment | Guide |
 |---|---|
 | Windows 10 and 11 | [docs/installation/windows.md](docs/installation/windows.md) |
@@ -243,7 +246,7 @@ bin/opencortyx doctor             check Docker, database, model server and embed
 bin/opencortyx logs [service]     follow logs
 bin/opencortyx connect claude KEY register the MCP server with Claude Code
 bin/opencortyx backup | restore   back up or restore every store (database, graph, vectors)
-bin/opencortyx update             move to the latest release and restart
+bin/opencortyx update             move to the latest release and restart (--channel beta for betas)
 bin/opencortyx version            print the installed version
 bin/opencortyx down               stop (data is kept)
 bin/opencortyx reset              delete all data

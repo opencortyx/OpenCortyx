@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.0-beta.1 - 2026-10-15
+
+First public beta.
+
 ### Added
 - `bin/opencortyx` command for macOS, Linux and Windows: `init`, `up`, `dev`, `status`, `doctor`,
   `connect`, `logs`, `backup`, `restore`, `update`, `reset`, `test`.
@@ -11,7 +15,12 @@
 - Support for running without an NVIDIA GPU through any OpenAI-compatible endpoint or hosted API.
 - `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`.
 - `Release` workflow: multi-architecture images for the API, web app and MCP server published to
-  GitHub Container Registry, and a GitHub release from this changelog.
+  GitHub Container Registry, and a GitHub release from this changelog. It runs the CI checks on the
+  tagged commit first and publishes nothing if they fail.
+- Release channels. `vX.Y.Z` tags are stable (`:latest` images, a normal GitHub release);
+  `vX.Y.Z-beta.N` tags are beta (`:beta` images, a GitHub pre-release).
+  `bin/opencortyx update --channel stable|beta` picks one and remembers it; the installers take
+  `OPENCORTYX_CHANNEL=beta`, and install the newest beta while there is no stable release.
 - CI lint job (ruff) and `bin/opencortyx version`.
 - Documentation: installation guides for Windows, macOS, Linux, WSL and production servers, a
   how-it-works guide with diagrams, and feature guides for every dashboard page with screenshots
@@ -98,6 +107,9 @@
 - The dashboard chat page is titled "AI Assistant", matching the navigation.
 
 ### Fixed
+- `bin\opencortyx update` on Windows failed: the command's function had been removed.
+- `bin/opencortyx update` could move a stable install back onto a beta (git's version sort ranks
+  `v1.0.0-beta.1` above `v1.0.0`), or onto an older release.
 - `docs/BACKUP-RESTORE.md` described a Postgres-only dump; backups cover PostgreSQL, NebulaGraph and
   Qdrant.
 - mypy on `domain` and `core` (a CI step) passes.

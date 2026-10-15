@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # OpenCortyx installer for macOS, Linux and WSL.
 #   curl -fsSL https://raw.githubusercontent.com/opencortyx/OpenCortyx/main/install.sh | bash
+# Beta releases:
+#   curl -fsSL https://raw.githubusercontent.com/opencortyx/OpenCortyx/main/install.sh | OPENCORTYX_CHANNEL=beta bash
 set -euo pipefail
 
 REPO="${OPENCORTYX_REPO:-https://github.com/opencortyx/OpenCortyx.git}"
 BRANCH="${OPENCORTYX_BRANCH:-}"
+CHANNEL="${OPENCORTYX_CHANNEL:-stable}"
 DIR="${OPENCORTYX_HOME:-$HOME/opencortyx}"
 
 info() { printf '==> %s\n' "$*"; }
@@ -14,6 +17,13 @@ command -v docker >/dev/null 2>&1 || die "Install Docker first: https://docs.doc
 docker info >/dev/null 2>&1 || die "Docker is not running. Start it and re-run the installer."
 docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is required."
 command -v curl >/dev/null 2>&1 || die "curl is required."
+case "$CHANNEL" in stable|beta) ;; *) die "OPENCORTYX_CHANNEL must be stable or beta, not '$CHANNEL'." ;; esac
+
+newest_tag() {
+  # Newest tag matching $1. sort -V ranks v1.0.0-beta.2 above v1.0.0; "~" sorts before everything,
+  # so it stands in for the "-" while sorting.
+  { grep -E "$1" || true; } | sed 's/-/~/' | sort -V | sed 's/~/-/' | tail -1
+}
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
 if [ -n "$here" ] && [ -f "$here/compose.yaml" ] && [ -x "$here/bin/opencortyx" ]; then
@@ -28,10 +38,20 @@ elif [ -d "$DIR/.git" ]; then
 else
   command -v git >/dev/null 2>&1 || die "git is required to download OpenCortyx."
   if [ -z "$BRANCH" ]; then
-    BRANCH="$(git ls-remote --tags --refs "$REPO" 'v*' 2>/dev/null | awk -F/ '{print $NF}' \
-      | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)"
+    tags="$(git ls-remote --tags --refs "$REPO" 'v*' 2>/dev/null | awk -F/ '{print $NF}' || true)"
+    stable='^v[0-9]+\.[0-9]+\.[0-9]+$' beta='^v[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$'
+    if [ "$CHANNEL" = stable ]; then
+      BRANCH="$(printf '%s\n' "$tags" | newest_tag "$stable")"
+      if [ -z "$BRANCH" ]; then
+        BRANCH="$(printf '%s\n' "$tags" | newest_tag "$beta")"
+        [ -z "$BRANCH" ] || { CHANNEL=beta; info "No stable release yet: installing beta $BRANCH"; }
+      fi
+    else
+      BRANCH="$(printf '%s\n' "$tags" | newest_tag "$beta")"
+    fi
     BRANCH="${BRANCH:-main}"
   fi
+  export OPENCORTYX_CHANNEL="$CHANNEL"
   info "Downloading OpenCortyx $BRANCH to $DIR"
   git clone --depth 1 --branch "$BRANCH" "$REPO" "$DIR"
   chmod +x "$DIR/bin/opencortyx"
