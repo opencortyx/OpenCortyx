@@ -1,0 +1,60 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+.mcp.json
+.tok
+
+# Local data
+data/
+backups/
+*.dump
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+celerybeat-schedule*
+
+# Node
+node_modules/
+.next/
+.turbo/
+dist/
+*.tsbuildinfo
+
+# Editors and OS
+.vscode/
+.idea/
+.claude/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Scratch
+scratch/
+bench_tmp/
+test_graph_api.py
+*.local.md
+
+# Playwright artefacts: a saved sign-in (session cookies) and per-run traces/screenshots
+apps/web/e2e/.auth/
+apps/web/e2e/.results/
+apps/web/e2e/.report/
+
+# Benchmarks and probes: run locally, never shipped
+apps/api/benchmarks/
+
+# Regression suite output
+apps/api/test-results/
+
+# demo recorder frames (apps/web/scripts/demo/record.mjs) — the encoded video lives in docs/assets/demo
+apps/web/scripts/demo/out/

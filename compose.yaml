@@ -1,0 +1,460 @@
+# OpenCortyx stack. Use `bin/opencortyx up` (or `docker compose up -d`).
+# Configuration lives in .env (created by `bin/opencortyx init`).
+name: opencortyx
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-api-build: &api-build
+  context: ./apps/api
+  args:
+    INSTALL_RERANK: ${INSTALL_RERANK:-0}
+
+x-api-image: &api-image ${OPENCORTYX_IMAGE_PREFIX:-ghcr.io/opencortyx/opencortyx}-api:${OPENCORTYX_VERSION:-dev}
+
+x-api-env: &api-env
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-opencortyx}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is not set - run bin/opencortyx init}@postgres:5432/${POSTGRES_DB:-opencortyx}
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/1
+  CELERY_RESULT_BACKEND: redis://redis:6379/2
+  VECTOR_STORE_PROVIDER: ${VECTOR_STORE_PROVIDER:-qdrant}
+  QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+  QDRANT_COLLECTION: ${QDRANT_COLLECTION:-opencortyx}
+  QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+  GRAPH_STORE_PROVIDER: ${GRAPH_STORE_PROVIDER:-nebulagraph}
+  NEBULA_HOST: ${NEBULA_HOST:-nebulagraph}
+  NEBULA_PORT: ${NEBULA_PORT:-9669}
+  NEBULA_USER: ${NEBULA_USER:-root}
+  NEBULA_PASSWORD: ${NEBULA_PASSWORD:-nebula}
+  NEBULA_SPACE: ${NEBULA_SPACE:-opencortyx}
+  CORS_ORIGINS: '["${PUBLIC_WEB_URL:-http://localhost:3000}"]'
+  LLM_PROVIDER: ${LLM_PROVIDER:-vllm}
+  LLM_BASE_URL: ${LLM_BASE_URL:-http://vllm:8000/v1}
+  LLM_API_KEY: ${LLM_API_KEY:-}
+  # With the gpu profile this is also vLLM's --served-model-name.
+  LLM_MODEL: ${LLM_MODEL:-opencortyx-llm}
+  LLM_MODEL_WEIGHTS: ${VLLM_MODEL:-Qwen/Qwen2.5-1.5B-Instruct-AWQ}
+  LLM_MAX_MODEL_LEN: ${LLM_MAX_MODEL_LEN:-8192}
+  EMBED_PROVIDER: ${EMBED_PROVIDER:-fastembed}
+  EMBED_MODEL: ${EMBED_MODEL:-nomic-ai/nomic-embed-text-v1.5}
+  EMBED_DIMENSIONS: ${EMBED_DIMENSIONS:-768}
+  RATELIMIT_HEAVY_PER_MIN: ${RATELIMIT_HEAVY_PER_MIN:-30}
+  GROUNDING_EMBED_BATCH: ${GROUNDING_EMBED_BATCH:-4}
+  GROUNDING_MAX_BLOCK_CHARS: ${GROUNDING_MAX_BLOCK_CHARS:-6000}
+  GROUNDING_MAX_BLOCKS: ${GROUNDING_MAX_BLOCKS:-60}
+  RETRIEVAL_INCLUDE_CITATIONS: ${RETRIEVAL_INCLUDE_CITATIONS:-false}
+  RETRIEVAL_WORKFLOW_CACHE: ${RETRIEVAL_WORKFLOW_CACHE:-false}
+  DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
+  DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-20}
+  JWT_ALGORITHM: HS256
+  HF_HOME: /cache/huggingface
+  LOCAL_FS_HOST_ROOT: ${OPENCORTYX_FILES_ROOT:-}
+  LOCAL_FS_MOUNT: /host
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+x-api-volumes: &api-volumes
+  - model_cache:/cache
+  - ${OPENCORTYX_FILES_ROOT:-./data/files}:/host:ro
+
+x-after-setup: &after-setup
+  setup:
+    condition: service_completed_successfully
+  redis:
+    condition: service_healthy
+  qdrant:
+    condition: service_healthy
+  nebulagraph:
+    condition: service_healthy
+
+x-worker-healthcheck: &worker-healthcheck
+  test: ["CMD-SHELL", "celery -A opencortyx.core.worker.celery_app inspect ping -d celery@$$HOSTNAME --timeout 10 >/dev/null 2>&1 || exit 1"]
+  interval: 60s
+  timeout: 15s
+  retries: 3
+  start_period: 120s
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    logging: *logging
+    mem_limit: ${POSTGRES_MEM_LIMIT:-1024m}
+    memswap_limit: ${POSTGRES_MEM_LIMIT:-1024m}
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-opencortyx}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is not set - run bin/opencortyx init}
+      POSTGRES_DB: ${POSTGRES_DB:-opencortyx}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    logging: *logging
+    mem_limit: ${REDIS_MEM_LIMIT:-192m}
+    memswap_limit: ${REDIS_MEM_LIMIT:-192m}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:v1.19.1
+    restart: unless-stopped
+    logging: *logging
+    mem_limit: ${QDRANT_MEM_LIMIT:-1024m}
+    memswap_limit: ${QDRANT_MEM_LIMIT:-1024m}
+    ports:
+      - "127.0.0.1:6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'cat < /dev/null > /dev/tcp/localhost/6333'"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  nebula-metad:
+    image: vesoft/nebula-metad:v3.8.0
+    restart: unless-stopped
+    logging: *logging
+    mem_limit: ${NEBULA_METAD_MEM_LIMIT:-512m}
+    memswap_limit: ${NEBULA_METAD_MEM_LIMIT:-512m}
+    command:
+      - --meta_server_addrs=nebula-metad:9559
+      - --local_ip=nebula-metad
+      - --ws_ip=nebula-metad
+      - --port=9559
+      - --ws_http_port=19559
+      - --data_path=/data/meta
+      - --logtostderr=true
+    volumes:
+      - nebula_meta_data:/data/meta
+    healthcheck:
+      test: ["CMD-SHELL", "cat < /dev/null > /dev/tcp/localhost/9559"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  nebula-storaged:
+    image: vesoft/nebula-storaged:v3.8.0
+    restart: unless-stopped
+    logging: *logging
+    mem_limit: ${NEBULA_STORAGED_MEM_LIMIT:-1024m}
+    memswap_limit: ${NEBULA_STORAGED_MEM_LIMIT:-1024m}
+    depends_on:
+      nebula-metad:
+        condition: service_healthy
+    command:
+      - --meta_server_addrs=nebula-metad:9559
+      - --local_ip=nebula-storaged
+      - --ws_ip=nebula-storaged
+      - --port=9779
+      - --ws_http_port=19779
+      - --data_path=/data/storage
+      - --logtostderr=true
+    volumes:
+      - nebula_storage_data:/data/storage
+    healthcheck:
+      test: ["CMD-SHELL", "cat < /dev/null > /dev/tcp/localhost/9779"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  nebulagraph:
+    image: vesoft/nebula-graphd:v3.8.0
+    restart: unless-stopped
+    logging: *logging
+    mem_limit: ${NEBULAGRAPH_MEM_LIMIT:-1024m}
+    memswap_limit: ${NEBULAGRAPH_MEM_LIMIT:-1024m}
+    depends_on:
+      nebula-metad:
+        condition: service_healthy
+    command:
+      - --meta_server_addrs=nebula-metad:9559
+      - --local_ip=nebulagraph
+      - --ws_ip=nebulagraph
+      - --port=9669
+      - --ws_http_port=19669
+      - --logtostderr=true
+      # Sessions a process never signed out of (a SIGKILLed or recycled worker child) are reclaimed
+      # after this long instead of graphd's 8-hour default. At 300 sessions per client IP graphd
+      # refuses new ones, and every graph read and write in that container fails until they expire.
+      - --session_idle_timeout_secs=600
+    ports:
+      - "127.0.0.1:9669:9669"
+    healthcheck:
+      test: ["CMD-SHELL", "cat < /dev/null > /dev/tcp/localhost/9669"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # One-shot setup, run on every start: the graph store (space, schema, indexes), the vector store
+  # (collection, indexes), then the database (tables, `alembic upgrade head`) — one script,
+  # `opencortyx/setup.py`, which says why each step comes where it does. Every API and worker
+  # container waits for it to exit 0. Idempotent: on a current install it only checks.
+  #
+  # It waits for graphd, never for storaged. NebulaGraph 3.x does not register a storage host by
+  # itself: until `ADD HOSTS` names it, storaged never opens 9779, so its healthcheck can never pass.
+  # The graph step issues that registration (the adapter's own bootstrap, not a copy of the
+  # statement here) and then waits for storage itself. Waiting on storaged deadlocked first installs.
+  setup:
+    build: *api-build
+    image: *api-image
+    restart: "no"
+    logging: *logging
+    mem_limit: ${SETUP_MEM_LIMIT:-768m}
+    memswap_limit: ${SETUP_MEM_LIMIT:-768m}
+    command: python -m opencortyx.setup
+    env_file: .env
+    environment:
+      <<: *api-env
+    volumes:
+      - model_cache:/cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      nebulagraph:
+        condition: service_healthy
+
+  api:
+    build: *api-build
+    image: *api-image
+    restart: unless-stopped
+    logging: *logging
+    # Embedding model plus retrieval working memory reach ~1.8 GiB under load.
+    mem_limit: ${API_MEM_LIMIT:-3072m}
+    memswap_limit: ${API_MEM_LIMIT:-3072m}
+    command: uvicorn opencortyx.main:app --host 0.0.0.0 --port 8000 --loop asyncio
+    ports:
+      - "${OPENCORTYX_BIND:-127.0.0.1}:${OPENCORTYX_API_PORT:-8000}:8000"
+    env_file: .env
+    environment:
+      <<: *api-env
+    depends_on: *after-setup
+    volumes: *api-volumes
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  worker:
+    build: *api-build
+    image: *api-image
+    restart: unless-stopped
+    logging: *logging
+    # Ingestion embeds in-process, so a child holds the embedding model (~1.2 GiB resident).
+    # Docling's layout + TableFormer models read PDFs on this worker; 1664m could not hold them
+    # beside the pool parent and beat, and a PDF OOM-killed the child on every attempt.
+    mem_limit: ${WORKER_MEM_LIMIT:-3072m}
+    memswap_limit: ${WORKER_MEM_LIMIT:-3072m}
+    # One child by default, and a recycle threshold ABOVE the model it holds: a lower threshold
+    # recycles the child DURING an ingest, and because tasks are acked late the broker redelivers
+    # the task and it starts over — a folder sync that never finishes. Raise the concurrency only
+    # with the memory limit.
+    command: sh -c 'celery -A opencortyx.core.worker.celery_app worker -B --loglevel=info --concurrency=${CELERY_WORKER_CONCURRENCY:-1} --queues=graphrag --max-memory-per-child=${CELERY_WORKER_MAX_MEMORY_KB:-1500000} --max-tasks-per-child=200'
+    healthcheck: *worker-healthcheck
+    env_file: .env
+    environment:
+      <<: *api-env
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prom
+      METRICS_PORT: "9101"
+      OCX_SERVICE: worker
+    depends_on: *after-setup
+    volumes: *api-volumes
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  extraction-worker:
+    build: *api-build
+    image: *api-image
+    restart: unless-stopped
+    logging: *logging
+    # Entity resolution embeds in-process, so extraction holds the embedding model (~1.2 GiB peak).
+    mem_limit: ${EXTRACTION_WORKER_MEM_LIMIT:-1664m}
+    memswap_limit: ${EXTRACTION_WORKER_MEM_LIMIT:-1664m}
+    command: sh -c 'celery -A opencortyx.core.worker.celery_app worker --loglevel=info --concurrency=${EXTRACTION_WORKER_CONCURRENCY:-1} --queues=extraction --max-memory-per-child=${EXTRACTION_WORKER_MAX_MEMORY_KB:-1000000} --max-tasks-per-child=200'
+    healthcheck: *worker-healthcheck
+    env_file: .env
+    environment:
+      <<: *api-env
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prom
+      METRICS_PORT: "9102"
+      OCX_SERVICE: extraction-worker
+    depends_on: *after-setup
+    volumes: *api-volumes
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  maintenance-worker:
+    build: *api-build
+    image: *api-image
+    restart: unless-stopped
+    logging: *logging
+    mem_limit: ${MAINTENANCE_WORKER_MEM_LIMIT:-832m}
+    memswap_limit: ${MAINTENANCE_WORKER_MEM_LIMIT:-832m}
+    command: sh -c 'celery -A opencortyx.core.worker.celery_app worker --loglevel=info --concurrency=1 --queues=maintenance --max-memory-per-child=${MAINTENANCE_WORKER_MAX_MEMORY_KB:-300000} --max-tasks-per-child=100'
+    healthcheck: *worker-healthcheck
+    env_file: .env
+    environment:
+      <<: *api-env
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prom
+      METRICS_PORT: "9104"
+      OCX_SERVICE: maintenance-worker
+    depends_on: *after-setup
+    volumes: *api-volumes
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  embedding-worker:
+    build: *api-build
+    image: *api-image
+    restart: unless-stopped
+    logging: *logging
+    # The embedding model is resident here by design; measured at ~1.35 GiB under a batch.
+    # Two threads (embeddings and resolution run side by side) share the one resident model; the
+    # headroom is for two batches in flight at once.
+    mem_limit: ${EMBEDDING_WORKER_MEM_LIMIT:-2304m}
+    memswap_limit: ${EMBEDDING_WORKER_MEM_LIMIT:-2304m}
+    command: sh -c 'celery -A opencortyx.core.worker.celery_app worker --loglevel=info --pool=threads --concurrency=2 --queues=embedding,resolution'
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import sys, os; sys.exit(0 if os.path.exists(\"/proc/1\") else 1)'"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    env_file: .env
+    environment:
+      <<: *api-env
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prom
+      METRICS_PORT: "9103"
+      OCX_SERVICE: embedding-worker
+    depends_on: *after-setup
+    volumes: *api-volumes
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  web:
+    build:
+      context: ./apps/web
+      args:
+        NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
+    image: ${OPENCORTYX_IMAGE_PREFIX:-ghcr.io/opencortyx/opencortyx}-web:${OPENCORTYX_VERSION:-dev}
+    restart: unless-stopped
+    logging: *logging
+    mem_limit: ${WEB_MEM_LIMIT:-512m}
+    memswap_limit: ${WEB_MEM_LIMIT:-512m}
+    ports:
+      - "${OPENCORTYX_BIND:-127.0.0.1}:${OPENCORTYX_WEB_PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
+      API_INTERNAL_URL: http://api:8000
+      AUTH_URL: ${PUBLIC_WEB_URL:-http://localhost:3000}
+      AUTH_TRUST_HOST: "true"
+      AUTH_SECRET: ${NEXTAUTH_SECRET:?NEXTAUTH_SECRET is not set - run bin/opencortyx init}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?NEXTAUTH_SECRET is not set - run bin/opencortyx init}
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/auth/login || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  mcp:
+    build: ./apps/mcp
+    image: ${OPENCORTYX_IMAGE_PREFIX:-ghcr.io/opencortyx/opencortyx}-mcp:${OPENCORTYX_VERSION:-dev}
+    restart: unless-stopped
+    logging: *logging
+    mem_limit: ${MCP_MEM_LIMIT:-192m}
+    memswap_limit: ${MCP_MEM_LIMIT:-192m}
+    command: python server.py
+    ports:
+      - "${OPENCORTYX_BIND:-127.0.0.1}:${OPENCORTYX_MCP_PORT:-8001}:8001"
+    environment:
+      MCP_TRANSPORT: streamable-http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8001"
+      MCP_ALLOW_ANONYMOUS: ${MCP_ALLOW_ANONYMOUS:-false}
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-127.0.0.1:*,localhost:*,[::1]:*,mcp:*}
+      OPENCORTYX_API_URL: http://api:8000
+      OPENCORTYX_API_KEY: ${OPENCORTYX_API_KEY:-}
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/healthz', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
+  # Local model server. Enabled with COMPOSE_PROFILES=gpu (NVIDIA GPU required).
+  vllm:
+    profiles: ["gpu"]
+    # Pinned: newer releases fail to start under Docker Desktop / WSL2.
+    image: vllm/vllm-openai:${VLLM_IMAGE_TAG:-v0.11.0}
+    restart: unless-stopped
+    logging: *logging
+    mem_limit: ${VLLM_MEM_LIMIT:-2560m}
+    memswap_limit: ${VLLM_MEM_LIMIT:-2560m}
+    command: >
+      --model ${VLLM_MODEL:-Qwen/Qwen2.5-1.5B-Instruct-AWQ}
+      --served-model-name ${LLM_MODEL:-opencortyx-llm}
+      --gpu-memory-utilization ${VLLM_GPU_FRACTION:-0.90}
+      --max-model-len ${LLM_MAX_MODEL_LEN:-8192}
+      --max-num-seqs ${VLLM_MAX_NUM_SEQS:-64}
+      --enable-prefix-caching
+      --swap-space ${VLLM_SWAP_GB:-1}
+    environment:
+      HF_HOME: /cache/huggingface
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-}
+    volumes:
+      - model_cache:/cache
+    shm_size: "1gb"
+    ports:
+      - "127.0.0.1:${VLLM_PORT:-8002}:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 600s
+
+volumes:
+  postgres_data:
+  redis_data:
+  qdrant_data:
+  nebula_meta_data:
+  nebula_storage_data:
+  model_cache:

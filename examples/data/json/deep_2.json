@@ -1,0 +1,1237 @@
+{
+    "enterprise": {
+        "enterprise_id": "ENT-001",
+        "name": "Nordic Meridian Group",
+        "industry": "Financial Services",
+        "headquarters": {
+            "city": "Oslo",
+            "country": "Norway",
+            "timezone": "Europe/Oslo",
+            "office": {
+                "building": "Meridian Tower",
+                "floor": 18,
+                "postal_code": "0150"
+            }
+        },
+        "fiscal_year": {
+            "start": "2026-01-01",
+            "end": "2026-12-31",
+            "currency": "EUR"
+        },
+        "executive_committee": [
+            {
+                "employee_id": "EMP-001",
+                "name": "Ingrid Halvorsen",
+                "title": "Chief Operating Officer",
+                "business_unit": "Group Operations",
+                "location": "Oslo",
+                "responsibilities": [
+                    "Enterprise Transformation",
+                    "Operational Resilience",
+                    "Strategic Programmes"
+                ]
+            },
+            {
+                "employee_id": "EMP-002",
+                "name": "Daniel Fischer",
+                "title": "Chief Technology Officer",
+                "business_unit": "Technology",
+                "location": "Frankfurt",
+                "responsibilities": [
+                    "Technology Strategy",
+                    "Architecture",
+                    "Cybersecurity"
+                ]
+            },
+            {
+                "employee_id": "EMP-003",
+                "name": "Amelia Rossi",
+                "title": "Chief Financial Officer",
+                "business_unit": "Finance",
+                "location": "Milan",
+                "responsibilities": [
+                    "Financial Planning",
+                    "Investment Governance",
+                    "Cost Management"
+                ]
+            },
+            {
+                "employee_id": "EMP-004",
+                "name": "Jonas Berg",
+                "title": "Chief Risk Officer",
+                "business_unit": "Enterprise Risk",
+                "location": "Stockholm",
+                "responsibilities": [
+                    "Operational Risk",
+                    "Third Party Risk",
+                    "Regulatory Risk"
+                ]
+            }
+        ],
+        "business_units": [
+            {
+                "business_unit_id": "BU-001",
+                "name": "Payments",
+                "head": {
+                    "employee_id": "EMP-021",
+                    "name": "Lars Nilsen"
+                },
+                "locations": [
+                    "Oslo",
+                    "London",
+                    "Dublin"
+                ],
+                "annual_revenue_eur": 780000000,
+                "strategic_priority": "high"
+            },
+            {
+                "business_unit_id": "BU-002",
+                "name": "Retail Banking",
+                "head": {
+                    "employee_id": "EMP-022",
+                    "name": "Sofia Marchetti"
+                },
+                "locations": [
+                    "Milan",
+                    "Madrid",
+                    "Lisbon"
+                ],
+                "annual_revenue_eur": 1120000000,
+                "strategic_priority": "high"
+            },
+            {
+                "business_unit_id": "BU-003",
+                "name": "Corporate Banking",
+                "head": {
+                    "employee_id": "EMP-023",
+                    "name": "Marek Nowak"
+                },
+                "locations": [
+                    "Warsaw",
+                    "Frankfurt",
+                    "London"
+                ],
+                "annual_revenue_eur": 940000000,
+                "strategic_priority": "medium"
+            }
+        ]
+    },
+    "portfolio": {
+        "portfolio_id": "PF-001",
+        "name": "Atlas Transformation Portfolio",
+        "portfolio_owner": {
+            "employee_id": "EMP-001",
+            "name": "Ingrid Halvorsen"
+        },
+        "approved_budget_eur": 18500000,
+        "forecast_budget_eur": 19250000,
+        "actual_spend_eur": 11380000,
+        "portfolio_status": "amber",
+        "strategic_objectives": [
+            {
+                "objective_id": "OBJ-001",
+                "name": "Modernise payment infrastructure",
+                "priority": "critical",
+                "target_date": "2027-06-30"
+            },
+            {
+                "objective_id": "OBJ-002",
+                "name": "Reduce operational processing cost",
+                "priority": "high",
+                "target_date": "2027-12-31"
+            },
+            {
+                "objective_id": "OBJ-003",
+                "name": "Improve data governance",
+                "priority": "high",
+                "target_date": "2027-09-30"
+            }
+        ],
+        "programmes": [
+            {
+                "programme_id": "PRG-001",
+                "name": "Atlas Modernisation",
+                "status": "amber",
+                "sponsor_id": "EMP-001",
+                "sponsor_name": "Ingrid Halvorsen",
+                "programme_manager": {
+                    "employee_id": "EMP-010",
+                    "name": "Elena Petrov",
+                    "role": "Programme Director"
+                },
+                "budget_eur": 8200000,
+                "forecast_eur": 8750000,
+                "actual_spend_eur": 5480000,
+                "business_unit_id": "BU-001",
+                "objective_ids": [
+                    "OBJ-001",
+                    "OBJ-002"
+                ],
+                "projects": [
+                    {
+                        "project_id": "PRJ-001",
+                        "name": "Payments Core Rewrite",
+                        "status": "amber",
+                        "health_score": 67,
+                        "priority": "critical",
+                        "budget_eur": 3200000,
+                        "forecast_eur": 3410000,
+                        "actual_spend_eur": 2180000,
+                        "project_manager": {
+                            "employee_id": "EMP-011",
+                            "name": "Marek Nowak",
+                            "role": "Senior Delivery Manager"
+                        },
+                        "technical_lead": {
+                            "employee_id": "EMP-031",
+                            "name": "Oliver Grant",
+                            "discipline": "Backend Engineering",
+                            "location": "London"
+                        },
+                        "vendor_ids": [
+                            "VEN-001",
+                            "VEN-003"
+                        ],
+                        "application_ids": [
+                            "APP-001",
+                            "APP-002"
+                        ],
+                        "data_product_ids": [
+                            "DP-001",
+                            "DP-003"
+                        ],
+                        "milestones": [
+                            {
+                                "milestone_id": "MS-001",
+                                "name": "Ledger cutover",
+                                "planned_date": "2026-05-30",
+                                "actual_date": "2026-05-28",
+                                "status": "done",
+                                "critical": true
+                            },
+                            {
+                                "milestone_id": "MS-002",
+                                "name": "Settlement parity",
+                                "planned_date": "2026-09-15",
+                                "forecast_date": "2026-10-07",
+                                "status": "at_risk",
+                                "critical": true,
+                                "delay_days": 22
+                            },
+                            {
+                                "milestone_id": "MS-003",
+                                "name": "Production migration",
+                                "planned_date": "2026-11-15",
+                                "forecast_date": "2026-12-04",
+                                "status": "at_risk",
+                                "critical": true,
+                                "delay_days": 19
+                            }
+                        ],
+                        "risks": [
+                            {
+                                "risk_id": "RSK-001",
+                                "description": "Settlement mismatch under load",
+                                "severity": "high",
+                                "probability": 0.65,
+                                "impact_eur": 850000,
+                                "owner_id": "EMP-011",
+                                "mitigation_status": "in_progress"
+                            },
+                            {
+                                "risk_id": "RSK-002",
+                                "description": "Legacy reconciliation dependency",
+                                "severity": "medium",
+                                "probability": 0.55,
+                                "impact_eur": 420000,
+                                "owner_id": "EMP-031",
+                                "mitigation_status": "planned"
+                            }
+                        ],
+                        "dependencies": [
+                            {
+                                "dependency_id": "DEP-001",
+                                "depends_on_project_id": "PRJ-003",
+                                "dependency_type": "data",
+                                "criticality": "high",
+                                "description": "Historical transaction data required for reconciliation"
+                            },
+                            {
+                                "dependency_id": "DEP-002",
+                                "depends_on_project_id": "PRJ-004",
+                                "dependency_type": "security",
+                                "criticality": "medium",
+                                "description": "Identity service migration required before production migration"
+                            }
+                        ]
+                    },
+                    {
+                        "project_id": "PRJ-002",
+                        "name": "Customer Portal",
+                        "status": "green",
+                        "health_score": 91,
+                        "priority": "high",
+                        "budget_eur": 1400000,
+                        "forecast_eur": 1370000,
+                        "actual_spend_eur": 820000,
+                        "project_manager": {
+                            "employee_id": "EMP-012",
+                            "name": "Sofia Marchetti",
+                            "role": "Digital Product Director"
+                        },
+                        "technical_lead": {
+                            "employee_id": "EMP-032",
+                            "name": "Emma Laurent",
+                            "discipline": "Frontend Engineering",
+                            "location": "Paris"
+                        },
+                        "vendor_ids": [
+                            "VEN-004"
+                        ],
+                        "application_ids": [
+                            "APP-003"
+                        ],
+                        "data_product_ids": [
+                            "DP-002"
+                        ],
+                        "milestones": [
+                            {
+                                "milestone_id": "MS-004",
+                                "name": "Beta launch",
+                                "planned_date": "2026-07-15",
+                                "actual_date": "2026-07-11",
+                                "status": "done"
+                            },
+                            {
+                                "milestone_id": "MS-005",
+                                "name": "Public launch",
+                                "planned_date": "2026-10-01",
+                                "forecast_date": "2026-09-25",
+                                "status": "on_track"
+                            }
+                        ],
+                        "risks": [],
+                        "dependencies": [
+                            {
+                                "dependency_id": "DEP-003",
+                                "depends_on_project_id": "PRJ-005",
+                                "dependency_type": "customer_identity",
+                                "criticality": "medium"
+                            }
+                        ]
+                    },
+                    {
+                        "project_id": "PRJ-003",
+                        "name": "Data Platform Migration",
+                        "status": "red",
+                        "health_score": 42,
+                        "priority": "critical",
+                        "budget_eur": 2400000,
+                        "forecast_eur": 2890000,
+                        "actual_spend_eur": 1760000,
+                        "project_manager": {
+                            "employee_id": "EMP-011",
+                            "name": "Marek Nowak",
+                            "role": "Senior Delivery Manager"
+                        },
+                        "technical_lead": {
+                            "employee_id": "EMP-033",
+                            "name": "Arun Mehta",
+                            "discipline": "Data Engineering",
+                            "location": "Bangalore"
+                        },
+                        "vendor_ids": [
+                            "VEN-001",
+                            "VEN-006"
+                        ],
+                        "application_ids": [
+                            "APP-005",
+                            "APP-006"
+                        ],
+                        "data_product_ids": [
+                            "DP-004",
+                            "DP-005"
+                        ],
+                        "milestones": [
+                            {
+                                "milestone_id": "MS-006",
+                                "name": "Historical migration wave 1",
+                                "planned_date": "2026-06-30",
+                                "actual_date": "2026-07-18",
+                                "status": "delayed",
+                                "delay_days": 18
+                            },
+                            {
+                                "milestone_id": "MS-007",
+                                "name": "Historical migration wave 2",
+                                "planned_date": "2026-09-01",
+                                "forecast_date": "2026-10-22",
+                                "status": "at_risk",
+                                "delay_days": 51
+                            }
+                        ],
+                        "risks": [
+                            {
+                                "risk_id": "RSK-003",
+                                "description": "Vendor key-person dependency",
+                                "severity": "high",
+                                "probability": 0.72,
+                                "impact_eur": 1100000,
+                                "owner_id": "EMP-011"
+                            },
+                            {
+                                "risk_id": "RSK-004",
+                                "description": "Historical load gaps",
+                                "severity": "medium",
+                                "probability": 0.68,
+                                "impact_eur": 680000,
+                                "owner_id": "EMP-012"
+                            },
+                            {
+                                "risk_id": "RSK-005",
+                                "description": "Data quality reconciliation failure",
+                                "severity": "high",
+                                "probability": 0.61,
+                                "impact_eur": 930000,
+                                "owner_id": "EMP-033"
+                            }
+                        ],
+                        "dependencies": [
+                            {
+                                "dependency_id": "DEP-004",
+                                "depends_on_project_id": "PRJ-001",
+                                "dependency_type": "reconciliation",
+                                "criticality": "high"
+                            },
+                            {
+                                "dependency_id": "DEP-005",
+                                "depends_on_project_id": "PRJ-004",
+                                "dependency_type": "identity",
+                                "criticality": "high"
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "programme_id": "PRG-002",
+                "name": "Horizon Risk Transformation",
+                "status": "green",
+                "sponsor_id": "EMP-004",
+                "sponsor_name": "Jonas Berg",
+                "budget_eur": 6100000,
+                "forecast_eur": 5980000,
+                "actual_spend_eur": 3900000,
+                "business_unit_id": "BU-003",
+                "projects": [
+                    {
+                        "project_id": "PRJ-004",
+                        "name": "Identity Platform",
+                        "status": "green",
+                        "health_score": 88,
+                        "budget_eur": 1900000,
+                        "forecast_eur": 1830000,
+                        "actual_spend_eur": 1220000,
+                        "project_manager": {
+                            "employee_id": "EMP-014",
+                            "name": "Nina Schmidt"
+                        },
+                        "vendor_ids": [
+                            "VEN-002"
+                        ],
+                        "application_ids": [
+                            "APP-004"
+                        ],
+                        "risks": [
+                            {
+                                "risk_id": "RSK-006",
+                                "description": "Legacy authentication dependency",
+                                "severity": "medium",
+                                "probability": 0.42,
+                                "impact_eur": 360000,
+                                "owner_id": "EMP-014"
+                            }
+                        ]
+                    },
+                    {
+                        "project_id": "PRJ-005",
+                        "name": "Customer Identity Federation",
+                        "status": "amber",
+                        "health_score": 71,
+                        "budget_eur": 1200000,
+                        "forecast_eur": 1260000,
+                        "actual_spend_eur": 740000,
+                        "project_manager": {
+                            "employee_id": "EMP-015",
+                            "name": "Daniela Costa"
+                        },
+                        "vendor_ids": [
+                            "VEN-002",
+                            "VEN-005"
+                        ],
+                        "risks": [
+                            {
+                                "risk_id": "RSK-007",
+                                "description": "Third-party identity provider latency",
+                                "severity": "high",
+                                "probability": 0.59,
+                                "impact_eur": 520000,
+                                "owner_id": "EMP-015"
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "programme_id": "PRG-003",
+                "name": "Orion Data Governance",
+                "status": "amber",
+                "sponsor_id": "EMP-003",
+                "sponsor_name": "Amelia Rossi",
+                "budget_eur": 4200000,
+                "forecast_eur": 4520000,
+                "actual_spend_eur": 2000000,
+                "business_unit_id": "BU-002",
+                "projects": [
+                    {
+                        "project_id": "PRJ-006",
+                        "name": "Enterprise Data Catalogue",
+                        "status": "amber",
+                        "health_score": 73,
+                        "budget_eur": 1500000,
+                        "forecast_eur": 1610000,
+                        "actual_spend_eur": 710000,
+                        "project_manager": {
+                            "employee_id": "EMP-017",
+                            "name": "Aisha Khan"
+                        },
+                        "vendor_ids": [
+                            "VEN-007"
+                        ],
+                        "risks": [
+                            {
+                                "risk_id": "RSK-008",
+                                "description": "Metadata ownership ambiguity",
+                                "severity": "medium",
+                                "probability": 0.63,
+                                "impact_eur": 270000,
+                                "owner_id": "EMP-017"
+                            }
+                        ]
+                    },
+                    {
+                        "project_id": "PRJ-007",
+                        "name": "Regulatory Reporting Lake",
+                        "status": "red",
+                        "health_score": 49,
+                        "priority": "critical",
+                        "budget_eur": 1800000,
+                        "forecast_eur": 2110000,
+                        "actual_spend_eur": 990000,
+                        "project_manager": {
+                            "employee_id": "EMP-018",
+                            "name": "Henrik Olsen"
+                        },
+                        "vendor_ids": [
+                            "VEN-006",
+                            "VEN-008"
+                        ],
+                        "data_product_ids": [
+                            "DP-007",
+                            "DP-008"
+                        ],
+                        "risks": [
+                            {
+                                "risk_id": "RSK-009",
+                                "description": "Regulatory mapping gaps",
+                                "severity": "critical",
+                                "probability": 0.76,
+                                "impact_eur": 1450000,
+                                "owner_id": "EMP-018"
+                            },
+                            {
+                                "risk_id": "RSK-010",
+                                "description": "Manual reporting dependency",
+                                "severity": "high",
+                                "probability": 0.71,
+                                "impact_eur": 810000,
+                                "owner_id": "EMP-037"
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    },
+    "vendors": [
+        {
+            "vendor_id": "VEN-001",
+            "name": "Northwind Systems",
+            "country": "Ireland",
+            "global_risk_rating": "high",
+            "strategic_vendor": true,
+            "annual_contract_value_eur": 2580000
+        },
+        {
+            "vendor_id": "VEN-002",
+            "name": "SecureID Global",
+            "country": "Germany",
+            "global_risk_rating": "medium",
+            "strategic_vendor": true,
+            "annual_contract_value_eur": 1730000
+        },
+        {
+            "vendor_id": "VEN-003",
+            "name": "BluePeak Consulting",
+            "country": "United Kingdom",
+            "global_risk_rating": "medium",
+            "strategic_vendor": false,
+            "annual_contract_value_eur": 620000
+        },
+        {
+            "vendor_id": "VEN-004",
+            "name": "Helios Digital",
+            "country": "Portugal",
+            "global_risk_rating": "low",
+            "strategic_vendor": false,
+            "annual_contract_value_eur": 840000
+        },
+        {
+            "vendor_id": "VEN-005",
+            "name": "AuthBridge",
+            "country": "Netherlands",
+            "global_risk_rating": "high",
+            "strategic_vendor": false,
+            "annual_contract_value_eur": 510000
+        },
+        {
+            "vendor_id": "VEN-006",
+            "name": "DataForge Labs",
+            "country": "India",
+            "global_risk_rating": "high",
+            "strategic_vendor": true,
+            "annual_contract_value_eur": 1240000
+        },
+        {
+            "vendor_id": "VEN-007",
+            "name": "CatalogWorks",
+            "country": "France",
+            "global_risk_rating": "medium",
+            "strategic_vendor": false,
+            "annual_contract_value_eur": 390000
+        },
+        {
+            "vendor_id": "VEN-008",
+            "name": "RegData Partners",
+            "country": "Switzerland",
+            "global_risk_rating": "high",
+            "strategic_vendor": true,
+            "annual_contract_value_eur": 970000
+        }
+    ],
+    "applications": [
+        {
+            "application_id": "APP-001",
+            "name": "Legacy Payments Engine",
+            "criticality": "critical",
+            "owner_id": "EMP-031",
+            "technology": [
+                "Java",
+                "Oracle"
+            ],
+            "lifecycle": "sunset",
+            "sunset_date": "2027-02-28",
+            "dependent_applications": [
+                "APP-002",
+                "APP-005"
+            ]
+        },
+        {
+            "application_id": "APP-002",
+            "name": "Atlas Payments Core",
+            "criticality": "critical",
+            "owner_id": "EMP-031",
+            "technology": [
+                "Java",
+                "PostgreSQL",
+                "Kafka"
+            ],
+            "lifecycle": "active",
+            "dependent_applications": [
+                "APP-006"
+            ]
+        },
+        {
+            "application_id": "APP-003",
+            "name": "Customer Digital Portal",
+            "criticality": "high",
+            "owner_id": "EMP-032",
+            "technology": [
+                "React",
+                "Node.js"
+            ],
+            "lifecycle": "active"
+        },
+        {
+            "application_id": "APP-004",
+            "name": "Enterprise Identity Service",
+            "criticality": "critical",
+            "owner_id": "EMP-034",
+            "technology": [
+                "Go",
+                "PostgreSQL",
+                "OIDC"
+            ],
+            "lifecycle": "active"
+        },
+        {
+            "application_id": "APP-005",
+            "name": "Historical Data Store",
+            "criticality": "high",
+            "owner_id": "EMP-033",
+            "technology": [
+                "Spark",
+                "Delta Lake",
+                "Azure Data Lake"
+            ],
+            "lifecycle": "migration"
+        },
+        {
+            "application_id": "APP-006",
+            "name": "Enterprise Data Platform",
+            "criticality": "critical",
+            "owner_id": "EMP-033",
+            "technology": [
+                "Spark",
+                "Delta Lake",
+                "Databricks"
+            ],
+            "lifecycle": "active"
+        }
+    ],
+    "data_products": [
+        {
+            "data_product_id": "DP-001",
+            "name": "Payments Transaction Dataset",
+            "owner_id": "EMP-033",
+            "classification": "confidential",
+            "refresh_frequency": "hourly",
+            "source_systems": [
+                "APP-001",
+                "APP-002"
+            ],
+            "consumers": [
+                "DP-003",
+                "APP-006"
+            ],
+            "quality_score": 91.4,
+            "lineage_status": "partial"
+        },
+        {
+            "data_product_id": "DP-002",
+            "name": "Customer Profile Dataset",
+            "owner_id": "EMP-032",
+            "classification": "restricted",
+            "refresh_frequency": "near_real_time",
+            "source_systems": [
+                "APP-003",
+                "APP-004"
+            ],
+            "consumers": [
+                "APP-003"
+            ],
+            "quality_score": 97.8,
+            "lineage_status": "complete"
+        },
+        {
+            "data_product_id": "DP-003",
+            "name": "Settlement Reconciliation Dataset",
+            "owner_id": "EMP-031",
+            "classification": "confidential",
+            "refresh_frequency": "daily",
+            "source_systems": [
+                "APP-001",
+                "APP-002",
+                "APP-005"
+            ],
+            "consumers": [
+                "DP-001",
+                "APP-006"
+            ],
+            "quality_score": 82.1,
+            "lineage_status": "partial"
+        },
+        {
+            "data_product_id": "DP-004",
+            "name": "Historical Customer Transactions",
+            "owner_id": "EMP-033",
+            "classification": "confidential",
+            "refresh_frequency": "daily",
+            "source_systems": [
+                "APP-005"
+            ],
+            "consumers": [
+                "DP-001",
+                "DP-007"
+            ],
+            "quality_score": 76.3,
+            "lineage_status": "incomplete"
+        },
+        {
+            "data_product_id": "DP-005",
+            "name": "Data Quality Exceptions",
+            "owner_id": "EMP-033",
+            "classification": "internal",
+            "refresh_frequency": "hourly",
+            "source_systems": [
+                "APP-006"
+            ],
+            "consumers": [
+                "DP-004"
+            ],
+            "quality_score": 88.7,
+            "lineage_status": "complete"
+        },
+        {
+            "data_product_id": "DP-006",
+            "name": "Enterprise Metadata Catalogue",
+            "owner_id": "EMP-036",
+            "classification": "internal",
+            "refresh_frequency": "daily",
+            "source_systems": [
+                "APP-006"
+            ],
+            "consumers": [
+                "DP-007",
+                "DP-008"
+            ],
+            "quality_score": 94.2,
+            "lineage_status": "complete"
+        },
+        {
+            "data_product_id": "DP-007",
+            "name": "Regulatory Transaction Dataset",
+            "owner_id": "EMP-037",
+            "classification": "restricted",
+            "refresh_frequency": "daily",
+            "source_systems": [
+                "APP-006"
+            ],
+            "consumers": [
+                "DP-008"
+            ],
+            "quality_score": 71.2,
+            "lineage_status": "incomplete"
+        },
+        {
+            "data_product_id": "DP-008",
+            "name": "Regulatory Reporting Dataset",
+            "owner_id": "EMP-018",
+            "classification": "restricted",
+            "refresh_frequency": "daily",
+            "source_systems": [
+                "DP-007",
+                "DP-006"
+            ],
+            "consumers": [
+                "External Regulatory Reporting"
+            ],
+            "quality_score": 69.8,
+            "lineage_status": "partial"
+        }
+    ],
+    "incidents": [
+        {
+            "incident_id": "INC-001",
+            "severity": "critical",
+            "title": "Settlement reconciliation mismatch",
+            "project_id": "PRJ-001",
+            "application_id": "APP-002",
+            "vendor_id": "VEN-001",
+            "opened_date": "2026-08-03",
+            "status": "investigating",
+            "business_impact_eur": 310000,
+            "root_cause_category": "performance",
+            "affected_data_products": [
+                "DP-001",
+                "DP-003"
+            ],
+            "assigned_to": "EMP-031"
+        },
+        {
+            "incident_id": "INC-002",
+            "severity": "high",
+            "title": "Historical customer records missing",
+            "project_id": "PRJ-003",
+            "application_id": "APP-005",
+            "vendor_id": "VEN-006",
+            "opened_date": "2026-07-21",
+            "status": "mitigating",
+            "business_impact_eur": 180000,
+            "root_cause_category": "data_quality",
+            "affected_data_products": [
+                "DP-004"
+            ],
+            "assigned_to": "EMP-033"
+        },
+        {
+            "incident_id": "INC-003",
+            "severity": "medium",
+            "title": "Identity provider latency",
+            "project_id": "PRJ-005",
+            "application_id": "APP-004",
+            "vendor_id": "VEN-005",
+            "opened_date": "2026-08-08",
+            "status": "monitoring",
+            "business_impact_eur": 95000,
+            "root_cause_category": "third_party",
+            "affected_data_products": [
+                "DP-002"
+            ],
+            "assigned_to": "EMP-035"
+        },
+        {
+            "incident_id": "INC-004",
+            "severity": "high",
+            "title": "Regulatory data mapping failure",
+            "project_id": "PRJ-007",
+            "application_id": "APP-006",
+            "vendor_id": "VEN-008",
+            "opened_date": "2026-08-10",
+            "status": "open",
+            "business_impact_eur": 420000,
+            "root_cause_category": "data_quality",
+            "affected_data_products": [
+                "DP-007",
+                "DP-008"
+            ],
+            "assigned_to": "EMP-037"
+        }
+    ],
+    "compliance": {
+        "frameworks": [
+            {
+                "framework_id": "CMP-001",
+                "name": "DORA",
+                "jurisdiction": "EU",
+                "criticality": "critical",
+                "control_domains": [
+                    "ICT Risk Management",
+                    "Third Party Risk",
+                    "Incident Management",
+                    "Operational Resilience"
+                ]
+            },
+            {
+                "framework_id": "CMP-002",
+                "name": "GDPR",
+                "jurisdiction": "EU",
+                "criticality": "critical",
+                "control_domains": [
+                    "Data Protection",
+                    "Data Minimisation",
+                    "Access Control",
+                    "Data Retention"
+                ]
+            },
+            {
+                "framework_id": "CMP-003",
+                "name": "ISO27001",
+                "jurisdiction": "Global",
+                "criticality": "high",
+                "control_domains": [
+                    "Information Security",
+                    "Access Management",
+                    "Supplier Security"
+                ]
+            }
+        ],
+        "controls": [
+            {
+                "control_id": "CTRL-001",
+                "name": "Critical Vendor Assessment",
+                "framework_ids": [
+                    "CMP-001",
+                    "CMP-003"
+                ],
+                "owner_id": "EMP-004",
+                "status": "effective",
+                "vendor_ids": [
+                    "VEN-001",
+                    "VEN-002",
+                    "VEN-006",
+                    "VEN-008"
+                ]
+            },
+            {
+                "control_id": "CTRL-002",
+                "name": "Data Lineage Completeness",
+                "framework_ids": [
+                    "CMP-002",
+                    "CMP-001"
+                ],
+                "owner_id": "EMP-036",
+                "status": "needs_improvement",
+                "data_product_ids": [
+                    "DP-004",
+                    "DP-007",
+                    "DP-008"
+                ]
+            },
+            {
+                "control_id": "CTRL-003",
+                "name": "Critical Incident Response",
+                "framework_ids": [
+                    "CMP-001"
+                ],
+                "owner_id": "EMP-004",
+                "status": "effective",
+                "incident_severity_threshold": "high"
+            }
+        ]
+    },
+    "architecture": {
+        "domains": [
+            {
+                "domain_id": "ARCH-001",
+                "name": "Payments",
+                "applications": [
+                    "APP-001",
+                    "APP-002"
+                ],
+                "target_state": "cloud_native",
+                "transformation_status": "in_progress"
+            },
+            {
+                "domain_id": "ARCH-002",
+                "name": "Identity",
+                "applications": [
+                    "APP-004"
+                ],
+                "target_state": "zero_trust",
+                "transformation_status": "on_track"
+            },
+            {
+                "domain_id": "ARCH-003",
+                "name": "Data",
+                "applications": [
+                    "APP-005",
+                    "APP-006"
+                ],
+                "target_state": "lakehouse",
+                "transformation_status": "at_risk"
+            }
+        ],
+        "technology_dependencies": [
+            {
+                "dependency_id": "TECH-001",
+                "source_application": "APP-002",
+                "target_application": "APP-006",
+                "type": "data",
+                "criticality": "critical"
+            },
+            {
+                "dependency_id": "TECH-002",
+                "source_application": "APP-003",
+                "target_application": "APP-004",
+                "type": "identity",
+                "criticality": "high"
+            },
+            {
+                "dependency_id": "TECH-003",
+                "source_application": "APP-006",
+                "target_application": "APP-004",
+                "type": "access_control",
+                "criticality": "high"
+            }
+        ]
+    },
+    "decisions": [
+        {
+            "decision_id": "DEC-001",
+            "title": "Approve phased payment migration",
+            "decision_owner": "EMP-001",
+            "affected_projects": [
+                "PRJ-001",
+                "PRJ-003"
+            ],
+            "rationale": [
+                "Reduce operational risk",
+                "Allow reconciliation validation",
+                "Reduce rollback complexity"
+            ]
+        },
+        {
+            "decision_id": "DEC-002",
+            "title": "Retain Northwind Systems",
+            "decision_owner": "EMP-002",
+            "affected_projects": [
+                "PRJ-001",
+                "PRJ-003"
+            ],
+            "rationale": [
+                "Existing platform expertise",
+                "Migration knowledge",
+                "Lower transition cost"
+            ]
+        },
+        {
+            "decision_id": "DEC-003",
+            "title": "Escalate regulatory reporting programme",
+            "decision_owner": "EMP-003",
+            "affected_projects": [
+                "PRJ-007"
+            ],
+            "rationale": [
+                "Critical regulatory mapping risk",
+                "Reporting deadline exposure",
+                "Low data quality"
+            ]
+        }
+    ],
+    "meetings": [
+        {
+            "meeting_id": "MTG-001",
+            "type": "Portfolio Steering Committee",
+            "chair": "EMP-001",
+            "attendees": [
+                "EMP-001",
+                "EMP-002",
+                "EMP-003",
+                "EMP-004",
+                "EMP-010"
+            ],
+            "topics": [
+                "Atlas Modernisation",
+                "Vendor concentration",
+                "Data quality",
+                "Regulatory reporting"
+            ],
+            "actions": [
+                {
+                    "action_id": "ACT-001",
+                    "description": "Produce Northwind dependency reduction plan",
+                    "owner_id": "EMP-004",
+                    "due_date": "2026-08-25",
+                    "priority": "high",
+                    "status": "open"
+                },
+                {
+                    "action_id": "ACT-002",
+                    "description": "Resolve historical data quality gaps",
+                    "owner_id": "EMP-033",
+                    "due_date": "2026-08-30",
+                    "priority": "critical",
+                    "status": "in_progress"
+                },
+                {
+                    "action_id": "ACT-003",
+                    "description": "Complete regulatory mapping remediation",
+                    "owner_id": "EMP-037",
+                    "due_date": "2026-09-10",
+                    "priority": "critical",
+                    "status": "blocked"
+                }
+            ]
+        }
+    ],
+    "documents": [
+        {
+            "document_id": "DOC-001",
+            "title": "Atlas Modernisation Business Case",
+            "document_type": "business_case",
+            "owner_id": "EMP-010",
+            "related_projects": [
+                "PRJ-001",
+                "PRJ-002",
+                "PRJ-003"
+            ]
+        },
+        {
+            "document_id": "DOC-002",
+            "title": "Northwind Vendor Risk Assessment",
+            "document_type": "third_party_risk",
+            "owner_id": "EMP-004",
+            "related_vendor": "VEN-001",
+            "related_projects": [
+                "PRJ-001",
+                "PRJ-003"
+            ],
+            "risk_rating": "high"
+        },
+        {
+            "document_id": "DOC-003",
+            "title": "Regulatory Reporting Gap Analysis",
+            "document_type": "regulatory",
+            "owner_id": "EMP-018",
+            "related_project": "PRJ-007",
+            "related_data_products": [
+                "DP-007",
+                "DP-008"
+            ]
+        }
+    ],
+    "employees": [
+        {
+            "employee_id": "EMP-010",
+            "name": "Elena Petrov",
+            "department": "Transformation",
+            "location": "Oslo",
+            "skills": [
+                "Programme Management",
+                "Financial Governance",
+                "Vendor Management"
+            ],
+            "manager_id": "EMP-001"
+        },
+        {
+            "employee_id": "EMP-011",
+            "name": "Marek Nowak",
+            "department": "Transformation",
+            "location": "Warsaw",
+            "skills": [
+                "Delivery Management",
+                "Payments",
+                "Migration"
+            ],
+            "manager_id": "EMP-010"
+        },
+        {
+            "employee_id": "EMP-012",
+            "name": "Sofia Marchetti",
+            "department": "Digital",
+            "location": "Milan",
+            "skills": [
+                "Product Management",
+                "Customer Experience",
+                "Data"
+            ],
+            "manager_id": "EMP-010"
+        },
+        {
+            "employee_id": "EMP-033",
+            "name": "Arun Mehta",
+            "department": "Data Engineering",
+            "location": "Bangalore",
+            "skills": [
+                "Spark",
+                "Delta Lake",
+                "Data Quality",
+                "Migration"
+            ],
+            "manager_id": "EMP-016"
+        },
+        {
+            "employee_id": "EMP-037",
+            "name": "Priya Shah",
+            "department": "Data Engineering",
+            "location": "Mumbai",
+            "skills": [
+                "Regulatory Data",
+                "Data Engineering",
+                "Reporting"
+            ],
+            "manager_id": "EMP-018"
+        }
+    ]
+}

@@ -1,0 +1,15 @@
+node_modules
+.next
+out
+coverage
+*.log
+npm-debug.log*
+tsconfig.tsbuildinfo
+*.tmp
+.env
+.env.*
+!.env.example
+.git
+e2e/.auth
+e2e/.results
+e2e/.report

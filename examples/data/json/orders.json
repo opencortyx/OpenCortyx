@@ -1,0 +1,5 @@
+[
+  { "order_id": "O-1001", "customer_id": "C-1", "product_id": "P-9", "amount": 129.90, "status": "shipped", "review_text": "Arrived early and the packaging was excellent. Would order again.", "created_at": "2026-03-01" },
+  { "order_id": "O-1002", "customer_id": "C-2", "product_id": "P-3", "amount": 54.00, "status": "pending", "review_text": "Waiting on delivery, support was responsive when I asked.", "created_at": "2026-03-02" },
+  { "order_id": "O-1003", "customer_id": "C-1", "product_id": "P-3", "amount": 54.00, "status": "delivered", "review_text": "Second time buying this. Consistent quality, fast shipping.", "created_at": "2026-03-04" }
+]

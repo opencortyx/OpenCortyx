@@ -1,0 +1,107 @@
+{
+    "programme": {
+        "programme_id": "PRG-7",
+        "name": "Atlas Modernisation",
+        "budget_eur": 4200000,
+        "sponsor": {
+            "sponsor_id": "SP-1",
+            "name": "Ingrid Halvorsen",
+            "role": "Chief Operating Officer",
+            "based_in": "Oslo"
+        },
+        "projects": [
+            {
+                "project_id": "PRJ-11",
+                "name": "Payments Core Rewrite",
+                "status": "amber",
+                "spend_eur": 1850000,
+                "lead": {
+                    "employee_id": "EMP-3",
+                    "name": "Marek Nowak",
+                    "discipline": "backend"
+                },
+                "vendor": {
+                    "vendor_id": "VEN-2",
+                    "name": "Northwind Systems",
+                    "country": "Ireland"
+                },
+                "milestones": [
+                    {
+                        "milestone_id": "MS-1",
+                        "name": "Ledger cutover",
+                        "status": "done"
+                    },
+                    {
+                        "milestone_id": "MS-2",
+                        "name": "Settlement parity",
+                        "status": "at_risk"
+                    }
+                ],
+                "risks": [
+                    {
+                        "risk_id": "RSK-4",
+                        "description": "Settlement mismatch under load",
+                        "severity": "high",
+                        "owner": {
+                            "employee_id": "EMP-3",
+                            "name": "Marek Nowak"
+                        }
+                    }
+                ]
+            },
+            {
+                "project_id": "PRJ-12",
+                "name": "Customer Portal",
+                "status": "green",
+                "spend_eur": 640000,
+                "lead": {
+                    "employee_id": "EMP-9",
+                    "name": "Sofia Marchetti",
+                    "discipline": "frontend"
+                },
+                "vendor": {
+                    "vendor_id": "VEN-5",
+                    "name": "Helios Digital",
+                    "country": "Portugal"
+                },
+                "milestones": [],
+                "risks": []
+            },
+            {
+                "project_id": "PRJ-13",
+                "name": "Data Platform Migration",
+                "status": "red",
+                "spend_eur": 1290000,
+                "lead": {
+                    "employee_id": "EMP-3",
+                    "name": "Marek Nowak"
+                },
+                "vendor": {
+                    "vendor_id": "VEN-2",
+                    "name": "Northwind Systems"
+                },
+                "milestones": [],
+                "risks": [
+                    {
+                        "risk_id": "RSK-8",
+                        "description": "Vendor key-person dependency",
+                        "severity": "high",
+                        "owner": {
+                            "employee_id": "EMP-3",
+                            "name": "Marek Nowak"
+                        }
+                    },
+                    {
+                        "risk_id": "RSK-9",
+                        "description": "Historical load gaps",
+                        "severity": "medium",
+                        "owner": {
+                            "employee_id": "EMP-9",
+                            "name": "Sofia Marchetti"
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+}

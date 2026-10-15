@@ -1,0 +1,48 @@
+# Contributor overrides: live source mounts, Next.js dev server, Postgres/Redis on localhost.
+# Use `bin/opencortyx dev`.
+services:
+  setup:
+    volumes:
+      - ./apps/api:/app
+
+  api:
+    command: uvicorn opencortyx.main:app --host 0.0.0.0 --port 8000 --loop asyncio ${API_RELOAD:+--reload}
+    volumes:
+      - ./apps/api:/app
+
+  worker:
+    volumes:
+      - ./apps/api:/app
+
+  extraction-worker:
+    volumes:
+      - ./apps/api:/app
+
+  maintenance-worker:
+    volumes:
+      - ./apps/api:/app
+
+  embedding-worker:
+    volumes:
+      - ./apps/api:/app
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile.dev
+    image: opencortyx-web:dev
+    command: npm run dev
+    # The dev server compiles pages on demand; a full click-through of the dashboard peaks near 2 GiB.
+    mem_limit: 2560m
+    memswap_limit: 2560m
+    environment:
+      NODE_ENV: development
+      WATCHPACK_POLLING: "true"
+    volumes:
+      - ./apps/web:/app
+      - /app/node_modules
+      - /app/.next
+
+  mcp:
+    volumes:
+      - ./apps/mcp:/app

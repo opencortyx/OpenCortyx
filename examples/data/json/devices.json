@@ -1,0 +1,5 @@
+[
+  { "asset_tag": "A-77", "kind": "laptop", "assigned_to": "alex", "specs": { "cpu": "M3", "ram_gb": 16 }, "tags": ["field", "encrypted"] },
+  { "asset_tag": "A-78", "kind": "phone", "assigned_to": "sam", "specs": { "cpu": "A18", "ram_gb": 8 }, "tags": ["field"] },
+  { "asset_tag": "A-79", "kind": "laptop", "assigned_to": "jo", "specs": { "cpu": "M3", "ram_gb": 32 }, "tags": ["lab", "encrypted"] }
+]

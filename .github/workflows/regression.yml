@@ -1,0 +1,85 @@
+name: Regression
+
+# The recorded regression suite: coverage matrix → API, ingestion, feature, contract, security and
+# UI scenarios against a freshly built stack → report.json, junit.xml, report.md and the UI report.
+# Every scenario runs as a throwaway tenant, so the job needs no admin account and no seeded data.
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      corpus:
+        description: "Also run the public conformance corpora (JSONTestSuite, W3C XML)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  checks: write
+
+concurrency:
+  group: regression-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure and start the stack
+        run: |
+          bin/opencortyx init
+          bin/opencortyx up --build
+
+      - name: Fetch the public conformance corpora
+        if: ${{ github.event_name == 'schedule' || inputs.corpus }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/corpus/json-test-suite" "$RUNNER_TEMP/corpus/xml-w3c-tests"
+          curl -fsSL https://github.com/nst/JSONTestSuite/archive/refs/heads/master.tar.gz \
+            | tar -xz -C "$RUNNER_TEMP/corpus/json-test-suite"
+          curl -fsSL https://www.w3.org/XML/Test/xmlts20130923.tar.gz | tar -xz -C "$RUNNER_TEMP/corpus/xml-w3c-tests"
+          echo "OPENCORTYX_CORPUS=$RUNNER_TEMP/corpus" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install Playwright
+        working-directory: apps/web
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run the regression suite
+        env:
+          OPENCORTYX_REGRESSION_GATE: "1"     # fail on any failure the defect register does not explain
+        run: bin/opencortyx regression ci
+
+      - name: Publish test results
+        if: always()
+        uses: mikepenz/action-junit-report@v4
+        with:
+          report_paths: apps/api/test-results/ci/junit.xml
+          check_name: Regression
+
+      - name: Summary
+        if: always()
+        run: cat apps/api/test-results/ci/report.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Collect stack logs
+        if: always()
+        run: docker compose -f compose.yaml logs --no-color > stack.log 2>&1 || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: regression-report
+          path: |
+            apps/api/test-results/ci
+            stack.log
+          retention-days: 14

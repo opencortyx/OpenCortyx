@@ -1,0 +1,31 @@
+{
+    "customer": {
+        "customer_id": "C001",
+        "name": "John Doe",
+        "email": "john@example.com"
+    },
+    "order": {
+        "order_id": "O1001",
+        "order_date": "2026-08-04",
+        "total_amount": 249.99
+    },
+    "items": [
+        {
+            "product_id": "P101",
+            "name": "Laptop Mouse",
+            "quantity": 2,
+            "price": 24.99
+        },
+        {
+            "product_id": "P205",
+            "name": "Keyboard",
+            "quantity": 1,
+            "price": 199.99
+        }
+    ],
+    "payment": {
+        "payment_id": "PAY9001",
+        "method": "Credit Card",
+        "status": "Completed"
+    }
+}

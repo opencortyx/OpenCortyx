@@ -1,0 +1,1304 @@
+{
+    "benchmark_id": "CTX-ENTERPRISE-001",
+    "benchmark_version": "1.0",
+    "dataset": "test_data.json",
+    "description": "Benchmark for evaluating enterprise context retrieval, entity resolution, relationship traversal, multi-hop reasoning, aggregation, lineage reasoning, graph reasoning, compliance reasoning and hallucination resistance.",
+    "evaluation": {
+        "total_questions": 100,
+        "question_types": {
+            "simple": 15,
+            "nested": 15,
+            "filtering": 10,
+            "aggregation": 15,
+            "multi_hop": 15,
+            "graph": 10,
+            "lineage": 5,
+            "compliance": 5,
+            "negative": 5,
+            "executive_synthesis": 5
+        },
+        "answer_requirements": {
+            "simple": "Exact or semantically equivalent answer",
+            "aggregation": "Correct calculation",
+            "multi_hop": "Correct entities and relationship chain",
+            "graph": "Correct graph path or connected entities",
+            "negative": "Must explicitly state that the requested information is unavailable or unsupported",
+            "executive_synthesis": "Answer must contain the important supporting facts from the dataset"
+        }
+    },
+    "questions": [
+        {
+            "id": "B001",
+            "category": "simple",
+            "difficulty": "easy",
+            "question": "What is the name of the enterprise?",
+            "expected_answer": "Nordic Meridian Group",
+            "expected_entities": [
+                "ENT-001"
+            ]
+        },
+        {
+            "id": "B002",
+            "category": "simple",
+            "difficulty": "easy",
+            "question": "Where is Nordic Meridian Group headquartered?",
+            "expected_answer": "Oslo, Norway",
+            "expected_entities": [
+                "ENT-001"
+            ]
+        },
+        {
+            "id": "B003",
+            "category": "simple",
+            "difficulty": "easy",
+            "question": "What is the enterprise fiscal year?",
+            "expected_answer": "2026-01-01 to 2026-12-31",
+            "expected_entities": [
+                "ENT-001"
+            ]
+        },
+        {
+            "id": "B004",
+            "category": "simple",
+            "difficulty": "easy",
+            "question": "Who is the Chief Operating Officer?",
+            "expected_answer": "Ingrid Halvorsen",
+            "expected_entities": [
+                "EMP-001"
+            ]
+        },
+        {
+            "id": "B005",
+            "category": "simple",
+            "difficulty": "easy",
+            "question": "Who is the Chief Technology Officer?",
+            "expected_answer": "Daniel Fischer",
+            "expected_entities": [
+                "EMP-002"
+            ]
+        },
+        {
+            "id": "B006",
+            "category": "simple",
+            "difficulty": "easy",
+            "question": "Who is the Chief Financial Officer?",
+            "expected_answer": "Amelia Rossi",
+            "expected_entities": [
+                "EMP-003"
+            ]
+        },
+        {
+            "id": "B007",
+            "category": "simple",
+            "difficulty": "easy",
+            "question": "Who is the Chief Risk Officer?",
+            "expected_answer": "Jonas Berg",
+            "expected_entities": [
+                "EMP-004"
+            ]
+        },
+        {
+            "id": "B008",
+            "category": "simple",
+            "difficulty": "easy",
+            "question": "What is the portfolio name?",
+            "expected_answer": "Atlas Transformation Portfolio",
+            "expected_entities": [
+                "PF-001"
+            ]
+        },
+        {
+            "id": "B009",
+            "category": "simple",
+            "difficulty": "easy",
+            "question": "Who owns the Atlas Transformation Portfolio?",
+            "expected_answer": "Ingrid Halvorsen",
+            "expected_entities": [
+                "PF-001",
+                "EMP-001"
+            ]
+        },
+        {
+            "id": "B010",
+            "category": "simple",
+            "difficulty": "easy",
+            "question": "What is the approved budget of the Atlas Transformation Portfolio?",
+            "expected_answer": 18500000,
+            "unit": "EUR",
+            "expected_entities": [
+                "PF-001"
+            ]
+        },
+        {
+            "id": "B011",
+            "category": "simple",
+            "difficulty": "easy",
+            "question": "What is the current status of the Atlas Transformation Portfolio?",
+            "expected_answer": "amber",
+            "expected_entities": [
+                "PF-001"
+            ]
+        },
+        {
+            "id": "B012",
+            "category": "simple",
+            "difficulty": "easy",
+            "question": "How many programmes are present in the portfolio?",
+            "expected_answer": 3,
+            "expected_entities": [
+                "PF-001"
+            ]
+        },
+        {
+            "id": "B013",
+            "category": "simple",
+            "difficulty": "easy",
+            "question": "What is the status of Atlas Modernisation?",
+            "expected_answer": "amber",
+            "expected_entities": [
+                "PRG-001"
+            ]
+        },
+        {
+            "id": "B014",
+            "category": "simple",
+            "difficulty": "easy",
+            "question": "What is the status of Data Platform Migration?",
+            "expected_answer": "red",
+            "expected_entities": [
+                "PRJ-003"
+            ]
+        },
+        {
+            "id": "B015",
+            "category": "simple",
+            "difficulty": "easy",
+            "question": "What is the health score of Data Platform Migration?",
+            "expected_answer": 42,
+            "expected_entities": [
+                "PRJ-003"
+            ]
+        },
+        {
+            "id": "B016",
+            "category": "nested",
+            "difficulty": "easy",
+            "question": "Who sponsors Atlas Modernisation?",
+            "expected_answer": "Ingrid Halvorsen",
+            "expected_entities": [
+                "PRG-001",
+                "EMP-001"
+            ]
+        },
+        {
+            "id": "B017",
+            "category": "nested",
+            "difficulty": "easy",
+            "question": "Who manages Atlas Modernisation?",
+            "expected_answer": "Elena Petrov",
+            "expected_entities": [
+                "PRG-001",
+                "EMP-010"
+            ]
+        },
+        {
+            "id": "B018",
+            "category": "nested",
+            "difficulty": "easy",
+            "question": "What department does Marek Nowak belong to?",
+            "expected_answer": "Transformation",
+            "expected_entities": [
+                "EMP-011"
+            ]
+        },
+        {
+            "id": "B019",
+            "category": "nested",
+            "difficulty": "easy",
+            "question": "Where is Marek Nowak based?",
+            "expected_answer": "Warsaw",
+            "expected_entities": [
+                "EMP-011"
+            ]
+        },
+        {
+            "id": "B020",
+            "category": "nested",
+            "difficulty": "medium",
+            "question": "What skills does Arun Mehta have?",
+            "expected_answer": [
+                "Spark",
+                "Delta Lake",
+                "Data Quality",
+                "Migration"
+            ],
+            "expected_entities": [
+                "EMP-033"
+            ]
+        },
+        {
+            "id": "B021",
+            "category": "nested",
+            "difficulty": "medium",
+            "question": "Who is the technical lead of Payments Core Rewrite?",
+            "expected_answer": "Oliver Grant",
+            "expected_entities": [
+                "PRJ-001",
+                "EMP-031"
+            ]
+        },
+        {
+            "id": "B022",
+            "category": "nested",
+            "difficulty": "medium",
+            "question": "Who is the technical lead of Data Platform Migration?",
+            "expected_answer": "Arun Mehta",
+            "expected_entities": [
+                "PRJ-003",
+                "EMP-033"
+            ]
+        },
+        {
+            "id": "B023",
+            "category": "nested",
+            "difficulty": "medium",
+            "question": "What is the forecast budget for Payments Core Rewrite?",
+            "expected_answer": 3410000,
+            "unit": "EUR",
+            "expected_entities": [
+                "PRJ-001"
+            ]
+        },
+        {
+            "id": "B024",
+            "category": "nested",
+            "difficulty": "medium",
+            "question": "What is the actual spend of Data Platform Migration?",
+            "expected_answer": 1760000,
+            "unit": "EUR",
+            "expected_entities": [
+                "PRJ-003"
+            ]
+        },
+        {
+            "id": "B025",
+            "category": "nested",
+            "difficulty": "medium",
+            "question": "Which vendor is used by Payments Core Rewrite?",
+            "expected_answer": [
+                "Northwind Systems",
+                "BluePeak Consulting"
+            ],
+            "expected_entities": [
+                "PRJ-001",
+                "VEN-001",
+                "VEN-003"
+            ]
+        },
+        {
+            "id": "B026",
+            "category": "nested",
+            "difficulty": "medium",
+            "question": "Which applications are used by Data Platform Migration?",
+            "expected_answer": [
+                "Historical Data Store",
+                "Enterprise Data Platform"
+            ],
+            "expected_entities": [
+                "PRJ-003",
+                "APP-005",
+                "APP-006"
+            ]
+        },
+        {
+            "id": "B027",
+            "category": "nested",
+            "difficulty": "medium",
+            "question": "Which data products are associated with Payments Core Rewrite?",
+            "expected_answer": [
+                "Payments Transaction Dataset",
+                "Settlement Reconciliation Dataset"
+            ],
+            "expected_entities": [
+                "PRJ-001",
+                "DP-001",
+                "DP-003"
+            ]
+        },
+        {
+            "id": "B028",
+            "category": "nested",
+            "difficulty": "medium",
+            "question": "What are the milestones of Payments Core Rewrite?",
+            "expected_answer": [
+                "Ledger cutover",
+                "Settlement parity",
+                "Production migration"
+            ],
+            "expected_entities": [
+                "PRJ-001",
+                "MS-001",
+                "MS-002",
+                "MS-003"
+            ]
+        },
+        {
+            "id": "B029",
+            "category": "nested",
+            "difficulty": "medium",
+            "question": "Which risks belong to Data Platform Migration?",
+            "expected_answer": [
+                "Vendor key-person dependency",
+                "Historical load gaps",
+                "Data quality reconciliation failure"
+            ],
+            "expected_entities": [
+                "PRJ-003",
+                "RSK-003",
+                "RSK-004",
+                "RSK-005"
+            ]
+        },
+        {
+            "id": "B030",
+            "category": "nested",
+            "difficulty": "medium",
+            "question": "What is the quality score of Regulatory Reporting Dataset?",
+            "expected_answer": 69.8,
+            "expected_entities": [
+                "DP-008"
+            ]
+        },
+        {
+            "id": "B031",
+            "category": "filtering",
+            "difficulty": "medium",
+            "question": "Which projects have red status?",
+            "expected_answer": [
+                "Data Platform Migration",
+                "Regulatory Reporting Lake"
+            ],
+            "expected_entities": [
+                "PRJ-003",
+                "PRJ-007"
+            ]
+        },
+        {
+            "id": "B032",
+            "category": "filtering",
+            "difficulty": "medium",
+            "question": "Which projects have a critical priority?",
+            "expected_answer": [
+                "Payments Core Rewrite",
+                "Data Platform Migration",
+                "Regulatory Reporting Lake"
+            ],
+            "expected_entities": [
+                "PRJ-001",
+                "PRJ-003",
+                "PRJ-007"
+            ]
+        },
+        {
+            "id": "B033",
+            "category": "filtering",
+            "difficulty": "medium",
+            "question": "Which vendors have a high global risk rating?",
+            "expected_answer": [
+                "Northwind Systems",
+                "AuthBridge",
+                "DataForge Labs",
+                "RegData Partners"
+            ],
+            "expected_entities": [
+                "VEN-001",
+                "VEN-005",
+                "VEN-006",
+                "VEN-008"
+            ]
+        },
+        {
+            "id": "B034",
+            "category": "filtering",
+            "difficulty": "medium",
+            "question": "Which vendors are strategic vendors?",
+            "expected_answer": [
+                "Northwind Systems",
+                "SecureID Global",
+                "DataForge Labs",
+                "RegData Partners"
+            ],
+            "expected_entities": [
+                "VEN-001",
+                "VEN-002",
+                "VEN-006",
+                "VEN-008"
+            ]
+        },
+        {
+            "id": "B035",
+            "category": "filtering",
+            "difficulty": "medium",
+            "question": "Which data products have incomplete lineage?",
+            "expected_answer": [
+                "Historical Customer Transactions",
+                "Regulatory Transaction Dataset"
+            ],
+            "expected_entities": [
+                "DP-004",
+                "DP-007"
+            ]
+        },
+        {
+            "id": "B036",
+            "category": "filtering",
+            "difficulty": "medium",
+            "question": "Which data products have a quality score below 80?",
+            "expected_answer": [
+                "Historical Customer Transactions",
+                "Regulatory Transaction Dataset",
+                "Regulatory Reporting Dataset"
+            ],
+            "expected_entities": [
+                "DP-004",
+                "DP-007",
+                "DP-008"
+            ]
+        },
+        {
+            "id": "B037",
+            "category": "filtering",
+            "difficulty": "medium",
+            "question": "Which incidents are high or critical severity?",
+            "expected_answer": [
+                "Settlement reconciliation mismatch",
+                "Historical customer records missing",
+                "Regulatory data mapping failure"
+            ],
+            "expected_entities": [
+                "INC-001",
+                "INC-002",
+                "INC-004"
+            ]
+        },
+        {
+            "id": "B038",
+            "category": "filtering",
+            "difficulty": "medium",
+            "question": "Which projects have at least one high-severity risk?",
+            "expected_answer": [
+                "Payments Core Rewrite",
+                "Data Platform Migration",
+                "Customer Identity Federation"
+            ],
+            "expected_entities": [
+                "PRJ-001",
+                "PRJ-003",
+                "PRJ-005"
+            ]
+        },
+        {
+            "id": "B039",
+            "category": "filtering",
+            "difficulty": "medium",
+            "question": "Which projects have a health score below 70?",
+            "expected_answer": [
+                "Payments Core Rewrite",
+                "Data Platform Migration",
+                "Regulatory Reporting Lake"
+            ],
+            "expected_entities": [
+                "PRJ-001",
+                "PRJ-003",
+                "PRJ-007"
+            ]
+        },
+        {
+            "id": "B040",
+            "category": "filtering",
+            "difficulty": "medium",
+            "question": "Which projects have an actual spend greater than 1 million EUR?",
+            "expected_answer": [
+                "Payments Core Rewrite",
+                "Data Platform Migration",
+                "Identity Platform"
+            ],
+            "expected_entities": [
+                "PRJ-001",
+                "PRJ-003",
+                "PRJ-004"
+            ]
+        },
+        {
+            "id": "B041",
+            "category": "aggregation",
+            "difficulty": "medium",
+            "question": "What is the total actual spend of Atlas Modernisation?",
+            "expected_answer": 4760000,
+            "unit": "EUR",
+            "calculation": "2180000 + 820000 + 1760000"
+        },
+        {
+            "id": "B042",
+            "category": "aggregation",
+            "difficulty": "medium",
+            "question": "What is the total forecast of Atlas Modernisation?",
+            "expected_answer": 7670000,
+            "unit": "EUR",
+            "calculation": "3410000 + 1370000 + 2890000"
+        },
+        {
+            "id": "B043",
+            "category": "aggregation",
+            "difficulty": "medium",
+            "question": "What is the total budget of the three Atlas Modernisation projects?",
+            "expected_answer": 7000000,
+            "unit": "EUR",
+            "calculation": "3200000 + 1400000 + 2400000"
+        },
+        {
+            "id": "B044",
+            "category": "aggregation",
+            "difficulty": "medium",
+            "question": "How much is Payments Core Rewrite forecast to exceed its budget?",
+            "expected_answer": 210000,
+            "unit": "EUR",
+            "calculation": "3410000 - 3200000"
+        },
+        {
+            "id": "B045",
+            "category": "aggregation",
+            "difficulty": "medium",
+            "question": "How much is Data Platform Migration forecast to exceed its budget?",
+            "expected_answer": 490000,
+            "unit": "EUR",
+            "calculation": "2890000 - 2400000"
+        },
+        {
+            "id": "B046",
+            "category": "aggregation",
+            "difficulty": "medium",
+            "question": "How much is Customer Portal forecast below its budget?",
+            "expected_answer": 30000,
+            "unit": "EUR",
+            "calculation": "1400000 - 1370000"
+        },
+        {
+            "id": "B047",
+            "category": "aggregation",
+            "difficulty": "hard",
+            "question": "Which Atlas Modernisation project has the largest forecast overrun?",
+            "expected_answer": "Data Platform Migration",
+            "calculation": {
+                "Payments Core Rewrite": 210000,
+                "Customer Portal": -30000,
+                "Data Platform Migration": 490000
+            }
+        },
+        {
+            "id": "B048",
+            "category": "aggregation",
+            "difficulty": "hard",
+            "question": "What is the combined financial impact of all risks in Data Platform Migration?",
+            "expected_answer": 2710000,
+            "unit": "EUR",
+            "calculation": "1100000 + 680000 + 930000"
+        },
+        {
+            "id": "B049",
+            "category": "aggregation",
+            "difficulty": "hard",
+            "question": "What is the combined financial impact of all risks in Payments Core Rewrite?",
+            "expected_answer": 1270000,
+            "unit": "EUR",
+            "calculation": "850000 + 420000"
+        },
+        {
+            "id": "B050",
+            "category": "aggregation",
+            "difficulty": "hard",
+            "question": "What is the total business impact of all incidents?",
+            "expected_answer": 1005000,
+            "unit": "EUR",
+            "calculation": "310000 + 180000 + 95000 + 420000"
+        },
+        {
+            "id": "B051",
+            "category": "aggregation",
+            "difficulty": "hard",
+            "question": "What percentage of the Atlas Modernisation project budget is currently spent?",
+            "expected_answer": 68,
+            "unit": "percent",
+            "calculation": "4760000 / 7000000 * 100"
+        },
+        {
+            "id": "B052",
+            "category": "aggregation",
+            "difficulty": "hard",
+            "question": "What percentage of Data Platform Migration's budget has already been spent?",
+            "expected_answer": 73.3333,
+            "unit": "percent",
+            "calculation": "1760000 / 2400000 * 100"
+        },
+        {
+            "id": "B053",
+            "category": "aggregation",
+            "difficulty": "hard",
+            "question": "What is the total annual contract value of all strategic vendors?",
+            "expected_answer": 6520000,
+            "unit": "EUR",
+            "calculation": "2580000 + 1730000 + 1240000 + 970000"
+        },
+        {
+            "id": "B054",
+            "category": "aggregation",
+            "difficulty": "hard",
+            "question": "Which vendor has the largest annual contract value?",
+            "expected_answer": "Northwind Systems",
+            "expected_value": 2580000,
+            "unit": "EUR"
+        },
+        {
+            "id": "B055",
+            "category": "aggregation",
+            "difficulty": "hard",
+            "question": "What is the average health score of Payments Core Rewrite, Customer Portal and Data Platform Migration?",
+            "expected_answer": 66.6667,
+            "calculation": "(67 + 91 + 42) / 3"
+        },
+        {
+            "id": "B056",
+            "category": "multi_hop",
+            "difficulty": "hard",
+            "question": "Who owns the high-severity settlement risk in Payments Core Rewrite?",
+            "expected_answer": "Marek Nowak",
+            "expected_entities": [
+                "PRJ-001",
+                "RSK-001",
+                "EMP-011"
+            ],
+            "expected_path": [
+                "PRJ-001",
+                "RSK-001",
+                "EMP-011"
+            ]
+        },
+        {
+            "id": "B057",
+            "category": "multi_hop",
+            "difficulty": "hard",
+            "question": "Which vendor is associated with the critical settlement incident?",
+            "expected_answer": "Northwind Systems",
+            "expected_entities": [
+                "INC-001",
+                "VEN-001"
+            ],
+            "expected_path": [
+                "INC-001",
+                "VEN-001"
+            ]
+        },
+        {
+            "id": "B058",
+            "category": "multi_hop",
+            "difficulty": "hard",
+            "question": "Which project is affected by the critical settlement incident?",
+            "expected_answer": "Payments Core Rewrite",
+            "expected_entities": [
+                "INC-001",
+                "PRJ-001"
+            ]
+        },
+        {
+            "id": "B059",
+            "category": "multi_hop",
+            "difficulty": "hard",
+            "question": "Who is assigned to the critical settlement incident?",
+            "expected_answer": "Oliver Grant",
+            "expected_entities": [
+                "INC-001",
+                "EMP-031"
+            ]
+        },
+        {
+            "id": "B060",
+            "category": "multi_hop",
+            "difficulty": "hard",
+            "question": "Which data products are affected by the settlement incident?",
+            "expected_answer": [
+                "Payments Transaction Dataset",
+                "Settlement Reconciliation Dataset"
+            ],
+            "expected_entities": [
+                "INC-001",
+                "DP-001",
+                "DP-003"
+            ]
+        },
+        {
+            "id": "B061",
+            "category": "multi_hop",
+            "difficulty": "hard",
+            "question": "Which project contains the application affected by INC-002?",
+            "expected_answer": "Data Platform Migration",
+            "expected_entities": [
+                "INC-002",
+                "APP-005",
+                "PRJ-003"
+            ],
+            "expected_path": [
+                "INC-002",
+                "APP-005",
+                "PRJ-003"
+            ]
+        },
+        {
+            "id": "B062",
+            "category": "multi_hop",
+            "difficulty": "hard",
+            "question": "Who owns the data product affected by the historical customer records incident?",
+            "expected_answer": "Arun Mehta",
+            "expected_entities": [
+                "INC-002",
+                "DP-004",
+                "EMP-033"
+            ],
+            "expected_path": [
+                "INC-002",
+                "DP-004",
+                "EMP-033"
+            ]
+        },
+        {
+            "id": "B063",
+            "category": "multi_hop",
+            "difficulty": "hard",
+            "question": "Which programme contains Data Platform Migration?",
+            "expected_answer": "Atlas Modernisation",
+            "expected_entities": [
+                "PRJ-003",
+                "PRG-001"
+            ]
+        },
+        {
+            "id": "B064",
+            "category": "multi_hop",
+            "difficulty": "hard",
+            "question": "Who sponsors the programme containing Data Platform Migration?",
+            "expected_answer": "Ingrid Halvorsen",
+            "expected_entities": [
+                "PRJ-003",
+                "PRG-001",
+                "EMP-001"
+            ],
+            "expected_path": [
+                "PRJ-003",
+                "PRG-001",
+                "EMP-001"
+            ]
+        },
+        {
+            "id": "B065",
+            "category": "multi_hop",
+            "difficulty": "hard",
+            "question": "Which employee manages both Payments Core Rewrite and Data Platform Migration?",
+            "expected_answer": "Marek Nowak",
+            "expected_entities": [
+                "PRJ-001",
+                "PRJ-003",
+                "EMP-011"
+            ]
+        },
+        {
+            "id": "B066",
+            "category": "multi_hop",
+            "difficulty": "hard",
+            "question": "Which vendor is shared by Payments Core Rewrite and Data Platform Migration?",
+            "expected_answer": "Northwind Systems",
+            "expected_entities": [
+                "PRJ-001",
+                "PRJ-003",
+                "VEN-001"
+            ]
+        },
+        {
+            "id": "B067",
+            "category": "multi_hop",
+            "difficulty": "hard",
+            "question": "Which project does Payments Core Rewrite depend on for historical transaction data?",
+            "expected_answer": "Data Platform Migration",
+            "expected_entities": [
+                "PRJ-001",
+                "PRJ-003",
+                "DEP-001"
+            ]
+        },
+        {
+            "id": "B068",
+            "category": "multi_hop",
+            "difficulty": "hard",
+            "question": "Which project depends on Payments Core Rewrite for reconciliation?",
+            "expected_answer": "Data Platform Migration",
+            "expected_entities": [
+                "PRJ-003",
+                "PRJ-001",
+                "DEP-004"
+            ]
+        },
+        {
+            "id": "B069",
+            "category": "multi_hop",
+            "difficulty": "hard",
+            "question": "Which project does Customer Portal depend on for customer identity?",
+            "expected_answer": "Customer Identity Federation",
+            "expected_entities": [
+                "PRJ-002",
+                "PRJ-005",
+                "DEP-003"
+            ]
+        },
+        {
+            "id": "B070",
+            "category": "multi_hop",
+            "difficulty": "very_hard",
+            "question": "Which project does Data Platform Migration depend on for identity?",
+            "expected_answer": "Identity Platform",
+            "expected_entities": [
+                "PRJ-003",
+                "PRJ-004",
+                "DEP-005"
+            ]
+        },
+        {
+            "id": "B071",
+            "category": "graph",
+            "difficulty": "very_hard",
+            "question": "Find all projects connected to Northwind Systems.",
+            "expected_answer": [
+                "Payments Core Rewrite",
+                "Data Platform Migration"
+            ],
+            "expected_entities": [
+                "VEN-001",
+                "PRJ-001",
+                "PRJ-003"
+            ]
+        },
+        {
+            "id": "B072",
+            "category": "graph",
+            "difficulty": "very_hard",
+            "question": "Find all risks reachable from Northwind Systems through project relationships.",
+            "expected_answer": [
+                "Settlement mismatch under load",
+                "Legacy reconciliation dependency",
+                "Vendor key-person dependency",
+                "Historical load gaps",
+                "Data quality reconciliation failure"
+            ],
+            "expected_path_examples": [
+                [
+                    "VEN-001",
+                    "PRJ-001",
+                    "RSK-001"
+                ],
+                [
+                    "VEN-001",
+                    "PRJ-001",
+                    "RSK-002"
+                ],
+                [
+                    "VEN-001",
+                    "PRJ-003",
+                    "RSK-003"
+                ],
+                [
+                    "VEN-001",
+                    "PRJ-003",
+                    "RSK-004"
+                ],
+                [
+                    "VEN-001",
+                    "PRJ-003",
+                    "RSK-005"
+                ]
+            ]
+        },
+        {
+            "id": "B073",
+            "category": "graph",
+            "difficulty": "very_hard",
+            "question": "Find all incidents connected to Northwind Systems.",
+            "expected_answer": [
+                "Settlement reconciliation mismatch"
+            ],
+            "expected_entities": [
+                "VEN-001",
+                "INC-001"
+            ]
+        },
+        {
+            "id": "B074",
+            "category": "graph",
+            "difficulty": "very_hard",
+            "question": "Find all projects connected to Marek Nowak.",
+            "expected_answer": [
+                "Payments Core Rewrite",
+                "Data Platform Migration"
+            ],
+            "expected_entities": [
+                "EMP-011",
+                "PRJ-001",
+                "PRJ-003"
+            ]
+        },
+        {
+            "id": "B075",
+            "category": "graph",
+            "difficulty": "very_hard",
+            "question": "Find all high-severity risks owned by Marek Nowak.",
+            "expected_answer": [
+                "Settlement mismatch under load",
+                "Vendor key-person dependency"
+            ],
+            "expected_entities": [
+                "EMP-011",
+                "RSK-001",
+                "RSK-003"
+            ]
+        },
+        {
+            "id": "B076",
+            "category": "graph",
+            "difficulty": "very_hard",
+            "question": "Which person connects Payments Core Rewrite, Data Platform Migration and Northwind Systems?",
+            "expected_answer": "Marek Nowak",
+            "expected_entities": [
+                "PRJ-001",
+                "PRJ-003",
+                "VEN-001",
+                "EMP-011"
+            ]
+        },
+        {
+            "id": "B077",
+            "category": "graph",
+            "difficulty": "very_hard",
+            "question": "What is the application dependency path from Atlas Payments Core to Enterprise Data Platform?",
+            "expected_answer": [
+                "Atlas Payments Core",
+                "Enterprise Data Platform"
+            ],
+            "expected_entities": [
+                "APP-002",
+                "APP-006",
+                "TECH-001"
+            ]
+        },
+        {
+            "id": "B078",
+            "category": "graph",
+            "difficulty": "very_hard",
+            "question": "What is the criticality of the Atlas Payments Core to Enterprise Data Platform dependency?",
+            "expected_answer": "critical",
+            "expected_entities": [
+                "TECH-001"
+            ]
+        },
+        {
+            "id": "B079",
+            "category": "graph",
+            "difficulty": "very_hard",
+            "question": "Which application does Enterprise Data Platform depend on for access control?",
+            "expected_answer": "Enterprise Identity Service",
+            "expected_entities": [
+                "APP-006",
+                "APP-004",
+                "TECH-003"
+            ]
+        },
+        {
+            "id": "B080",
+            "category": "graph",
+            "difficulty": "very_hard",
+            "question": "What is the complete project dependency chain from Customer Portal to Identity Platform?",
+            "expected_answer": [
+                "Customer Portal",
+                "Customer Identity Federation",
+                "Identity Platform"
+            ],
+            "expected_entities": [
+                "PRJ-002",
+                "PRJ-005",
+                "PRJ-004"
+            ],
+            "expected_path": [
+                "PRJ-002",
+                "PRJ-005",
+                "PRJ-004"
+            ]
+        },
+        {
+            "id": "B081",
+            "category": "lineage",
+            "difficulty": "very_hard",
+            "question": "Which applications are source systems for Payments Transaction Dataset?",
+            "expected_answer": [
+                "Legacy Payments Engine",
+                "Atlas Payments Core"
+            ],
+            "expected_entities": [
+                "DP-001",
+                "APP-001",
+                "APP-002"
+            ]
+        },
+        {
+            "id": "B082",
+            "category": "lineage",
+            "difficulty": "very_hard",
+            "question": "Which data products consume Payments Transaction Dataset?",
+            "expected_answer": [
+                "Settlement Reconciliation Dataset"
+            ],
+            "expected_entities": [
+                "DP-001",
+                "DP-003"
+            ]
+        },
+        {
+            "id": "B083",
+            "category": "lineage",
+            "difficulty": "very_hard",
+            "question": "Which data products feed Regulatory Reporting Dataset?",
+            "expected_answer": [
+                "Regulatory Transaction Dataset",
+                "Enterprise Metadata Catalogue"
+            ],
+            "expected_entities": [
+                "DP-007",
+                "DP-006",
+                "DP-008"
+            ]
+        },
+        {
+            "id": "B084",
+            "category": "lineage",
+            "difficulty": "very_hard",
+            "question": "Which data products have incomplete or partial lineage and also have quality scores below 80?",
+            "expected_answer": [
+                "Historical Customer Transactions",
+                "Regulatory Transaction Dataset",
+                "Regulatory Reporting Dataset"
+            ],
+            "expected_entities": [
+                "DP-004",
+                "DP-007",
+                "DP-008"
+            ]
+        },
+        {
+            "id": "B085",
+            "category": "lineage",
+            "difficulty": "extreme",
+            "question": "Trace the lineage from Atlas Payments Core to Settlement Reconciliation Dataset.",
+            "expected_answer": [
+                "Atlas Payments Core",
+                "Payments Transaction Dataset",
+                "Settlement Reconciliation Dataset"
+            ],
+            "expected_path": [
+                "APP-002",
+                "DP-001",
+                "DP-003"
+            ]
+        },
+        {
+            "id": "B086",
+            "category": "compliance",
+            "difficulty": "hard",
+            "question": "Which compliance framework covers third-party risk?",
+            "expected_answer": "DORA",
+            "expected_entities": [
+                "CMP-001"
+            ]
+        },
+        {
+            "id": "B087",
+            "category": "compliance",
+            "difficulty": "hard",
+            "question": "Which control is responsible for critical vendor assessment?",
+            "expected_answer": "Critical Vendor Assessment",
+            "expected_entities": [
+                "CTRL-001"
+            ]
+        },
+        {
+            "id": "B088",
+            "category": "compliance",
+            "difficulty": "hard",
+            "question": "Which frameworks apply to Data Lineage Completeness?",
+            "expected_answer": [
+                "GDPR",
+                "DORA"
+            ],
+            "expected_entities": [
+                "CTRL-002",
+                "CMP-001",
+                "CMP-002"
+            ]
+        },
+        {
+            "id": "B089",
+            "category": "compliance",
+            "difficulty": "hard",
+            "question": "Which vendors are covered by the Critical Vendor Assessment control?",
+            "expected_answer": [
+                "Northwind Systems",
+                "SecureID Global",
+                "DataForge Labs",
+                "RegData Partners"
+            ],
+            "expected_entities": [
+                "CTRL-001",
+                "VEN-001",
+                "VEN-002",
+                "VEN-006",
+                "VEN-008"
+            ]
+        },
+        {
+            "id": "B090",
+            "category": "compliance",
+            "difficulty": "very_hard",
+            "question": "Which data products are explicitly covered by the Data Lineage Completeness control?",
+            "expected_answer": [
+                "Historical Customer Transactions",
+                "Regulatory Transaction Dataset",
+                "Regulatory Reporting Dataset"
+            ],
+            "expected_entities": [
+                "CTRL-002",
+                "DP-004",
+                "DP-007",
+                "DP-008"
+            ]
+        },
+        {
+            "id": "B091",
+            "category": "executive_synthesis",
+            "difficulty": "extreme",
+            "question": "Which Atlas Modernisation project currently represents the greatest overall delivery risk?",
+            "expected_answer": "Data Platform Migration",
+            "supporting_facts": [
+                "red status",
+                "health score 42",
+                "490000 EUR forecast overrun",
+                "two delayed or at-risk milestones",
+                "three project risks",
+                "2710000 EUR aggregate risk impact",
+                "historical customer records incident"
+            ]
+        },
+        {
+            "id": "B092",
+            "category": "executive_synthesis",
+            "difficulty": "extreme",
+            "question": "Which vendor represents the greatest concentration risk in Atlas Modernisation?",
+            "expected_answer": "Northwind Systems",
+            "supporting_facts": [
+                "used by Payments Core Rewrite",
+                "used by Data Platform Migration",
+                "strategic vendor",
+                "high global risk rating",
+                "2580000 EUR annual contract value",
+                "connected to critical settlement incident"
+            ]
+        },
+        {
+            "id": "B093",
+            "category": "executive_synthesis",
+            "difficulty": "extreme",
+            "question": "Which employee represents the strongest delivery concentration across the two highest-risk Atlas projects?",
+            "expected_answer": "Marek Nowak",
+            "supporting_facts": [
+                "project manager of Payments Core Rewrite",
+                "project manager of Data Platform Migration",
+                "owner of Settlement mismatch under load",
+                "owner of Vendor key-person dependency"
+            ]
+        },
+        {
+            "id": "B094",
+            "category": "executive_synthesis",
+            "difficulty": "extreme",
+            "question": "If Northwind Systems became unavailable, which projects would be immediately exposed?",
+            "expected_answer": [
+                "Payments Core Rewrite",
+                "Data Platform Migration"
+            ],
+            "supporting_facts": [
+                "both projects reference VEN-001"
+            ]
+        },
+        {
+            "id": "B095",
+            "category": "executive_synthesis",
+            "difficulty": "extreme",
+            "question": "If Enterprise Data Platform became unavailable, which important downstream data products could be affected?",
+            "expected_answer": [
+                "Data Quality Exceptions",
+                "Enterprise Metadata Catalogue",
+                "Regulatory Transaction Dataset",
+                "Regulatory Reporting Dataset"
+            ],
+            "expected_path": [
+                "APP-006",
+                "DP-005",
+                "DP-006",
+                "DP-007",
+                "DP-008"
+            ]
+        },
+        {
+            "id": "B096",
+            "category": "negative",
+            "difficulty": "hard",
+            "question": "What is Marek Nowak's salary?",
+            "expected_answer": null,
+            "expected_behavior": "The dataset does not contain salary information."
+        },
+        {
+            "id": "B097",
+            "category": "negative",
+            "difficulty": "hard",
+            "question": "What is Northwind Systems' employee count?",
+            "expected_answer": null,
+            "expected_behavior": "The dataset does not contain employee count information for vendors."
+        },
+        {
+            "id": "B098",
+            "category": "negative",
+            "difficulty": "hard",
+            "question": "Who is the CEO of Northwind Systems?",
+            "expected_answer": null,
+            "expected_behavior": "The dataset does not identify the CEO of Northwind Systems."
+        },
+        {
+            "id": "B099",
+            "category": "negative",
+            "difficulty": "hard",
+            "question": "What is the exact root cause of the historical customer records incident?",
+            "expected_answer": null,
+            "expected_behavior": "Only the root cause category 'data_quality' is provided; the exact root cause is not specified."
+        },
+        {
+            "id": "B100",
+            "category": "negative",
+            "difficulty": "hard",
+            "question": "What is the completion percentage of Atlas Modernisation?",
+            "expected_answer": null,
+            "expected_behavior": "The dataset does not provide a programme completion percentage."
+        }
+    ]
+}

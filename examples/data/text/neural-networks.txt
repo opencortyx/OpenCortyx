@@ -1,0 +1,9 @@
+A Short Introduction to Neural Networks
+
+A neural network is a machine learning model loosely inspired by the brain. It is built from layers of simple units called neurons. Each neuron takes several inputs, multiplies them by learned weights, adds a bias, and passes the result through an activation function such as ReLU or sigmoid. Stacking many such layers lets the network approximate remarkably complex functions.
+
+Training is the process of finding good weights. The network makes a prediction, a loss function measures how wrong that prediction is, and an algorithm called backpropagation computes how each weight contributed to the error. An optimizer — commonly stochastic gradient descent or Adam — then nudges the weights in the direction that reduces the loss. Repeating this over many batches of data is what allows the model to learn.
+
+Deep networks with many layers can overfit, memorizing the training data instead of generalizing. Techniques like dropout, weight regularization, and early stopping help keep the model honest. A separate validation set is used to check that performance holds on data the network has not seen.
+
+Different architectures suit different problems. Convolutional networks excel at images, recurrent networks and transformers handle sequences and language, and simple fully connected networks work well for tabular data. Despite their variety, all of them share the same core idea: learn useful representations directly from examples.

@@ -1,0 +1,158 @@
+[tool.poetry]
+name = "opencortyx-api"
+version = "0.1.0"
+description = "OpenCortyx API: the knowledge layer for AI"
+authors = ["OpenCortyx Team"]
+homepage = "https://www.opencortyx.com"
+repository = "https://github.com/opencortyx/OpenCortyx"
+documentation = "https://github.com/opencortyx/OpenCortyx/tree/main/docs"
+packages = [{ include = "opencortyx" }]
+
+[tool.poetry.dependencies]
+python = ">=3.11,<3.14"               # the image runs 3.11; modern torchvision excludes 3.14.1, and an open range
+                                     # makes `poetry export` fail its dependency walk on torchvision
+
+# ── Web framework ──────────────────────────────────────────────────────────────
+fastapi = "0.141.1"
+uvicorn = { extras = ["standard"], version = "0.53.0" }
+starlette = ">=1.3.1"
+python-multipart = "^0.0.32"          # file uploads (/sources/upload)
+httpx = ">=0.28,<1"                  # Ollama + outbound calls (docling requires >= 0.28)
+
+# ── Stores: PostgreSQL (control plane), NebulaGraph (graph), Qdrant (vectors) ──
+sqlalchemy = { extras = ["asyncio"], version = "^2.0.30" }
+asyncpg = "^0.29.0"
+psycopg2-binary = "^2.9.9"           # SYNC psql driver for source introspection/browse (asyncpg is async-only)
+qdrant-client = "^1.9.0"
+nebula3-python = "^3.8.0"
+alembic = "^1.13.0"                  # schema migrations (forward upgrade path; see apps/api/alembic/)
+# Leiden community detection for the dashboard's cluster hierarchy (knowledge/graph_clusters.py).
+# The Rust core of graspologic, on its own: the full `graspologic` package would pin numpy < 2 and
+# pull in matplotlib, numba, gensim and umap for one function that lives here.
+graspologic-native = "^1.3.1"
+
+# ── Queue / cache ──────────────────────────────────────────────────────────────
+celery = { extras = ["redis"], version = "^5.4.0" }
+redis = { extras = ["hiredis"], version = "^5.0.4" }
+nest-asyncio = "^1.6.0"
+
+# ── LLM / embeddings (Ollama via httpx; in-process FastEmbed ONNX; OpenAI SDK) ─
+openai = "^1.30.0"
+fastembed = ">=0.4.0"                  # In-process CPU ONNX embeddings (~25ms, zero network hop)
+onnxruntime = ">=1.18.0"               # ONNX runtime engine for fastembed
+einops = ">=0.8.0"                    # Tensor ops for nomic-bert attention architecture
+
+# ── Document parsing (lazy-imported in opencortyx/parsing.py) ─────────────────
+docling = "^2.129.0"                  # Layout-aware document AST parser (MIT License)
+# Pinned as a PAIR. Docling needs both, and torchvision declares only `torch = "*"` in its lock
+# metadata, so an unpinned resolve picked torchvision 0.12 (the torch 1.11 era). The Dockerfile
+# installs these two from the CPU index first so the image never pulls the CUDA build.
+torch = "2.13.0"
+torchvision = "0.28.0"
+pymupdf4llm = "^0.0.10"              # PDF → Markdown
+pypdf = "^6.9.1"                     # PDF fallback
+langdetect = "^1.0.9"               # language detection (optional/lazy)
+openpyxl = "^3.1.3"                 # BEAM eval xlsx report
+ijson = "^3.3.0"                     # streaming JSON: GB-scale files at constant memory
+
+# ── Auth ────────────────────────────────────────────────────────────────────────
+python-jose = { extras = ["cryptography"], version = "^3.3.0" }
+
+# ── Connectors: secret stores (Azure Key Vault) + YAML recipes ─────────────────
+# Azure SDK is lazy-imported in core/secrets.py; absence degrades to inline/env secrets gracefully.
+azure-identity = "^1.17.0"
+azure-keyvault-secrets = "^4.8.0"
+pyyaml = "^6.0.1"                     # DataHub-style connector recipes
+pymysql = "^1.1.0"                    # MySQL / MariaDB connector driver (introspection/ingestion)
+pymssql = "^2.3.0"                    # SQL Server connector driver (no system ODBC driver needed)
+# ── Extra connector dialects (lightweight, no system deps). Heavy cloud drivers
+#    (snowflake-sqlalchemy, sqlalchemy-bigquery, databricks-sql, pyathena) stay opt-in — install
+#    them in the image if you use those sources. See docs/CONTEXT-OS-ROADMAP.md §27. ──
+"duckdb-engine" = "^0.17.0"           # DuckDB → Parquet / CSV / Iceberg / Delta files (table formats)
+# Avro has no pyarrow reader; fastavro streams it into Arrow so .avro joins the other
+# columnar formats on the structured path instead of falling through to the CSV sniffer.
+fastavro = "^1.9.0"
+# Avro's DEFAULT compression is deflate, but real exports are overwhelmingly snappy — fastavro reads
+# the container and then fails at the block with "snappy codec is supported but you need to install
+# one of the following". cramjam over python-snappy: no C toolchain, no libsnappy system package.
+cramjam = "^2.8.0"
+pyarrow = "*"                         # tabular row-batch reader for CSV/Parquet ingest (ingest/structured/tabular.py iter_row_batches)
+oracledb = "^4.0.0"                   # Oracle (thin mode, no Oracle client needed)
+trino = "^0.337.0"                    # Trino / Presto (lakehouse query engine)
+"clickhouse-sqlalchemy" = "^0.3.2"    # ClickHouse
+"sqlalchemy-cockroachdb" = "^2.0.4"   # CockroachDB
+# Unstructured FILES from data lakes (PDF/docx/… over S3/GCS/ADLS) — fsspec + per-cloud backends
+fsspec = "*"
+s3fs = "*"
+adlfs = "*"
+gcsfs = "*"
+
+# ── Config / logging ──────────────────────────────────────────────────────────
+pydantic = ">=2.10,<3"          # docling >= 2.1xx fails to import below 2.10 (AttributeError at class build)
+pydantic-settings = "^2.3.0"
+python-dotenv = "^1.0.1"
+structlog = "^24.2.0"
+prometheus-client = "^0.20.0"        # /metrics exposition — the only metrics dependency
+psutil = "^5.9.0"                    # process RSS/CPU gauges, so an OOM is visible BEFORE the kill
+python-dateutil = "*"
+dateparser = "^1.2"                   # temporal extraction: normalize natural-language dates (builtin:extract_temporal_pattern)
+parsedatetime = "^2.6"                # temporal extraction: parse fuzzy/relative date phrases (builtin:extract_temporal_pattern)
+
+# ── Reranker: cross-encoder (the built-in default rerank model) ────────────────
+# OPTIONAL — the bge cross-encoder (CROSS_ENCODER_MODEL) for local reranking.
+#
+# This one package pulls torch and ELEVEN nvidia-* CUDA wheels, which is ~12 GB of the image and the
+# overwhelming majority of build time. `rerank.py` already degrades to the LLM reranker when it is
+# absent, and `core/preflight.py` reports that as a warning rather than an error — so the platform
+# is designed to run without it and simply did not have a way to say so.
+#
+# Install with `poetry install --extras rerank` (or `pip install .[rerank]`) when you want the local
+# cross-encoder. Deployments pointing rerank at a model server do not need it at all.
+sentence-transformers = { version = "^3.0.0", optional = true }
+
+[tool.poetry.extras]
+rerank = ["sentence-transformers"]
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^9.1.1"
+pytest-asyncio = "^1.4.0"
+pytest-cov = "^5.0.0"
+httpx = ">=0.28,<1"
+ruff = "^0.4.4"
+mypy = "^1.10.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# Enforced in CI. `F` is the whole pyflakes set, not just F401: the narrower selection was letting
+# through a re-imported name, a dead local and a `global` on a name that is only read — each of
+# which is a small sign of an edit that did not finish.
+select = ["E9", "F"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+ignore_missing_imports = true
+# Without it, every `V2Settings()` looks like a call missing forty required arguments, because mypy
+# cannot see that pydantic-settings fills them from the environment.
+plugins = ["pydantic.mypy"]
+
+# `domain` and `core` are both type-clean and gated in CI: the definitions and the kernel are the
+# two layers everything else is built on, so a wrong type there is wrong everywhere. The layers
+# above are not gated yet — they are where the LLM-shaped `dict[str, Any]` payloads live, and
+# demanding types there would produce annotations that describe nothing.
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "integration: needs a running stack (API, workers, database with data)",
+    "regression: the recorded end-to-end regression suite (tests/regression); run with -m regression",
+]
+addopts = "-m 'not integration and not regression'"

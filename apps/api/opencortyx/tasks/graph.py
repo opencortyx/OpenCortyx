@@ -1,0 +1,137 @@
+"""Graph upkeep tasks: embedding nodes and sources. (The browse tree's index is `tasks/graph_tree.py`.)"""
+import uuid
+from opencortyx.core.worker.celery_app import celery_app
+from opencortyx.core.config import settings
+from opencortyx.core.worker.utils import async_to_sync
+from opencortyx.core.observability import get_logger
+from opencortyx.core.inference.embedding import embed_batch
+from opencortyx.core.substrate import NodeRepo
+
+log = get_logger(__name__)
+
+
+def _queue_embed_pass(workspace_id: str, res) -> None:
+    """Queue the deferred embedding pass for whatever source this ingest just wrote.
+
+    Called from every ingestion task rather than only the document one: a table at one node per row
+    and a walked JSON payload pay the same ~110 ms per-node embed cost, so all three paths defer it
+    and hand the work to the embedding queue. No-op when embedding ran inline or the result carries
+    no source id.
+    """
+    try:
+        from opencortyx.core.config import runtime as _rc
+        if not _rc.defer_embedding():
+            return
+        if not isinstance(res, dict):
+            return
+
+        def _sids(d: dict) -> list:
+            out = [str(x) for x in (d.get("source_ids") or []) if x]
+            if not out and d.get("source_id"):
+                out = [str(d["source_id"])]
+            return out
+
+        sids = _sids(res)
+        if not sids:
+            seen = set()
+            for v in res.values():
+                if isinstance(v, dict):
+                    for sid in _sids(v):
+                        if sid not in seen:
+                            seen.add(sid)
+                            sids.append(sid)
+        if not sids:
+            return
+        jobs = [v2_embed_source.delay(str(workspace_id), sid) for sid in sids]
+        res["embedding"] = "deferred"
+        res["embedding_task_id"] = jobs[0].id if len(jobs) == 1 else [j.id for j in jobs]
+    except Exception as e:                                    # noqa: BLE001 — never fail an ingest
+        log.warning("embedding.enqueue_failed", error=str(e))         # that already succeeded
+
+
+@celery_app.task(bind=True, queue="embedding", name="opencortyx.embed_source",
+                 acks_late=True, max_retries=3)
+def v2_embed_source(self, workspace_id: str, source_id: str):
+    """Embed every un-vectored node belonging to one source — its whole SUBTREE, at any depth.
+
+    ONE task per source, not per chunk: a 400-chunk document would otherwise enqueue 400 tasks whose
+    broker overhead rivals the work. Batching also lets the embedder use its own batch API where the
+    provider has one.
+
+    Batches follow the `embed_batch_size` setting, and each batch is written before the next is
+    embedded, so memory stays flat and an interrupted task resumes without redoing finished batches.
+
+    The whole subtree, at any depth: a walked JSON payload is nested, so only its root record points
+    at the Source and every other record points at its walk parent.
+
+    Idempotent: only nodes without current embeddings are embedded.
+    """
+    async def _run():
+        import gc
+        from opencortyx.core.config import runtime as _rc
+        from opencortyx.core.inference.embedding import active_embedding_spec, embed_batch
+
+        repo = NodeRepo()
+        oid, sid = uuid.UUID(workspace_id), uuid.UUID(source_id)
+        root = await repo.get(oid, sid)
+        subtree = ([root] if root else []) + await repo.descendants(oid, [sid])
+        subtree = [n for n in subtree if str((n.properties or {}).get("__structural") or "") != "true"]
+        pending = await repo.unembedded(oid, subtree)
+        if not pending:
+            return {"status": "ok", "source_id": source_id, "embedded": 0}
+        await repo.index_embeddings(oid, pending, embed_batch, batch_size=_rc.embed_batch_size())
+        spec = await active_embedding_spec()
+        if str((spec or {}).get("provider") or settings.EMBED_PROVIDER or "fastembed").lower() in ("fastembed", "onnx"):
+            gc.collect()
+        return {"status": "ok", "source_id": source_id, "embedded": len(pending)}
+
+    try:
+        return async_to_sync(_run)()
+    except Exception as exc:
+        raise self.retry(exc=exc, countdown=30, max_retries=3)
+
+
+@celery_app.task(bind=True, queue="embedding",
+                 name="opencortyx.index_node_attrs", max_retries=3)
+def v2_index_node_attrs(self, workspace_id: str, since_iso: str = None, limit: int = 20000,
+                        batch: int = 16, backfill: bool = False):
+    """Embed the attributes of nodes that have none yet.
+
+    Scoped to nodes created since `since_iso` (the run that dispatched it), so one upload never queues
+    the whole org's backlog; `backfill=True` covers every node. At most `limit` nodes per pass, and a
+    partial pass reports what remains."""
+    async def _run():
+        from datetime import datetime
+        repo, oid = NodeRepo(), uuid.UUID(workspace_id)
+        since = datetime.fromisoformat(since_iso) if since_iso and not backfill else None
+        pending = await repo.unembedded(oid, await repo.find(oid, created_after=since))
+        counts = await repo.index_embeddings(oid, pending[:limit], embed_batch, batch_size=batch)
+        rest = max(0, len(pending) - limit)
+        if rest:
+            log.warning("index.attributes_incomplete", workspace_id=str(workspace_id), unindexed=rest)
+        return {"status": "ok" if not rest else "partial", "nodes": min(len(pending), limit),
+                "attrs": len(counts), "remaining": rest,
+                "scope": "backfill" if backfill else (since_iso or "org")}
+
+    try:
+        return async_to_sync(_run)()
+    except Exception as exc:
+        raise self.retry(exc=exc, countdown=30, max_retries=3)
+
+
+@celery_app.task(bind=True, queue="embedding", name="opencortyx.embed_node", max_retries=3)
+def v2_embed_node(self, workspace_id: str, node_id: str):
+    """Embed one node in the background, so authoring and memory writes return before the embedding
+    model runs. Idempotent: re-running recomputes the vectors."""
+    async def _run():
+        repo, oid = NodeRepo(), uuid.UUID(workspace_id)
+        node = await repo.get(oid, uuid.UUID(node_id))
+        if node is None:
+            return {"status": "gone"}
+        await repo.index_embeddings(oid, [node], embed_batch)
+        return {"status": "ok"}
+
+    try:
+        return async_to_sync(_run)()
+    except Exception as exc:
+        raise self.retry(exc=exc, countdown=10, max_retries=3)

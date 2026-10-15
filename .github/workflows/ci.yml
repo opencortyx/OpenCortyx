@@ -1,0 +1,157 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff==0.16.7
+      - name: Ruff (syntax errors + the full pyflakes set)
+        # --select on the command line, not from pyproject: apps/mcp and scripts/ sit outside
+        # apps/api, so they would otherwise resolve ruff's defaults instead of ours.
+        run: ruff check --select E9,F apps/api/opencortyx apps/api/tests apps/api/alembic apps/mcp scripts
+      - name: Types (domain + kernel)
+        run: |
+          pip install mypy==1.10.0 pydantic==2.9.2
+          mypy --ignore-missing-imports apps/api/opencortyx/domain apps/api/opencortyx/core
+      - name: Versions match VERSION
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          grep -q "^version = \"$version\"" apps/api/pyproject.toml
+          grep -q "\"version\": \"$version\"" apps/web/package.json
+          grep -q "__version__ = \"$version\"" apps/api/opencortyx/__init__.py
+
+  api:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: opencortyx
+          POSTGRES_PASSWORD: opencortyx
+          POSTGRES_DB: opencortyx
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U opencortyx"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+    env:
+      DATABASE_URL: postgresql+asyncpg://opencortyx:opencortyx@localhost:5432/opencortyx
+      REDIS_URL: redis://localhost:6379/0
+      CELERY_BROKER_URL: redis://localhost:6379/1
+      CELERY_RESULT_BACKEND: redis://localhost:6379/2
+      JWT_SECRET: ci-only-secret
+      LLM_PROVIDER: mock
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          pip install poetry==1.8.2
+          poetry config virtualenvs.create false
+          poetry install --no-interaction --no-root
+      - name: Bootstrap schema
+        run: |
+          python -c "import asyncio, opencortyx.bootstrap as b; asyncio.run(b.init_v2_schema())"
+          alembic upgrade head
+      - name: Unit tests
+        run: python -m pytest -q -p no:cacheprovider
+      - name: Dependency audit
+        run: |
+          poetry export --with dev --without-hashes -f requirements.txt -o /tmp/requirements-audit.txt
+          pip install pip-audit
+          # PYSEC-2026-1325 (ecdsa): no fix released; not used (HS256 tokens). See SECURITY.md.
+          pip-audit -r /tmp/requirements-audit.txt --no-deps --disable-pip --ignore-vuln PYSEC-2026-1325
+
+  mcp:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/mcp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.lock
+      - name: Dependency audit
+        run: pip install pip-audit && pip-audit -r requirements.lock
+      - run: python -m compileall -q .
+      - run: python -c "import server"
+        env:
+          MCP_TRANSPORT: stdio
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci
+      - name: Dependency audit
+        run: npm audit --omit=dev --audit-level=critical
+      - run: npx tsc --noEmit
+      - run: npm test
+      - run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+
+  stack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate configuration
+        run: bin/opencortyx init
+      - name: Validate compose files
+        run: |
+          docker compose -f compose.yaml config --quiet
+          docker compose -f compose.yaml -f compose.dev.yaml config --quiet
+      - name: Memory guards
+        run: |
+          pip install pytest pyyaml httpx
+          python -m pytest -q -p no:cacheprovider apps/api/tests/test_memory_guards.py
+      - name: Shell scripts
+        run: shellcheck -S warning bin/opencortyx install.sh
+      - name: PowerShell scripts
+        shell: pwsh
+        run: |
+          foreach ($f in @("bin/opencortyx.ps1", "install.ps1")) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$null, [ref]$errors) | Out-Null
+            if ($errors.Count) { $errors; exit 1 }
+          }
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

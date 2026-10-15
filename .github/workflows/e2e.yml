@@ -1,0 +1,78 @@
+name: E2E
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dashboard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure the stack
+        run: |
+          bin/opencortyx init
+          password="$(openssl rand -hex 16)"
+          echo "::add-mask::$password"
+          {
+            echo "OPENCORTYX_ADMIN_EMAIL=e2e@example.com"
+            echo "OPENCORTYX_ADMIN_PASSWORD=$password"
+          } >> "$GITHUB_ENV"
+          if [ -n "$OPENAI_API_KEY" ]; then
+            echo "E2E_GREP_INVERT=" >> "$GITHUB_ENV"
+          else
+            echo "No OPENAI_API_KEY secret: skipping tests that need a model"
+            echo "E2E_GREP_INVERT=@llm|@ingest" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build and start
+        run: bin/opencortyx up --build
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install Playwright
+        working-directory: apps/web
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run end-to-end tests
+        working-directory: apps/web
+        run: |
+          if [ -n "$E2E_GREP_INVERT" ]; then
+            npm run e2e -- --grep-invert "$E2E_GREP_INVERT"
+          else
+            npm run e2e
+          fi
+
+      - name: Collect stack logs
+        if: failure()
+        run: docker compose -f compose.yaml logs --no-color > stack.log 2>&1 || true
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: e2e-report
+          path: |
+            apps/web/e2e/.report
+            apps/web/e2e/.results
+            stack.log
+          retention-days: 7

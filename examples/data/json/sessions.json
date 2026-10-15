@@ -1,0 +1,21 @@
+[
+  {
+    "session_id": "S-1",
+    "user": "alex",
+    "date": "2026-02-10",
+    "turns": [
+      { "role": "user", "content": "My dog Max needs a vet appointment next week." },
+      { "role": "assistant", "content": "I can help schedule Max a vet visit. Which day works?" },
+      { "role": "user", "content": "Thursday morning is best, near the Oak Street clinic." }
+    ]
+  },
+  {
+    "session_id": "S-2",
+    "user": "sam",
+    "date": "2026-02-12",
+    "turns": [
+      { "role": "user", "content": "Remind me that the launch moved to March, not April." },
+      { "role": "assistant", "content": "Noted — launch is now March. I'll use that going forward." }
+    ]
+  }
+]

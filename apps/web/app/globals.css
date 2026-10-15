@@ -1,0 +1,110 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* ── OpenCortyx brand tokens ───────────────────────────────────────── */
+    /* Warm-paper neutrals + evergreen primary + honey accent.            */
+    /* All UI colors flow from these, so the whole app re-skins here.     */
+
+    --background: 48 30% 98%;        /* warm paper #FAFAF6 */
+    --foreground: 158 28% 12%;       /* deep forest ink */
+
+    --card: 0 0% 100%;               /* pure white surfaces */
+    --card-foreground: 158 28% 12%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 158 28% 12%;
+
+    /* Primary: OpenCortyx evergreen */
+    --primary: 160 60% 30%;          /* #1f8663 */
+    --primary-foreground: 48 30% 98%;
+
+    /* Secondary: pale sage */
+    --secondary: 150 22% 94%;
+    --secondary-foreground: 158 40% 20%;
+
+    /* Muted: warm stone */
+    --muted: 45 22% 94%;
+    --muted-foreground: 150 9% 40%;
+
+    /* Accent: soft honey wash (used for hover/selected backgrounds) */
+    --accent: 40 60% 93%;
+    --accent-foreground: 30 55% 26%;
+
+    --destructive: 4 72% 52%;
+    --destructive-foreground: 48 30% 98%;
+
+    --border: 45 18% 88%;
+    --input: 45 18% 88%;
+    --ring: 160 60% 30%;
+    --radius: 0.625rem;
+
+    /* Extended brand palette (used by the logo, gradients, highlights) */
+    --brand-forest-deep: 162 64% 17%;   /* #0f4a37 */
+    --brand-amber: 36 78% 52%;           /* #e0982f honey */
+    --brand-amber-foreground: 30 60% 18%;
+
+    /* Editorial display face — system serif stack, no web download */
+    --font-display: "Iowan Old Style", "Palatino Linotype", Palatino,
+      "Book Antiqua", "Hoefler Text", Georgia, Cambria, serif;
+  }
+
+  /* Strict Light Mode — dark mode intentionally not enabled */
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  /* Page titles get the editorial serif for brand character */
+  h1 {
+    letter-spacing: -0.02em;
+  }
+}
+
+@layer utilities {
+  .font-display {
+    font-family: var(--font-display);
+  }
+  /* Signature OpenCortyx gradient (forest → evergreen) for brand surfaces */
+  .bg-brand-gradient {
+    background-image: linear-gradient(
+      135deg,
+      hsl(var(--primary)) 0%,
+      hsl(var(--brand-forest-deep)) 100%
+    );
+  }
+  .text-brand-amber {
+    color: hsl(var(--brand-amber));
+  }
+}
+
+/* Scrollbar styling (re-tinted to brand neutrals) */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-background;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-secondary border-2 border-background rounded-full hover:bg-muted-foreground/30 transition-colors;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  @apply bg-secondary opacity-50 rounded-full;
+}

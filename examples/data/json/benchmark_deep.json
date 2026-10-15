@@ -1,0 +1,955 @@
+{
+    "dataset": "Atlas Modernisation",
+    "evaluation_suite": {
+        "description": "Comprehensive question-answer benchmark for testing unstructured JSON retrieval, nested traversal, multi-hop reasoning, aggregation, entity resolution, negative reasoning, graph traversal, and executive synthesis.",
+        "levels": [
+            {
+                "level": 1,
+                "name": "Simple Retrieval",
+                "tests": [
+                    {
+                        "id": "Q001",
+                        "question": "What is the name of the programme?",
+                        "answer": "Atlas Modernisation"
+                    },
+                    {
+                        "id": "Q002",
+                        "question": "What is the programme ID?",
+                        "answer": "PRG-7"
+                    },
+                    {
+                        "id": "Q003",
+                        "question": "What is the total programme budget?",
+                        "answer": "€4,200,000"
+                    },
+                    {
+                        "id": "Q004",
+                        "question": "Who is the programme sponsor?",
+                        "answer": "Ingrid Halvorsen"
+                    },
+                    {
+                        "id": "Q005",
+                        "question": "What is Ingrid Halvorsen's role?",
+                        "answer": "Chief Operating Officer"
+                    },
+                    {
+                        "id": "Q006",
+                        "question": "Where is Ingrid Halvorsen based?",
+                        "answer": "Oslo"
+                    },
+                    {
+                        "id": "Q007",
+                        "question": "How many projects are part of Atlas Modernisation?",
+                        "answer": 3
+                    },
+                    {
+                        "id": "Q008",
+                        "question": "What are the three projects?",
+                        "answer": [
+                            "Payments Core Rewrite",
+                            "Customer Portal",
+                            "Data Platform Migration"
+                        ]
+                    },
+                    {
+                        "id": "Q009",
+                        "question": "What is the status of Customer Portal?",
+                        "answer": "green"
+                    },
+                    {
+                        "id": "Q010",
+                        "question": "Who leads Payments Core Rewrite?",
+                        "answer": "Marek Nowak"
+                    },
+                    {
+                        "id": "Q011",
+                        "question": "What is the vendor for Payments Core Rewrite?",
+                        "answer": "Northwind Systems"
+                    },
+                    {
+                        "id": "Q012",
+                        "question": "Which country is Northwind Systems based in?",
+                        "answer": "Ireland"
+                    },
+                    {
+                        "id": "Q013",
+                        "question": "What is the discipline of the lead of Payments Core Rewrite?",
+                        "answer": "backend"
+                    },
+                    {
+                        "id": "Q014",
+                        "question": "What is the spend of Data Platform Migration?",
+                        "answer": "€1,290,000"
+                    },
+                    {
+                        "id": "Q015",
+                        "question": "Who is the lead of Customer Portal?",
+                        "answer": "Sofia Marchetti"
+                    },
+                    {
+                        "id": "Q016",
+                        "question": "What is Sofia Marchetti's discipline?",
+                        "answer": "frontend"
+                    },
+                    {
+                        "id": "Q017",
+                        "question": "What milestones belong to Payments Core Rewrite?",
+                        "answer": [
+                            {
+                                "name": "Ledger cutover",
+                                "status": "done"
+                            },
+                            {
+                                "name": "Settlement parity",
+                                "status": "at_risk"
+                            }
+                        ]
+                    },
+                    {
+                        "id": "Q018",
+                        "question": "What is the status of Settlement parity?",
+                        "answer": "at_risk"
+                    },
+                    {
+                        "id": "Q019",
+                        "question": "What is the status of Ledger cutover?",
+                        "answer": "done"
+                    },
+                    {
+                        "id": "Q020",
+                        "question": "What risks exist in Data Platform Migration?",
+                        "answer": [
+                            {
+                                "risk": "Vendor key-person dependency",
+                                "severity": "high"
+                            },
+                            {
+                                "risk": "Historical load gaps",
+                                "severity": "medium"
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "level": 2,
+                "name": "Relationship Reasoning",
+                "tests": [
+                    {
+                        "id": "Q021",
+                        "question": "Which projects use Northwind Systems as their vendor?",
+                        "answer": [
+                            "Payments Core Rewrite",
+                            "Data Platform Migration"
+                        ]
+                    },
+                    {
+                        "id": "Q022",
+                        "question": "Which projects are led by Marek Nowak?",
+                        "answer": [
+                            "Payments Core Rewrite",
+                            "Data Platform Migration"
+                        ]
+                    },
+                    {
+                        "id": "Q023",
+                        "question": "Which project is led by Sofia Marchetti?",
+                        "answer": "Customer Portal"
+                    },
+                    {
+                        "id": "Q024",
+                        "question": "Which projects have risks?",
+                        "answer": [
+                            "Payments Core Rewrite",
+                            "Data Platform Migration"
+                        ]
+                    },
+                    {
+                        "id": "Q025",
+                        "question": "Which project has no risks?",
+                        "answer": "Customer Portal"
+                    },
+                    {
+                        "id": "Q026",
+                        "question": "Which projects have no milestones?",
+                        "answer": [
+                            "Customer Portal",
+                            "Data Platform Migration"
+                        ]
+                    },
+                    {
+                        "id": "Q027",
+                        "question": "Who owns the high-severity risk associated with Payments Core Rewrite?",
+                        "answer": "Marek Nowak"
+                    },
+                    {
+                        "id": "Q028",
+                        "question": "Who owns the high-severity risk in Data Platform Migration?",
+                        "answer": "Marek Nowak"
+                    },
+                    {
+                        "id": "Q029",
+                        "question": "Which vendor is associated with the project containing the risk 'Settlement mismatch under load'?",
+                        "answer": "Northwind Systems"
+                    },
+                    {
+                        "id": "Q030",
+                        "question": "Who is responsible for the 'Historical load gaps' risk?",
+                        "answer": "Sofia Marchetti"
+                    },
+                    {
+                        "id": "Q031",
+                        "question": "Which project has a high-severity risk owned by the same person who leads Payments Core Rewrite?",
+                        "answer": "Data Platform Migration"
+                    },
+                    {
+                        "id": "Q032",
+                        "question": "Which vendor is connected to Marek Nowak through multiple projects?",
+                        "answer": "Northwind Systems"
+                    },
+                    {
+                        "id": "Q033",
+                        "question": "Which employee is connected to both a frontend project and a medium-severity risk?",
+                        "answer": "Sofia Marchetti"
+                    }
+                ]
+            },
+            {
+                "level": 3,
+                "name": "Cross-Project Analysis",
+                "tests": [
+                    {
+                        "id": "Q034",
+                        "question": "Which projects share the same lead?",
+                        "answer": [
+                            "Payments Core Rewrite",
+                            "Data Platform Migration"
+                        ],
+                        "shared_entity": "Marek Nowak"
+                    },
+                    {
+                        "id": "Q035",
+                        "question": "Which projects share the same vendor?",
+                        "answer": [
+                            "Payments Core Rewrite",
+                            "Data Platform Migration"
+                        ],
+                        "shared_entity": "Northwind Systems"
+                    },
+                    {
+                        "id": "Q036",
+                        "question": "Who is the employee appearing as both a project lead and a risk owner across multiple projects?",
+                        "answer": "Marek Nowak"
+                    },
+                    {
+                        "id": "Q037",
+                        "question": "Which project has the highest spend?",
+                        "answer": {
+                            "project": "Payments Core Rewrite",
+                            "spend_eur": 1850000
+                        }
+                    },
+                    {
+                        "id": "Q038",
+                        "question": "Which project has the lowest spend?",
+                        "answer": {
+                            "project": "Customer Portal",
+                            "spend_eur": 640000
+                        }
+                    },
+                    {
+                        "id": "Q039",
+                        "question": "Which project has the most risks?",
+                        "answer": {
+                            "project": "Data Platform Migration",
+                            "risk_count": 2
+                        }
+                    },
+                    {
+                        "id": "Q040",
+                        "question": "Which project has the most milestones?",
+                        "answer": {
+                            "project": "Payments Core Rewrite",
+                            "milestone_count": 2
+                        }
+                    }
+                ]
+            },
+            {
+                "level": 4,
+                "name": "Aggregation and Numerical Reasoning",
+                "tests": [
+                    {
+                        "id": "Q041",
+                        "question": "What is the total spend across all three projects?",
+                        "answer_eur": 3780000
+                    },
+                    {
+                        "id": "Q042",
+                        "question": "How much of the programme budget has been allocated as project spend?",
+                        "answer": {
+                            "amount_eur": 3780000,
+                            "percentage": 90.0
+                        }
+                    },
+                    {
+                        "id": "Q043",
+                        "question": "How much of the programme budget remains unallocated based on listed project spend?",
+                        "answer_eur": 420000
+                    },
+                    {
+                        "id": "Q044",
+                        "question": "What percentage of total project spend belongs to Payments Core Rewrite?",
+                        "answer_percentage": 48.94
+                    },
+                    {
+                        "id": "Q045",
+                        "question": "What percentage of the total programme budget is spent on Payments Core Rewrite?",
+                        "answer_percentage": 44.05
+                    },
+                    {
+                        "id": "Q046",
+                        "question": "What is the combined spend of the two projects using Northwind Systems?",
+                        "answer_eur": 3140000
+                    },
+                    {
+                        "id": "Q047",
+                        "question": "What percentage of total project spend is associated with Northwind Systems?",
+                        "answer_percentage": 83.07
+                    },
+                    {
+                        "id": "Q048",
+                        "question": "Which projects are not green?",
+                        "answer": [
+                            "Payments Core Rewrite",
+                            "Data Platform Migration"
+                        ]
+                    },
+                    {
+                        "id": "Q049",
+                        "question": "Which projects have high-severity risks?",
+                        "answer": [
+                            "Payments Core Rewrite",
+                            "Data Platform Migration"
+                        ]
+                    },
+                    {
+                        "id": "Q050",
+                        "question": "Which projects have no high-severity risks?",
+                        "answer": [
+                            "Customer Portal"
+                        ]
+                    },
+                    {
+                        "id": "Q051",
+                        "question": "Which projects are associated with Marek Nowak and have a non-green status?",
+                        "answer": [
+                            "Payments Core Rewrite",
+                            "Data Platform Migration"
+                        ]
+                    },
+                    {
+                        "id": "Q052",
+                        "question": "Which projects use an Irish vendor?",
+                        "answer": [
+                            "Payments Core Rewrite",
+                            "Data Platform Migration"
+                        ]
+                    },
+                    {
+                        "id": "Q053",
+                        "question": "Which project has a frontend lead but no risks or milestones?",
+                        "answer": "Customer Portal"
+                    }
+                ]
+            },
+            {
+                "level": 5,
+                "name": "Complex Multi-Hop",
+                "tests": [
+                    {
+                        "id": "Q054",
+                        "question": "Find all projects where the project lead is also a risk owner, and return the project, lead, risk, and severity.",
+                        "answer": [
+                            {
+                                "project": "Payments Core Rewrite",
+                                "lead": "Marek Nowak",
+                                "risk": "Settlement mismatch under load",
+                                "severity": "high"
+                            },
+                            {
+                                "project": "Data Platform Migration",
+                                "lead": "Marek Nowak",
+                                "risk": "Vendor key-person dependency",
+                                "severity": "high"
+                            },
+                            {
+                                "project": "Data Platform Migration",
+                                "lead": "Marek Nowak",
+                                "risk": "Historical load gaps",
+                                "severity": "medium"
+                            }
+                        ]
+                    },
+                    {
+                        "id": "Q055",
+                        "question": "Which employee is involved in the largest number of project-level responsibilities?",
+                        "answer": {
+                            "employee": "Marek Nowak",
+                            "responsibilities": [
+                                "Lead of Payments Core Rewrite",
+                                "Owner of Settlement mismatch under load",
+                                "Lead of Data Platform Migration",
+                                "Owner of Vendor key-person dependency"
+                            ]
+                        }
+                    },
+                    {
+                        "id": "Q056",
+                        "question": "Which vendor is connected to the greatest amount of project spend?",
+                        "answer": {
+                            "vendor": "Northwind Systems",
+                            "projects": [
+                                "Payments Core Rewrite",
+                                "Data Platform Migration"
+                            ],
+                            "combined_spend_eur": 3140000
+                        }
+                    },
+                    {
+                        "id": "Q057",
+                        "question": "Which project represents the greatest concentration of programme risk based on its status and risk severity?",
+                        "answer": {
+                            "project": "Data Platform Migration",
+                            "reasons": [
+                                "red status",
+                                "high-severity risk",
+                                "medium-severity risk"
+                            ]
+                        }
+                    },
+                    {
+                        "id": "Q058",
+                        "question": "Which project is simultaneously associated with the highest spend, an amber status, an at-risk milestone, and a high-severity risk?",
+                        "answer": "Payments Core Rewrite"
+                    },
+                    {
+                        "id": "Q059",
+                        "question": "Find the chain connecting Ingrid Halvorsen to the Settlement mismatch under load risk.",
+                        "answer": [
+                            "Ingrid Halvorsen",
+                            "Atlas Modernisation",
+                            "Payments Core Rewrite",
+                            "Settlement mismatch under load",
+                            "Marek Nowak"
+                        ]
+                    },
+                    {
+                        "id": "Q060",
+                        "question": "Find the complete relationship path from the programme sponsor to the vendor responsible for the project containing the highest-severity settlement risk.",
+                        "answer": [
+                            "Ingrid Halvorsen",
+                            "Atlas Modernisation",
+                            "Payments Core Rewrite",
+                            "Northwind Systems"
+                        ]
+                    },
+                    {
+                        "id": "Q061",
+                        "question": "Which is more expensive: Payments Core Rewrite or Data Platform Migration, and by how much?",
+                        "answer": {
+                            "project": "Payments Core Rewrite",
+                            "difference_eur": 560000
+                        }
+                    },
+                    {
+                        "id": "Q062",
+                        "question": "How much more does Payments Core Rewrite spend than Customer Portal?",
+                        "answer_eur": 1210000
+                    },
+                    {
+                        "id": "Q063",
+                        "question": "Is the spend of the two Northwind projects greater than the total spend of the other project?",
+                        "answer": {
+                            "yes": true,
+                            "difference_eur": 2500000
+                        }
+                    },
+                    {
+                        "id": "Q064",
+                        "question": "Which project has the worst status among the three projects?",
+                        "answer": "Data Platform Migration"
+                    },
+                    {
+                        "id": "Q065",
+                        "question": "Which project has the strongest status but no risk or milestone information?",
+                        "answer": "Customer Portal"
+                    }
+                ]
+            },
+            {
+                "level": 6,
+                "name": "Negative and Hallucination Tests",
+                "tests": [
+                    {
+                        "id": "Q066",
+                        "question": "Does Customer Portal have any risks?",
+                        "answer": "No"
+                    },
+                    {
+                        "id": "Q067",
+                        "question": "Does Customer Portal have any milestones?",
+                        "answer": "No"
+                    },
+                    {
+                        "id": "Q068",
+                        "question": "Does Data Platform Migration have any milestones?",
+                        "answer": "No"
+                    },
+                    {
+                        "id": "Q069",
+                        "question": "Does Payments Core Rewrite have any high-severity risks?",
+                        "answer": "Yes"
+                    },
+                    {
+                        "id": "Q070",
+                        "question": "Does Customer Portal use Northwind Systems?",
+                        "answer": "No"
+                    },
+                    {
+                        "id": "Q071",
+                        "question": "Who is EMP-3?",
+                        "answer": "Marek Nowak"
+                    },
+                    {
+                        "id": "Q072",
+                        "question": "Which projects is EMP-3 associated with?",
+                        "answer": [
+                            "Payments Core Rewrite",
+                            "Data Platform Migration"
+                        ]
+                    },
+                    {
+                        "id": "Q073",
+                        "question": "Who is EMP-9?",
+                        "answer": "Sofia Marchetti"
+                    },
+                    {
+                        "id": "Q074",
+                        "question": "Which risk owners are also project leads?",
+                        "answer": [
+                            "Marek Nowak",
+                            "Sofia Marchetti"
+                        ]
+                    },
+                    {
+                        "id": "Q075",
+                        "question": "Who is the backend lead?",
+                        "answer": "Marek Nowak"
+                    },
+                    {
+                        "id": "Q076",
+                        "question": "Who is the frontend lead?",
+                        "answer": "Sofia Marchetti"
+                    },
+                    {
+                        "id": "Q077",
+                        "question": "Which company is the Ireland-based supplier?",
+                        "answer": "Northwind Systems"
+                    },
+                    {
+                        "id": "Q078",
+                        "question": "Which vendor is associated with Portugal?",
+                        "answer": "Helios Digital"
+                    },
+                    {
+                        "id": "Q079",
+                        "question": "Which company supplies both Payments Core Rewrite and Data Platform Migration?",
+                        "answer": "Northwind Systems"
+                    },
+                    {
+                        "id": "Q080",
+                        "question": "What is Marek Nowak's salary?",
+                        "answer": null,
+                        "expected_behavior": "State that the information is not available in the provided data."
+                    },
+                    {
+                        "id": "Q081",
+                        "question": "How long has Ingrid Halvorsen been COO?",
+                        "answer": null,
+                        "expected_behavior": "State that the information is not specified."
+                    },
+                    {
+                        "id": "Q082",
+                        "question": "What is the deadline for Settlement parity?",
+                        "answer": null,
+                        "expected_behavior": "State that the deadline is not specified."
+                    },
+                    {
+                        "id": "Q083",
+                        "question": "How many employees work for Northwind Systems?",
+                        "answer": null,
+                        "expected_behavior": "State that the information is not available."
+                    },
+                    {
+                        "id": "Q084",
+                        "question": "Who is the CEO of Northwind Systems?",
+                        "answer": null,
+                        "expected_behavior": "State that the information is not specified."
+                    },
+                    {
+                        "id": "Q085",
+                        "question": "What caused the historical load gaps?",
+                        "answer": null,
+                        "expected_behavior": "State that the cause is not specified."
+                    },
+                    {
+                        "id": "Q086",
+                        "question": "When will Data Platform Migration be completed?",
+                        "answer": null,
+                        "expected_behavior": "State that the completion date is not specified."
+                    },
+                    {
+                        "id": "Q087",
+                        "question": "What is the SLA for Customer Portal?",
+                        "answer": null,
+                        "expected_behavior": "State that the SLA is not specified."
+                    },
+                    {
+                        "id": "Q088",
+                        "question": "What percentage of the programme is complete?",
+                        "answer": null,
+                        "expected_behavior": "State that completion percentage cannot be determined from the provided data."
+                    }
+                ]
+            },
+            {
+                "level": 7,
+                "name": "Precision and Contradiction Tests",
+                "tests": [
+                    {
+                        "id": "Q089",
+                        "question": "Is Payments Core Rewrite red?",
+                        "answer": "No. It is amber."
+                    },
+                    {
+                        "id": "Q090",
+                        "question": "Is Customer Portal amber?",
+                        "answer": "No. It is green."
+                    },
+                    {
+                        "id": "Q091",
+                        "question": "Does Payments Core Rewrite have an at-risk milestone?",
+                        "answer": "Yes. Settlement parity."
+                    },
+                    {
+                        "id": "Q092",
+                        "question": "Does Data Platform Migration have any milestones?",
+                        "answer": "No."
+                    },
+                    {
+                        "id": "Q093",
+                        "question": "Does Sofia Marchetti lead Data Platform Migration?",
+                        "answer": "No. Marek Nowak leads it."
+                    },
+                    {
+                        "id": "Q094",
+                        "question": "Does Helios Digital provide Payments Core Rewrite?",
+                        "answer": "No. Payments Core Rewrite uses Northwind Systems."
+                    },
+                    {
+                        "id": "Q095",
+                        "question": "Which project has a vendor in Ireland, an amber status, an at-risk milestone, and a backend lead?",
+                        "answer": "Payments Core Rewrite"
+                    },
+                    {
+                        "id": "Q096",
+                        "question": "Which project has a vendor in Ireland, a red status, and two risks?",
+                        "answer": "Data Platform Migration"
+                    },
+                    {
+                        "id": "Q097",
+                        "question": "Which project has a Portuguese vendor and a frontend lead?",
+                        "answer": "Customer Portal"
+                    },
+                    {
+                        "id": "Q098",
+                        "question": "Which project satisfies all of these conditions: status is not green, vendor is in Ireland, lead is Marek Nowak, and contains a high-severity risk?",
+                        "answer": [
+                            "Payments Core Rewrite",
+                            "Data Platform Migration"
+                        ]
+                    }
+                ]
+            },
+            {
+                "level": 8,
+                "name": "Advanced Reasoning and Executive Synthesis",
+                "tests": [
+                    {
+                        "id": "Q099",
+                        "question": "Why would you classify Data Platform Migration as a higher-risk project than Customer Portal?",
+                        "answer": "Data Platform Migration is red and has two recorded risks, including one high-severity risk. Customer Portal is green and has no recorded risks."
+                    },
+                    {
+                        "id": "Q100",
+                        "question": "Why is Payments Core Rewrite potentially concerning despite not being red?",
+                        "answer": "It is amber, its Settlement parity milestone is at risk, and it has a high-severity Settlement mismatch under load risk."
+                    },
+                    {
+                        "id": "Q101",
+                        "question": "Why might Northwind Systems be considered strategically important to the programme?",
+                        "answer": "Northwind Systems supports two projects with combined spend of €3.14M, approximately 83.1% of total project spend, and both projects have significant risks."
+                    },
+                    {
+                        "id": "Q102",
+                        "question": "What evidence suggests that the programme's risk is concentrated rather than evenly distributed?",
+                        "answer": "Two of three projects contain significant risks, both use Northwind Systems, both are connected to Marek Nowak, and together they account for approximately 83.1% of project spend."
+                    },
+                    {
+                        "id": "Q103",
+                        "question": "What percentage of the programme budget is associated with projects that have high-severity risks?",
+                        "answer_percentage": 74.76
+                    },
+                    {
+                        "id": "Q104",
+                        "question": "What percentage of project spend is associated with projects that have high-severity risks?",
+                        "answer_percentage": 83.07
+                    },
+                    {
+                        "id": "Q105",
+                        "question": "What percentage of project spend is associated with projects led by Marek Nowak?",
+                        "answer_percentage": 83.07
+                    },
+                    {
+                        "id": "Q106",
+                        "question": "How much larger is the spend associated with Marek Nowak's projects compared with Sofia Marchetti's project?",
+                        "answer_eur": 2500000
+                    },
+                    {
+                        "id": "Q107",
+                        "question": "Starting from the programme sponsor, identify every project that is connected to a high-severity risk and return the complete chain.",
+                        "answer": [
+                            [
+                                "Ingrid Halvorsen",
+                                "Atlas Modernisation",
+                                "Payments Core Rewrite",
+                                "Settlement mismatch under load",
+                                "Marek Nowak"
+                            ],
+                            [
+                                "Ingrid Halvorsen",
+                                "Atlas Modernisation",
+                                "Data Platform Migration",
+                                "Vendor key-person dependency",
+                                "Marek Nowak"
+                            ]
+                        ]
+                    },
+                    {
+                        "id": "Q108",
+                        "question": "Find the common entities connecting the two projects with high-severity risks.",
+                        "answer": [
+                            "Marek Nowak",
+                            "Northwind Systems"
+                        ]
+                    },
+                    {
+                        "id": "Q109",
+                        "question": "Identify the projects where the same person is both the lead and owner of a high-severity risk, and calculate their combined spend.",
+                        "answer": {
+                            "projects": [
+                                "Payments Core Rewrite",
+                                "Data Platform Migration"
+                            ],
+                            "person": "Marek Nowak",
+                            "combined_spend_eur": 3140000
+                        }
+                    },
+                    {
+                        "id": "Q110",
+                        "question": "Identify the strongest project/vendor/person risk cluster in the programme and explain why.",
+                        "answer": {
+                            "cluster": [
+                                "Marek Nowak",
+                                "Northwind Systems",
+                                "Payments Core Rewrite",
+                                "Data Platform Migration"
+                            ],
+                            "reasoning": [
+                                "Marek leads both projects",
+                                "Northwind Systems supplies both projects",
+                                "Combined spend is €3.14M",
+                                "Both projects contain high-severity risks",
+                                "One project is red and the other is amber"
+                            ]
+                        }
+                    },
+                    {
+                        "id": "Q111",
+                        "question": "If an executive asks 'Who and what are creating the largest concentration of risk and spend?', what should the system answer?",
+                        "answer": "The strongest concentration is around Marek Nowak and Northwind Systems. Marek leads Payments Core Rewrite and Data Platform Migration, while Northwind Systems supplies both. Together those projects account for €3.14M, or approximately 83.1% of project spend, and both contain high-severity risks."
+                    },
+                    {
+                        "id": "Q112",
+                        "question": "Give me a risk briefing for the programme.",
+                        "answer": {
+                            "critical_projects": [
+                                {
+                                    "project": "Payments Core Rewrite",
+                                    "status": "amber",
+                                    "spend_eur": 1850000,
+                                    "vendor": "Northwind Systems",
+                                    "lead": "Marek Nowak",
+                                    "at_risk_milestone": "Settlement parity",
+                                    "high_risk": "Settlement mismatch under load",
+                                    "risk_owner": "Marek Nowak"
+                                },
+                                {
+                                    "project": "Data Platform Migration",
+                                    "status": "red",
+                                    "spend_eur": 1290000,
+                                    "vendor": "Northwind Systems",
+                                    "lead": "Marek Nowak",
+                                    "high_risk": "Vendor key-person dependency",
+                                    "medium_risk": "Historical load gaps",
+                                    "high_risk_owner": "Marek Nowak"
+                                }
+                            ],
+                            "observation": "Customer Portal is green with no recorded risks."
+                        }
+                    },
+                    {
+                        "id": "Q113",
+                        "question": "Give me a vendor concentration analysis.",
+                        "answer": {
+                            "vendor": "Northwind Systems",
+                            "projects": [
+                                "Payments Core Rewrite",
+                                "Data Platform Migration"
+                            ],
+                            "combined_spend_eur": 3140000,
+                            "total_project_spend_eur": 3780000,
+                            "concentration_percentage": 83.07,
+                            "risk_observation": "Both projects have significant risks."
+                        }
+                    },
+                    {
+                        "id": "Q114",
+                        "question": "Give me a people concentration analysis.",
+                        "answer": {
+                            "person": "Marek Nowak",
+                            "projects": [
+                                "Payments Core Rewrite",
+                                "Data Platform Migration"
+                            ],
+                            "combined_spend_eur": 3140000,
+                            "project_spend_percentage": 83.07,
+                            "responsibilities": [
+                                "Project lead for Payments Core Rewrite",
+                                "Risk owner for Settlement mismatch under load",
+                                "Project lead for Data Platform Migration",
+                                "Risk owner for Vendor key-person dependency"
+                            ]
+                        }
+                    },
+                    {
+                        "id": "Q115",
+                        "question": "Analyse Atlas Modernisation from an executive risk perspective. Identify all projects that are not green, explain why they require attention, identify their vendors and risk owners, determine whether any people or vendors are shared across those projects, calculate the amount and percentage of total project spend represented by those projects, and highlight anything that indicates concentration risk.",
+                        "answer": {
+                            "non_green_projects": [
+                                {
+                                    "project": "Payments Core Rewrite",
+                                    "status": "amber",
+                                    "spend_eur": 1850000,
+                                    "vendor": "Northwind Systems",
+                                    "lead": "Marek Nowak",
+                                    "risks": [
+                                        {
+                                            "description": "Settlement mismatch under load",
+                                            "severity": "high",
+                                            "owner": "Marek Nowak"
+                                        }
+                                    ],
+                                    "attention_reason": "Settlement parity milestone is at risk and there is a high-severity settlement mismatch under load."
+                                },
+                                {
+                                    "project": "Data Platform Migration",
+                                    "status": "red",
+                                    "spend_eur": 1290000,
+                                    "vendor": "Northwind Systems",
+                                    "lead": "Marek Nowak",
+                                    "risks": [
+                                        {
+                                            "description": "Vendor key-person dependency",
+                                            "severity": "high",
+                                            "owner": "Marek Nowak"
+                                        },
+                                        {
+                                            "description": "Historical load gaps",
+                                            "severity": "medium",
+                                            "owner": "Sofia Marchetti"
+                                        }
+                                    ],
+                                    "attention_reason": "The project is red and contains both high- and medium-severity risks."
+                                }
+                            ],
+                            "combined_spend_eur": 3140000,
+                            "total_project_spend_eur": 3780000,
+                            "combined_spend_percentage": 83.07,
+                            "shared_people": [
+                                "Marek Nowak"
+                            ],
+                            "shared_vendors": [
+                                "Northwind Systems"
+                            ],
+                            "concentration_risk": "A large concentration of spend, delivery responsibility, vendor dependency, and high-severity risk is centered around Marek Nowak and Northwind Systems."
+                        }
+                    }
+                ]
+            }
+        ],
+        "evaluation_dimensions": [
+            {
+                "dimension": "retrieval",
+                "description": "Can the system retrieve the correct source information?"
+            },
+            {
+                "dimension": "nested_traversal",
+                "description": "Can the system navigate deeply nested JSON structures?"
+            },
+            {
+                "dimension": "entity_resolution",
+                "description": "Can identifiers such as EMP-3 and VEN-2 be resolved to the correct entities?"
+            },
+            {
+                "dimension": "multi_hop_reasoning",
+                "description": "Can the system traverse person, project, vendor, milestone, risk, and programme relationships?"
+            },
+            {
+                "dimension": "aggregation",
+                "description": "Can the system count, sum, filter, compare, and calculate percentages across multiple records?"
+            },
+            {
+                "dimension": "negative_reasoning",
+                "description": "Can the system correctly identify missing information without hallucinating?"
+            },
+            {
+                "dimension": "precision",
+                "description": "Can the system distinguish similar or contradictory facts such as red versus amber?"
+            },
+            {
+                "dimension": "explainability",
+                "description": "Can the system provide evidence and relationship paths supporting its answer?"
+            },
+            {
+                "dimension": "graph_reasoning",
+                "description": "Can the system identify shared nodes and relationship clusters?"
+            },
+            {
+                "dimension": "executive_synthesis",
+                "description": "Can the system combine many retrieved facts into a coherent business-level conclusion?"
+            }
+        ]
+    }
+}
