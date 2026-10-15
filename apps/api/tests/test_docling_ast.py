@@ -108,7 +108,8 @@ def test_unstructured_walker_layout_introspection():
     sample = (
         "# Overview\n\n"
         "Here is a paragraph describing OpenCortyx.\n\n"
-        "| Service | Port |\n| API | 8000 |\n| Web | 3000 |\n\n"
+        # A Markdown table needs its delimiter row; Docling now reads pipes without one as text.
+        "| Service | Port |\n| --- | --- |\n| API | 8000 |\n| Web | 3000 |\n\n"
         "## Submodule\n"
         "- Item 1\n"
         "- Item 2\n"
