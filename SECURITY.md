@@ -30,5 +30,4 @@ reviewed and do not apply are listed here with the reason:
 
 | Package | Advisory | Why it does not apply |
 |---|---|---|
-| `ecdsa` (via `python-jose`) | PYSEC-2026-1325, timing side channel in ECDSA signing; no fixed release | OpenCortyx signs tokens with HS256 only; no ECDSA keys are used |
 | `postcss` (bundled inside Next.js) | GHSA-qx2v-qp2m-jg93, GHSA-6g55-p6wh-862q, GHSA-r28c-9q8g-f849, GHSA-fxqj-rqcc-2cmp | Runs only at build time on the project's own CSS; no untrusted CSS is processed |

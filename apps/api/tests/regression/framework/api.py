@@ -29,7 +29,7 @@ HEAVY = {("POST", p) for p in ("/api/v2/corpus/enrich", "/api/v2/extraction/run-
 
 def principal_headers(principal: str, org: uuid.UUID, api_key: str | None = None) -> dict:
     """Authentication headers for one of the matrix's principals, in tenant `org`."""
-    from jose import jwt
+    import jwt
     from opencortyx.core.config import settings
     from opencortyx.core.security.auth import create_access_token, create_refresh_token
     h = {"X-OpenCortyx-Capture": "client"}

@@ -1,6 +1,6 @@
 """Self-contained auth for v2 (no v1 import).
 
-JWT (jose) + API-key (against v2's own `control.ApiKey`). Same `CurrentUser` shape the v2
+JWT (PyJWT) + API-key (against v2's own `control.ApiKey`). Same `CurrentUser` shape the v2
 router already expects.
 """
 import base64
@@ -14,7 +14,8 @@ from typing import Optional
 
 from fastapi import Depends, HTTPException, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, APIKeyHeader
-from jose import JWTError, jwt
+import jwt
+from jwt import PyJWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -76,7 +77,7 @@ def decode_refresh_token(token: str) -> tuple[uuid.UUID, uuid.UUID]:
     """`(user_id, workspace_id)` from a refresh token, or 401. Rejects an access token outright."""
     try:
         payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
-    except JWTError:
+    except PyJWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
     if payload.get("typ") != TOKEN_REFRESH:
         raise HTTPException(status_code=401, detail="Not a refresh token")
@@ -101,7 +102,7 @@ def _verify_jwt(token: str) -> CurrentUser:
         perms = ["read", "write"] if role in ("editor", "admin") else ["read"]
         return CurrentUser(user_id=uuid.UUID(user_id), workspace_id=uuid.UUID(workspace_id),
                            role=role, actor_type="user", permissions=perms)
-    except JWTError:
+    except PyJWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 

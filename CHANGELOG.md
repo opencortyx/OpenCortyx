@@ -53,6 +53,12 @@ First public beta.
 - API: `pypdf` 4.3 → 6.18 (PDF uploads are untrusted input); Poetry and its dependencies are no
   longer shipped in the API image; `pip` and `setuptools` upgraded in both Python images.
 - MCP: all dependencies pinned in `apps/mcp/requirements.lock`.
+- API and MCP dependencies with published advisories updated: `docling` 2.130 → 2.139, `pypdf`
+  6.18 → 6.20, `transformers` 4.57 → 5.15 (with `sentence-transformers` 3 → 6 and
+  `huggingface-hub` 0.36 → 1.33), `urllib3` 2.7 → 2.8, `multidict` 6.7 → 6.9, `oauthlib` 3 → 4,
+  `PyJWT` → 2.15.1. `pip-audit` reports no known vulnerabilities in either lock file.
+- Access and refresh tokens are signed with PyJWT instead of the unmaintained `python-jose`, which
+  also removes `ecdsa` and its unfixed advisory. Tokens issued before the change stay valid.
 - The API refuses to start without a real `JWT_SECRET` instead of falling back to `changeme`.
 
 ### Changed
