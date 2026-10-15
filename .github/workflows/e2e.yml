@@ -1,10 +1,11 @@
 name: E2E
 
 on:
-  push:
-    branches: [main]
-  # Nightly run paused while the repository is private: private repos have a monthly Actions
-  # minutes budget. Restore it when the repository goes public.
+  # Manual only while the repository is private: private repos have a monthly Actions minutes
+  # budget and a run builds the whole stack. Run it before tagging a release (CONTRIBUTING.md).
+  # Restore both triggers when the repository goes public.
+  # push:
+  #   branches: [main]
   # schedule:
   #   - cron: "0 3 * * *"
   workflow_dispatch:

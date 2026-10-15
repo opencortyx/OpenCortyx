@@ -136,7 +136,9 @@ from source for any version containing it, and the workflow refuses it.
    `apps/web/package.json` and the two `version` fields at the top of `apps/web/package-lock.json`
    (CI fails if the first four differ).
 2. Move the `Unreleased` entries in `CHANGELOG.md` under a `## X.Y.Z` (or `## X.Y.Z-beta.N`) heading.
-3. Merge to `main`, then tag and push: `git tag vX.Y.Z-beta.N && git push origin vX.Y.Z-beta.N`.
+3. Merge to `main` and run the `E2E` workflow on it (Actions → E2E → Run workflow); it only runs
+   on demand while the repository is private.
+4. Once it passes, tag and push: `git tag vX.Y.Z-beta.N && git push origin vX.Y.Z-beta.N`.
    Tags are immutable: never move or reuse one; fix forward with the next number.
 
 The `Release` workflow runs the CI checks on the tagged commit, then builds `linux/amd64` and
