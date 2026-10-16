@@ -35,7 +35,7 @@
     "axios": "^1.7.2",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
-    "date-fns": "^3.6.0",
+    "date-fns": "^4.4.0",
     "framer-motion": "^12.38.0",
     "graphql": "^16.9.0",
     "lucide-react": "^1.46.0",
