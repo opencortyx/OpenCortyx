@@ -1,6 +1,11 @@
 # Weekly dependency updates, one grouped pull request per ecosystem. Security fixes for known
 # advisories arrive separately as soon as they are published (Settings → Code security →
 # Dependabot security updates). A 7-day cooldown skips releases younger than a week.
+#
+# Major versions (Tailwind 3 → 4, TypeScript 6 → 7, ...) are ignored: they need code changes and
+# are done by hand, one at a time. The MCP server is not listed: its pins live in
+# requirements.lock, which is regenerated from the built image (CONTRIBUTING.md), and CI's
+# pip-audit still checks it.
 version: 2
 
 updates:
@@ -11,6 +16,8 @@ updates:
     cooldown:
       default-days: 7
     ignore:
+      - dependency-name: "*"
+        update-types: [version-update:semver-major]
       # A pinned PAIR (see pyproject.toml); bump both together by hand.
       - dependency-name: torch
       - dependency-name: torchvision
@@ -26,23 +33,14 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
+    ignore:
+      - dependency-name: "*"
+        update-types: [version-update:semver-major]
     groups:
       web:
         patterns: ["*"]
         update-types: [minor, patch]
     open-pull-requests-limit: 5
-
-  - package-ecosystem: pip
-    directory: /apps/mcp
-    schedule:
-      interval: weekly
-    cooldown:
-      default-days: 7
-    groups:
-      mcp:
-        patterns: ["*"]
-        update-types: [minor, patch]
-    open-pull-requests-limit: 3
 
   - package-ecosystem: github-actions
     directory: /
