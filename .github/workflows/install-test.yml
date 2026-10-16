@@ -1,0 +1,128 @@
+name: Install test
+
+# A FIRST install on a clean machine, the way the README tells users to do it, against the newest
+# published release: the one-line installer, and a clone + `bin/opencortyx up`. It checks that the
+# release images are DOWNLOADED (a local build means they are missing or private), that the stack
+# comes up healthy at the released version, that first-run setup works, and reports the disk the
+# install takes. Linux only: GitHub's Windows and macOS runners cannot run these Linux containers,
+# so install.ps1 still needs a real Windows machine.
+
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        method: [installer, clone]
+    env:
+      REPO: https://github.com/${{ github.repository }}.git
+      RAW: https://raw.githubusercontent.com/${{ github.repository }}/main
+      DIR: /home/runner/opencortyx            # the installer's default: ~/opencortyx
+    steps:
+      # No checkout: run from $HOME like a user. Piped into bash, the installer treats the current
+      # directory as a checkout when it holds compose.yaml, which a checkout would.
+      - name: Newest release
+        run: |
+          tags="$(git ls-remote --tags --refs "$REPO" 'v*' | awk -F/ '{print $NF}')"
+          # The installer's own rule: newest stable, else newest beta ("~" sorts a pre-release first).
+          pick() { printf '%s\n' "$tags" | { grep -E "$1" || true; } | sed 's/-/~/' | sort -V | sed 's/~/-/' | tail -1; }
+          tag="$(pick '^v[0-9]+\.[0-9]+\.[0-9]+$')"
+          [ -n "$tag" ] || tag="$(pick '^v[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$')"
+          [ -n "$tag" ] || { echo "No release tag found" >&2; exit 1; }
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "VERSION=${tag#v}" >> "$GITHUB_ENV"
+          echo "Testing $tag ($MATRIX_METHOD)"
+          df -BM --output=used / | tail -1 | tr -d 'M ' > /tmp/disk-before
+        env:
+          MATRIX_METHOD: ${{ matrix.method }}
+
+      - name: Install with the one-line installer
+        if: matrix.method == 'installer'
+        working-directory: /home/runner
+        run: curl -fsSL "$RAW/install.sh" | bash
+
+      - name: Install from a clone
+        if: matrix.method == 'clone'
+        working-directory: /home/runner
+        run: |
+          git clone --depth 1 --branch "$TAG" "$REPO" "$DIR"
+          "$DIR/bin/opencortyx" up
+
+      - name: Installed the newest release
+        working-directory: ${{ env.DIR }}
+        run: |
+          got="$(bin/opencortyx version)"
+          echo "installed $got, expected $VERSION"
+          [ "$got" = "$VERSION" ]
+
+      - name: Release images were downloaded, not built
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          for s in api web mcp; do
+            image="ghcr.io/$owner/opencortyx-$s:$VERSION"
+            # A pulled image records the registry digest it came from; a local build has none.
+            digests="$(docker image inspect -f '{{len .RepoDigests}}' "$image" 2>/dev/null || echo missing)"
+            echo "$image: $digests registry digest(s)"
+            [ "$digests" != missing ] && [ "$digests" -gt 0 ] || { echo "::error::$image was built locally or is missing"; exit 1; }
+          done
+
+      - name: Services answer
+        run: |
+          health="$(curl -fsS http://localhost:8000/health)"
+          echo "API /health: $health"
+          python3 -c 'import json,os,sys; v=json.loads(sys.argv[1]).get("version"); sys.exit(0 if v==os.environ["VERSION"] else f"API reports {v}")' "$health"
+          code="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/auth/login)"
+          echo "Dashboard /auth/login: HTTP $code"; [ "$code" = 200 ]
+          code="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8001/mcp)"
+          echo "MCP /mcp: HTTP $code"; [ "$code" != 000 ]
+
+      - name: First-run setup creates the admin
+        run: |
+          api=http://localhost:8000/api/v2
+          curl -fsS "$api/auth/needs-setup" | grep -q '"needs_setup": *true'
+          password="$(openssl rand -hex 16)"
+          echo "::add-mask::$password"
+          curl -fsS -X POST "$api/auth/setup" -H 'Content-Type: application/json' \
+            -d "{\"email\": \"admin@example.com\", \"password\": \"$password\", \"adopt_demo\": false}" > /dev/null
+          curl -fsS "$api/auth/needs-setup" | grep -q '"needs_setup": *false'
+          echo "Admin created; setup is closed."
+
+      - name: Doctor
+        if: always()
+        # reported, not gated: no model is configured here
+        run: if [ -x "$DIR/bin/opencortyx" ]; then "$DIR/bin/opencortyx" doctor || true; fi
+
+      - name: Disk used
+        if: always()
+        run: |
+          before="$(cat /tmp/disk-before)"
+          after="$(df -BM --output=used / | tail -1 | tr -d 'M ')"
+          {
+            echo "### ${{ matrix.method }}: OpenCortyx $VERSION"
+            echo
+            echo "Disk used by the install: **$(( (after - before) / 1024 )).$(( (after - before) % 1024 * 10 / 1024 )) GB**"
+            echo
+            echo '```'
+            docker system df
+            echo
+            docker images --format 'table {{.Repository}}:{{.Tag}}\t{{.Size}}'
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Stack logs
+        if: failure()
+        run: |
+          [ -f "$DIR/compose.yaml" ] || { echo "Nothing installed in $DIR"; exit 0; }
+          docker compose -f "$DIR/compose.yaml" ps -a
+          docker compose -f "$DIR/compose.yaml" logs --no-color --tail=150
