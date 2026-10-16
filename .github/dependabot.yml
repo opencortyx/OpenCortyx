@@ -1,0 +1,54 @@
+# Weekly dependency updates, one grouped pull request per ecosystem. Security fixes for known
+# advisories arrive separately as soon as they are published (Settings → Code security →
+# Dependabot security updates). A 7-day cooldown skips releases younger than a week.
+version: 2
+
+updates:
+  - package-ecosystem: pip          # Poetry: apps/api/pyproject.toml + poetry.lock
+    directory: /apps/api
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    ignore:
+      # A pinned PAIR (see pyproject.toml); bump both together by hand.
+      - dependency-name: torch
+      - dependency-name: torchvision
+    groups:
+      api:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: /apps/web
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      web:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: pip
+    directory: /apps/mcp
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      mcp:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    open-pull-requests-limit: 3
