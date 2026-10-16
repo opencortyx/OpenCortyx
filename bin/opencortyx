@@ -59,42 +59,6 @@ require_docker() {
   docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is required (docker compose)."
 }
 
-has_nvidia_gpu() {
-  docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -qi nvidia && return 0
-  command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1
-}
-
-# Fraction of GPU memory vLLM may reserve: what is free now, minus a margin, capped at 0.90.
-# Measured the way vLLM checks it (torch, inside its image); nvidia-smi overstates usable memory.
-gpu_fraction() {
-  local line="" margin=768 total free image
-  image="vllm/vllm-openai:$(env_or VLLM_IMAGE_TAG v0.11.0)"
-  if docker image inspect "$image" >/dev/null 2>&1; then
-    line="$(docker run --rm --gpus all --entrypoint python3 "$image" -c \
-      'import torch; f, t = torch.cuda.mem_get_info(); print(f"{t // 2**20}, {f // 2**20}")' 2>/dev/null | tail -1)"
-    case "$line" in *[0-9],*[0-9]*) margin=256 ;; *) line="" ;; esac
-  fi
-  if [ -z "$line" ] && command -v nvidia-smi >/dev/null 2>&1; then
-    line="$(nvidia-smi --query-gpu=memory.total,memory.free --format=csv,noheader,nounits 2>/dev/null | head -1)"
-  fi
-  [ -n "$line" ] || return 1
-  total="$(printf '%s' "${line%%,*}" | tr -d ' \r')"
-  free="$(printf '%s' "${line##*,}" | tr -d ' \r')"
-  [ -n "$total" ] && [ "$total" -gt 0 ] 2>/dev/null || return 1
-  awk -v t="$total" -v f="$free" -v m="$margin" 'BEGIN { x = (f - m) / t; if (x > 0.90) x = 0.90; if (x < 0.50) x = 0.50; printf "%.2f", int(x * 100) / 100 }'
-}
-
-size_gpu() {
-  case ",$(env_get COMPOSE_PROFILES)," in *,gpu,*) ;; *) return 0 ;; esac
-  [ "$(env_get OPENCORTYX_GPU_FRACTION_FIXED)" = "1" ] && return 0
-  [ -n "$(compose ps --status running -q vllm 2>/dev/null)" ] && return 0
-  local frac
-  frac="$(gpu_fraction || true)"
-  [ -n "$frac" ] || return 0
-  env_set VLLM_GPU_FRACTION "$frac"
-  info "vLLM GPU memory fraction: $frac"
-}
-
 wait_http() {
   local url="$1" name="$2" tries="${3:-120}"
   for _ in $(seq 1 "$tries"); do
@@ -118,17 +82,10 @@ cmd_init() {
   done
   # The release channel `update` follows; the installer passes the one it installed from.
   [ -z "${OPENCORTYX_CHANNEL:-}" ] || env_set OPENCORTYX_CHANNEL "$OPENCORTYX_CHANNEL"
-  # Which models run is chosen on the Models page, not in .env. The only install-time decision
-  # is whether to start the local vLLM server, and only for a new .env: an operator who cleared
-  # COMPOSE_PROFILES on a GPU host meant it.
+  # Which models run is chosen on the Models page (the Model Registry), never in .env.
   if [ -n "$fresh" ]; then
-    if has_nvidia_gpu; then
-      env_set COMPOSE_PROFILES gpu
-      info "NVIDIA GPU detected: starting the local vLLM model server"
-    else
-      warn "No NVIDIA GPU: after sign-in, open Models and point generation at your model server"
-      warn "(Ollama, LM Studio, OpenAI, ...) — see docs/models.md."
-    fi
+    info "After sign-in, open Models and connect a model server (Ollama, LM Studio, a hosted API, ...)"
+    info "by its address - see docs/models.md."
   fi
   mkdir -p data/files
 }
@@ -136,7 +93,6 @@ cmd_init() {
 cmd_up() {
   require_docker
   [ -f .env ] || cmd_init
-  size_gpu
   if [ "${OPENCORTYX_BUILD:-0}" = "1" ] || [ "${OPENCORTYX_DEV:-0}" = "1" ] \
      || [[ "$OPENCORTYX_VERSION" == *dev* ]] \
      || [ "$(env_or PUBLIC_API_URL http://localhost:8000)" != "http://localhost:8000" ]; then
@@ -184,7 +140,6 @@ cmd_doctor() {
   else
     echo "  ✗ .env missing (run bin/opencortyx init)"; failed=1
   fi
-  if has_nvidia_gpu; then echo "  ✓ NVIDIA GPU available"; else echo "  - no NVIDIA GPU (hosted or local OpenAI-compatible LLM)"; fi
   bold "Services"
   compose ps --format '  {{.Service}}: {{.Status}}' 2>/dev/null || true
   bold "Runtime"
@@ -378,7 +333,7 @@ OpenCortyx
 
 Usage: bin/opencortyx <command> [args]
 
-  init                 Create .env, generate secrets, pick the LLM backend
+  init                 Create .env and generate its secrets
   up [--build]         Start the stack (release images, or build from source), wait until healthy
   dev                  Start with live source mounts and the Next.js dev server
   down                 Stop the stack (data is kept)

@@ -9,7 +9,8 @@ read them.
 
 ## Add data
 
-Add data is the quickest way in. Drop one file, see how OpenCortyx would read it, and add it.
+Add data is the quickest way in. Drop one file, see how OpenCortyx would read it, and add it. Or
+drop several files at once and add them together.
 
 ![Add data](../assets/screenshots/add-data.png)
 
@@ -22,18 +23,28 @@ Add data is the quickest way in. Drop one file, see how OpenCortyx would read it
    or a yellow note tells you what to check, such as a sample too small to be sure.
 3. Open **How it read your data** to see the full reading as a tree, or switch to **Raw Rules**.
 4. Add **Tags** if you like. The graph groups assets by tag, and you can change tags later.
-5. Choose how to add it:
+5. Under **Pipeline**, keep **Automatic (by file type)** or choose one of your
+   [pipelines](#pipelines) for this kind of file.
+6. Choose how to add it:
    - **Use this reading and add it** saves the reading as a [mapping](#mapper) and ingests the
      file through it. Pick this when you want the types you saw, and the same reading for the next
      file of this shape.
-   - **Just add it with the defaults** ingests the file without saving anything.
-6. Wait for the result card. It lists what was created, for example *Found 3 Projects, 3 Leads,
+   - **Just add it with the defaults** (or **Add it with the chosen pipeline**) ingests the file
+     without saving anything.
+7. Wait for the result card. It lists what was created, for example *Found 3 Projects, 3 Leads,
    3 Vendors and 6 more kinds*, and offers next steps: **Ask a question about this**, **Pull out
    something else**, or **See it in the catalogue**.
 
+### Several files at once
+
+Select or drop more than one file. The page lists them instead of reading one, with a **Pipeline**
+choice for each kind of file in the list (documents, tables, JSON). Press **Add N files**: each file
+is ingested with the pipeline chosen for its kind, or the default one for its file type, and its
+status shows in the list. Every file becomes its own run under [Runs](#runs).
+
 ### Good to know
 
-- Nothing is saved or ingested until you press one of the two buttons.
+- Nothing is saved or ingested until you press one of the buttons.
 - Fields named `id` or ending in `_id` are kept as ordinary attributes. Each record gets its own
   node, so two files that share an id never overwrite each other. To link records that are the same
   thing, set [Resolution](trust.md#match-the-same-record-across-files-resolution) for their type.
@@ -154,6 +165,37 @@ fields are kept as attributes. One editor covers JSON, tables and documents.
 - **Conformance** checks that what an asset produced matches its mapping. **Usage** shows which
   pipelines and ingestions use a mapping before you change it.
 
+## Custom Extractors
+
+Extractors turn what you already have into new nodes, relationships and attributes, for example
+the people and organisations named in a document. You define them here, without code.
+
+![Custom Extractors](../assets/screenshots/custom-extractors.png)
+
+### How to use it
+
+1. Open **Custom Extractors**. The three tabs are:
+   - **Your extractors**: the ones you created.
+   - **Relationships**: rules that connect nodes into typed relationships.
+   - **Built-in**: the extractors that ship with OpenCortyx, grouped by what they read (structured
+     tables, documents and text, and more).
+2. To create one, press **New extractor** and say:
+   - which node types it reads (for example `Chunk`),
+   - how it works (an AI prompt, code, or a rule),
+   - what it produces: the node types, relationships and attributes.
+3. Preview it on a few sample nodes, then save.
+4. Press **Run** on any extractor to run it over the workspace now, or add it as a step in a
+   [pipeline](#pipelines) so it runs on every new asset.
+5. Press **Edit** to change an extractor, or the bin to delete one of yours.
+
+### Resolution settings
+
+An extractor's **Resolution** section says when two nodes it creates are the same thing: the fields
+they are **identified by**, the **Scorer** (exact or similar), and when a match is applied
+automatically or sent for review. It is the same setting, per node type, that you find on
+[Nodes & Relationships](trust.md#match-the-same-record-across-files-resolution), which works for
+every type, including the record types of a JSON mapping.
+
 ## Pipelines
 
 A pipeline is the list of steps a source goes through. Design one once and use it for any number
@@ -182,8 +224,7 @@ of ingestions.
 
 ### Good to know
 
-- Extractors you define under [Custom Metadata](administration.md#custom-metadata) can be added as
-  steps.
+- Extractors you define under [Custom Extractors](#custom-extractors) can be added as steps.
 - The tabs at the top filter by kind: **Structured**, **Semi-Structured** and **Unstructured**.
 
 ## Runs

@@ -9,7 +9,6 @@ from opencortyx.api.services.access.auth import (
     DEMO_ORG,
     access_token_ttl_seconds,
     count_users,
-    materialize_for_mode,
 )
 from opencortyx.core.security.auth import (
     CurrentUser,
@@ -57,12 +56,12 @@ async def auth_setup(req: SetupRequest):
         await ensure_default_models(workspace_id)
     except Exception:
         pass
-    # put BOTH built-in hierarchies (Person + Team) on the graph so a fresh install already shows every
-    # node & relationship from both — editable/deletable/toggleable from the Nodes & Relationships page.
-    await materialize_for_mode(workspace_id, "person")
-    await materialize_for_mode(workspace_id, "team")
-    # the workspace's name and mode, and the central node — you, or your team — at the top of its graph
+    # The workspace's name and mode, and the central node — you, or your team — at the top of its
+    # graph. Nothing else: the built-in hierarchies are TYPES (Nodes & Relationships), not graph
+    # nodes, so a new workspace's graph and catalogue hold only what its own data puts there.
     await save_profile(workspace_id, name=name, mode=mode)
+    from opencortyx.tasks.graph_tree import schedule_tree_index
+    schedule_tree_index(str(workspace_id), now=True)
     token = create_access_token(u.id, workspace_id, role="admin")
     return {"access_token": token, "token_type": "bearer", "workspace_id": str(workspace_id), "role": "admin"}
 

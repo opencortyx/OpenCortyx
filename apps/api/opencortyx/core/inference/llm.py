@@ -1,11 +1,13 @@
 """Self-contained LLM access for v2 (no v1 import).
 
-ONE dispatcher, because every provider this platform speaks — vLLM (the default, self-hosted),
-OpenAI, Azure, Groq, Together — speaks the OpenAI wire format. Anthropic and the HuggingFace
-Inference API are the two exceptions and get their own small branches.
+ONE dispatcher, because nearly every provider speaks the OpenAI wire format: a server you run
+yourself (Ollama, LM Studio, vLLM, ... registered as `openai_compatible` with its address), OpenAI,
+Azure, Groq, Together, and HuggingFace Inference (its Inference Providers router, or your own TGI).
+Anthropic gets its own small branch, and so does a Hugging Face model downloaded to run inside
+OpenCortyx on CPU (`transformers`, see local_llm.py).
 
-There is no local-runtime special case any more: vLLM is reached with the same AsyncOpenAI client as
-a hosted endpoint, pointed at `LLM_BASE_URL`. That is the whole reason vLLM needs no bespoke code.
+Every call runs on a Model Registry row (`model_spec`, from `registry.resolve_model`). There is no
+default model: no spec, or a self-hosted spec without an address, raises `NoModelConfigured`.
 
 `repair_truncated_json` ports the v1 helper used by the structured catalogue prompts.
 """
@@ -15,7 +17,9 @@ from typing import Optional
 import httpx
 
 from opencortyx.core import http
-from opencortyx.core.config import settings, OPENAI_COMPATIBLE_PROVIDERS
+from opencortyx.core.config import (
+    settings, LOCAL_LLM_PROVIDERS, OPENAI_COMPATIBLE_PROVIDERS, SELF_HOSTED_PROVIDERS,
+)
 
 import asyncio
 import weakref
@@ -28,7 +32,7 @@ def _limits() -> "httpx.Limits":
 
 
 def _timeout() -> "httpx.Timeout":
-    # No read deadline shorter than LLM_TIMEOUT_S: a request queued behind a deep vLLM batch is slow,
+    # No read deadline shorter than LLM_TIMEOUT_S: a request queued behind a deep server batch is slow,
     # not hung, and cancelling it throws away work the server has already scheduled.
     return httpx.Timeout(settings.LLM_TIMEOUT_S, connect=settings.LLM_CONNECT_TIMEOUT_S)
 
@@ -42,7 +46,7 @@ def _openai_client(api_key=None, base_url=None):
 
     The explicit `http_client` is the point: AsyncOpenAI otherwise builds its own httpx client with
     httpx's default 20 keep-alive connections, so the transport quietly became the ceiling on how
-    many extraction calls could be in flight — the opposite of what vLLM is for.
+    many extraction calls could be in flight — the opposite of what a batching server is for.
     """
     from openai import AsyncOpenAI
     loop = asyncio.get_running_loop()
@@ -54,7 +58,7 @@ def _openai_client(api_key=None, base_url=None):
     c = by_key.get(key)
     if c is None:
         c = AsyncOpenAI(
-            api_key=api_key or settings.LLM_API_KEY or "sk-none",
+            api_key=api_key or "sk-none",          # local servers ignore it; the SDK requires one
             base_url=base_url or None,
             http_client=httpx.AsyncClient(timeout=_timeout(), limits=_limits()),
             timeout=settings.LLM_TIMEOUT_S,
@@ -63,22 +67,44 @@ def _openai_client(api_key=None, base_url=None):
     return c
 
 
-def _vllm_base(explicit: str | None = None) -> str | None:
-    """The endpoint an OpenAI-compatible request should go to.
+#: HuggingFace Inference: the OpenAI-compatible router in front of its inference providers. The older
+#: api-inference endpoint no longer serves most chat models.
+HF_ROUTER = "https://router.huggingface.co/v1"
 
-    A self-hosted server has no public endpoint, so with nothing configured the OpenAI SDK silently
+
+def _hosted_base(prov: str, base: str | None) -> str | None:
+    """The endpoint for a hosted provider that has a well-known one, when the row names none."""
+    if base:
+        return base
+    return {"groq": "https://api.groq.com/openai/v1", "huggingface": HF_ROUTER, "hf": HF_ROUTER}.get(prov)
+
+
+def _require(model_spec: dict | None) -> tuple:
+    """(provider, model_id, base_url, api_key, params) of a registry spec, or NoModelConfigured.
+
+    A self-hosted server has no public endpoint, so without its address the OpenAI SDK silently
     defaults to api.openai.com and fails on auth — an error that reads like a bad key rather than a
-    missing base URL.
+    missing address. Said plainly here instead.
     """
-    return explicit or settings.LLM_BASE_URL or None
+    from opencortyx.core.inference.registry import NoModelConfigured
+    if not model_spec:
+        raise NoModelConfigured()
+    prov = (model_spec.get("provider") or "").lower()
+    base = model_spec.get("base_url")
+    if prov in SELF_HOSTED_PROVIDERS and not base:
+        name = model_spec.get("name") or model_spec.get("model_id") or "this model"
+        raise NoModelConfigured(model_spec.get("role") or "generation", (
+            f"The model '{name}' has no server address. Set it on the Models page "
+            "(Ollama on this computer: http://host.docker.internal:11434/v1)."))
+    return prov, model_spec.get("model_id"), base, model_spec.get("api_key"), (model_spec.get("params") or {})
 
 
 async def _openai_complete(prompt, system, max_tokens, json_mode, model, temperature,
                            base_url=None, api_key=None) -> str:
-    """vLLM + every other OpenAI-compatible endpoint (Together, Groq, Azure) via base_url.
+    """Every OpenAI-compatible endpoint (a self-hosted server, OpenAI, Together, Groq, Azure) via base_url.
 
     The system prompt is sent as its own message rather than concatenated into the user turn, and
-    that is a THROUGHPUT decision as much as a correctness one: vLLM's automatic prefix caching keys
+    that is a THROUGHPUT decision as much as a correctness one: a server's automatic prefix caching keys
     on the token prefix, so an extractor whose instructions are byte-identical across every chunk of
     every document reuses the prefill for all of them. Fold the invariant text in behind the chunk
     and the prefix stops matching, so each call re-prefills the whole instruction block.
@@ -88,7 +114,7 @@ async def _openai_complete(prompt, system, max_tokens, json_mode, model, tempera
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
-    kwargs = {"model": model or settings.LLM_MODEL, "messages": messages,
+    kwargs = {"model": model, "messages": messages,
               "max_tokens": max_tokens, "temperature": temperature}
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
@@ -98,29 +124,11 @@ async def _openai_complete(prompt, system, max_tokens, json_mode, model, tempera
 
 async def _anthropic_complete(prompt, system, max_tokens, model, temperature, api_key=None) -> str:
     from anthropic import AsyncAnthropic
-    client = AsyncAnthropic(api_key=api_key or settings.LLM_API_KEY)
+    client = AsyncAnthropic(api_key=api_key)
     msg = await client.messages.create(
         model=model or "claude-3-5-sonnet-latest", max_tokens=max_tokens, temperature=temperature,
         system=(system or ""), messages=[{"role": "user", "content": prompt}])
     return "".join(getattr(b, "text", "") for b in (msg.content or []) if getattr(b, "type", "") == "text")
-
-
-async def _hf_complete(prompt, system, max_tokens, model, temperature, base_url=None, api_key=None) -> str:
-    """HuggingFace Inference API (text-generation) over httpx."""
-    url = base_url or f"https://api-inference.huggingface.co/models/{model}"
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    full = (f"{system}\n\n" if system else "") + prompt
-    r = await _client().post(url, headers=headers, json={
-        "inputs": full,
-        "parameters": {"max_new_tokens": max_tokens, "temperature": max(temperature, 0.01),
-                       "return_full_text": False}})
-    r.raise_for_status()
-    d = r.json()
-    if isinstance(d, list) and d and isinstance(d[0], dict):
-        return d[0].get("generated_text", "") or ""
-    if isinstance(d, dict):
-        return d.get("generated_text", "") or ""
-    return str(d)
 
 
 _WINDOW_BY_ENDPOINT: dict = {}
@@ -182,7 +190,7 @@ async def _fit_to_window(prompt: str, max_tokens: int, base_url: str | None,
 
     try:
         from opencortyx.core import observability as obs
-        label = model_id or settings.LLM_MODEL or "unknown"
+        label = model_id or "unknown"
         obs.PROMPT_ELISIONS.labels(label).inc()
         obs.PROMPT_CHARS_DROPPED.labels(label).inc(dropped)
         obs.get_logger(__name__).warning(
@@ -215,49 +223,32 @@ def _reelide(prompt: str, window: int, actual: int, max_tokens: int) -> str:
     return prompt[:head] + marker + (prompt[-(keep - head):] if keep - head else "")
 
 
-async def _registry_default() -> dict | None:
-    """The Models page's generation choice, for a call that did not resolve its own spec — so no call
-    silently bypasses the registry and goes wherever the environment happens to point."""
-    from opencortyx.core.inference.registry import active_generation_spec
-    return await active_generation_spec()
-
-
 async def complete(prompt: str, system: Optional[str] = None, max_tokens: int = 500,
                    json_mode: bool = False, model: Optional[str] = None,
-                   temperature: float = 0.2, provider: Optional[str] = None,
-                   model_spec: Optional[dict] = None) -> str:
-    """Completion entry point. `model_spec` (from the Model Registry) routes to the right provider
-    (vllm / openai / openai_compatible / anthropic / huggingface). Without it, behaviour is the
-    env-configured provider — vLLM by default."""
-    if model_spec is None and not provider:
-        model_spec = await _registry_default()
-    if model_spec:
-        prov = (model_spec.get("provider") or settings.LLM_PROVIDER or "vllm").lower()
-        mid = model_spec.get("model_id") or model
-        base = model_spec.get("base_url")
-        key = model_spec.get("api_key")
-        temp = (model_spec.get("params") or {}).get("temperature", temperature)
-    else:
-        prov = (provider or settings.LLM_PROVIDER or "vllm").lower()
-        mid, base, key, temp = model, None, None, temperature
+                   temperature: float = 0.2, model_spec: Optional[dict] = None) -> str:
+    """Run `prompt` on the registry model `model_spec` (see `registry.resolve_model`). `model`
+    overrides the row's model id. No spec, no call: there is no default model to fall back on."""
+    prov, mid, base, key, params = _require(model_spec)
+    mid = model or mid
+    temp = params.get("temperature", temperature)
 
-    prompt = await _fit_to_window(prompt, max_tokens, _vllm_base(base), mid or settings.LLM_MODEL,
+    prompt = await _fit_to_window(prompt, max_tokens, base, mid,
                                   discover=prov in OPENAI_COMPATIBLE_PROVIDERS)
 
     if prov == "anthropic":
         return await _anthropic_complete(prompt, system, max_tokens, mid, temp, api_key=key)
-    if prov in ("huggingface", "hf"):
-        return await _hf_complete(prompt, system, max_tokens, mid, temp, base_url=base, api_key=key)
-    if prov == "groq" and not base:
-        base = "https://api.groq.com/openai/v1"
-    if prov not in OPENAI_COMPATIBLE_PROVIDERS:
+    if prov in LOCAL_LLM_PROVIDERS:
+        from opencortyx.core.inference import local_llm
+        return await local_llm.complete(mid, prompt, system, max_tokens, temp)
+    base = _hosted_base(prov, base)
+    if prov not in OPENAI_COMPATIBLE_PROVIDERS and prov not in ("huggingface", "hf"):
         raise ValueError(
-            f"unsupported LLM provider {prov!r}. Text generation runs on vLLM (or any "
-            f"OpenAI-compatible endpoint), Anthropic, or HuggingFace Inference — see "
-            f"config.OPENAI_COMPATIBLE_PROVIDERS.")
+            f"unsupported LLM provider {prov!r}. Text generation runs on any OpenAI-compatible "
+            f"endpoint, Anthropic, HuggingFace Inference, or a Hugging Face model downloaded to "
+            f"run in OpenCortyx — see config.OPENAI_COMPATIBLE_PROVIDERS.")
     try:
         return await _openai_complete(prompt, system, max_tokens, json_mode, mid, temp,
-                                      base_url=_vllm_base(base), api_key=key)
+                                      base_url=base, api_key=key)
     except Exception as e:
         over = _length_overflow(e)
         if not over:
@@ -267,13 +258,13 @@ async def complete(prompt: str, system: Optional[str] = None, max_tokens: int = 
         try:
             from opencortyx.core import observability as obs
             obs.get_logger(__name__).warning(
-                "prompt_refit_after_400", model=(mid or settings.LLM_MODEL or "unknown"),
+                "prompt_refit_after_400", model=(mid or "unknown"),
                 window=window, reported_tokens=actual,
                 original_chars=len(prompt), retry_chars=len(retry))
         except Exception:                                   # noqa: BLE001 — never fail on telemetry
             pass
         return await _openai_complete(retry, system, max_tokens, json_mode, mid, temp,
-                                      base_url=_vllm_base(base), api_key=key)
+                                      base_url=base, api_key=key)
 
 
 async def _openai_stream(prompt, system, max_tokens, model, temperature, base_url=None, api_key=None):
@@ -283,7 +274,7 @@ async def _openai_stream(prompt, system, max_tokens, model, temperature, base_ur
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
     stream = await client.chat.completions.create(
-        model=model or settings.LLM_MODEL, messages=messages, max_tokens=max_tokens,
+        model=model, messages=messages, max_tokens=max_tokens,
         temperature=temperature, stream=True)
     async for chunk in stream:
         delta = (chunk.choices[0].delta.content if chunk.choices else None) or ""
@@ -293,7 +284,7 @@ async def _openai_stream(prompt, system, max_tokens, model, temperature, base_ur
 
 async def _anthropic_stream(prompt, system, max_tokens, model, temperature, api_key=None):
     from anthropic import AsyncAnthropic
-    client = AsyncAnthropic(api_key=api_key or settings.LLM_API_KEY)
+    client = AsyncAnthropic(api_key=api_key)
     async with client.messages.stream(
             model=model or "claude-3-5-sonnet-latest", max_tokens=max_tokens, temperature=temperature,
             system=(system or ""), messages=[{"role": "user", "content": prompt}]) as stream:
@@ -304,38 +295,27 @@ async def _anthropic_stream(prompt, system, max_tokens, model, temperature, api_
 
 async def stream_complete(prompt: str, system: Optional[str] = None, max_tokens: int = 600,
                           model: Optional[str] = None, temperature: float = 0.2,
-                          provider: Optional[str] = None, model_spec: Optional[dict] = None):
+                          model_spec: Optional[dict] = None):
     """Async generator that yields answer text chunks as the model produces them. Mirrors `complete`'s
-    provider routing. Any streaming failure (or a provider without a streaming path) falls back to a
-    single non-streamed chunk so the caller always gets a complete answer."""
-    if model_spec is None and not provider:
-        model_spec = await _registry_default()
-    if model_spec:
-        prov = (model_spec.get("provider") or settings.LLM_PROVIDER or "vllm").lower()
-        mid = model_spec.get("model_id") or model
-        base = model_spec.get("base_url")
-        key = model_spec.get("api_key")
-        temp = (model_spec.get("params") or {}).get("temperature", temperature)
-    else:
-        prov = (provider or settings.LLM_PROVIDER or "vllm").lower()
-        mid, base, key, temp = model, None, None, temperature
+    provider routing. A streaming failure (or a provider without a streaming path) is retried as one
+    non-streamed call on the same model, so the caller always gets a complete answer."""
+    prov, mid, base, key, params = _require(model_spec)
+    mid = model or mid
+    temp = params.get("temperature", temperature)
     try:
         if prov == "anthropic":
             async for c in _anthropic_stream(prompt, system, max_tokens, mid, temp, key):
                 yield c
-        elif prov in ("huggingface", "hf"):
-            # No token stream on this API — one chunk is the honest representation.
-            yield await _hf_complete(prompt, system, max_tokens, mid, temp, base, key)
+        elif prov in LOCAL_LLM_PROVIDERS:
+            from opencortyx.core.inference import local_llm
+            async for c in local_llm.stream(mid, prompt, system, max_tokens, temp):
+                yield c
         else:
-            if prov == "groq" and not base:
-                base = "https://api.groq.com/openai/v1"
-            async for c in _openai_stream(prompt, system, max_tokens, mid, temp, _vllm_base(base), key):
+            async for c in _openai_stream(prompt, system, max_tokens, mid, temp, _hosted_base(prov, base), key):
                 yield c
     except Exception:
-        # graceful degradation: deliver the whole answer in one chunk rather than failing the stream.
         yield await complete(prompt, system=system, max_tokens=max_tokens, model=mid,
-                             temperature=temp, provider=(None if model_spec else provider),
-                             model_spec=model_spec)
+                             temperature=temp, model_spec=model_spec)
 
 
 def repair_truncated_json(json_str: str) -> str:

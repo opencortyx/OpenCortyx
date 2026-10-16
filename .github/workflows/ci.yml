@@ -58,7 +58,6 @@ jobs:
       CELERY_BROKER_URL: redis://localhost:6379/1
       CELERY_RESULT_BACKEND: redis://localhost:6379/2
       JWT_SECRET: ci-only-secret
-      LLM_PROVIDER: mock
     defaults:
       run:
         working-directory: apps/api

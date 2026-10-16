@@ -54,7 +54,7 @@ export default function DeclarativeExtractionStudio() {
   return (
     <div className={`${editing ? "max-w-[1600px]" : "max-w-6xl"} mx-auto ${editing ? "" : "pb-32"}`}>
       <PageHeader
-        title="Custom Metadata"
+        title="Custom Extractors"
         icon={SlidersHorizontal}
         description="Define extractors that turn existing nodes into new nodes, edges, and attributes — declaratively, no code."
         actions={!editing ? newAction : undefined}

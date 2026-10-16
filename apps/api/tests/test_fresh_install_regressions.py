@@ -513,25 +513,32 @@ def test_a_duplicate_offers_to_replace_and_both_skips_honour_it():
     assert "replace" in inspect.signature(ingest_json).parameters
 
 
-def test_the_model_registry_not_the_env_decides_the_models():
-    """Models are chosen on the Models page. The env only seeds an empty registry: a row rewritten
-    from env on every read, and an Ollama endpoint dropped from an openai_compatible row, both sent
-    generation to a vLLM server that does not exist as soon as the LLM keys left `.env`."""
+def test_the_model_registry_is_the_only_source_of_models():
+    """Models come from the Model Registry and nowhere else: no `.env` setting, no bundled server,
+    no other workspace's row. A call with no model fails saying what to add, rather than going to a
+    default that may not exist (the bundled vLLM did not, on every machine without an NVIDIA GPU)."""
     import asyncio
-    import inspect
+    from opencortyx.core import config
     from opencortyx.core.inference import llm, registry
 
-    assert "d[\"provider\"]" not in inspect.getsource(registry.ensure_default_models)
-    url = "http://host.docker.internal:11434/v1"
-    assert registry.coerce_legacy_row("openai_compatible", "mistral", url, "generation")[2] == url
-    assert registry.coerce_legacy_row("ollama", "mistral", url, "generation")[2] is None
+    for gone in ("LLM_PROVIDER", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY", "EMBED_PROVIDER", "EMBED_MODEL"):
+        assert not hasattr(config.settings, gone), f"{gone} would be a second source of models"
+    assert "vllm" not in config.OPENAI_COMPATIBLE_PROVIDERS | registry.KNOWN_PROVIDERS
+
+    # A new workspace starts with the two models that run inside the API, named plainly.
+    rows = registry._builtin_rows()
+    assert sorted(r["role"] for r in rows) == ["embedding", "rerank"]
+    assert not any("built-in" in r["name"] for r in rows)
+
+    with pytest.raises(registry.NoModelConfigured, match="Models page"):
+        asyncio.run(llm.complete("hi", model_spec=None))
+    with pytest.raises(registry.NoModelConfigured, match="no server address"):
+        asyncio.run(llm.complete("hi", model_spec={"provider": "openai_compatible", "model_id": "m",
+                                                   "base_url": None, "name": "mine"}))
 
     chosen = {"provider": "openai_compatible", "model_id": "picked-on-models-page",
               "base_url": "http://models-page:1/v1", "api_key": None, "params": {}}
     seen = {}
-
-    async def fake_active():
-        return chosen
 
     async def fake_fit(prompt, max_tokens, base, mid, discover=True):
         return prompt
@@ -542,10 +549,28 @@ def test_the_model_registry_not_the_env_decides_the_models():
 
     mp = pytest.MonkeyPatch()
     try:
-        mp.setattr(registry, "active_generation_spec", fake_active)
         mp.setattr(llm, "_fit_to_window", fake_fit)
         mp.setattr(llm, "_openai_complete", fake_openai)
-        assert asyncio.run(llm.complete("hi")) == "ok"
+        assert asyncio.run(llm.complete("hi", model_spec=chosen)) == "ok"
     finally:
         mp.undo()
     assert seen == {"model": "picked-on-models-page", "base": "http://models-page:1/v1"}
+
+
+def test_an_answer_without_a_model_says_to_connect_one_instead_of_abstaining():
+    """A new workspace has no generation model. Asking the assistant must say that, not "no grounded
+    evidence": the evidence was found, the answer just could not be written."""
+    from opencortyx.api.routes.knowledge.context import _answer_text, _surface_error
+    from opencortyx.core.inference.registry import NoModelConfigured
+
+    msg = str(NoModelConfigured("generation"))
+    res = _surface_error({"abstained": True, "error": msg, "model_missing": True,
+                          "answer": "I don't have enough grounded information."})
+    assert res["answer"] == msg and "Models page" in msg
+    assert _answer_text(res) == f"⚠ {msg}"
+
+    down = _surface_error({"abstained": True, "error": "All connection attempts failed"})
+    assert "unreachable" in down["answer"]
+
+    assert _answer_text({"abstained": True}).startswith("No grounded evidence found")
+    assert _surface_error({"answer": "Fine."}) == {"answer": "Fine."}

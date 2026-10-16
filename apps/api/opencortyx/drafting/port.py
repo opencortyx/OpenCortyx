@@ -9,8 +9,8 @@ Two rules every implementation must honour, because callers depend on them:
 
   1. **Never raise for lack of a model.** A drafter produces its best heuristic result when the
      LLM is unreachable, disabled (`DraftRequest.use_model=False`) or returns nonsense, and says
-     so through `Confidence` and `warnings`. Authoring is the wrong place to discover that vLLM
-     is down: the user is holding a file, not debugging inference.
+     so through `Confidence` and `warnings`. Authoring is the wrong place to discover that the
+     model server is down: the user is holding a file, not debugging inference.
   2. **Write nothing.** `draft()` is a pure read. Drafts are proposals; persisting one is the
      user's act, through the CRUD that already owns that object.
 """

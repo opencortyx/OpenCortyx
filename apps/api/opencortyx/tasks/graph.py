@@ -1,7 +1,6 @@
 """Graph upkeep tasks: embedding nodes and sources. (The browse tree's index is `tasks/graph_tree.py`.)"""
 import uuid
 from opencortyx.core.worker.celery_app import celery_app
-from opencortyx.core.config import settings
 from opencortyx.core.worker.utils import async_to_sync
 from opencortyx.core.observability import get_logger
 from opencortyx.core.inference.embedding import embed_batch
@@ -81,7 +80,7 @@ def v2_embed_source(self, workspace_id: str, source_id: str):
             return {"status": "ok", "source_id": source_id, "embedded": 0}
         await repo.index_embeddings(oid, pending, embed_batch, batch_size=_rc.embed_batch_size())
         spec = await active_embedding_spec()
-        if str((spec or {}).get("provider") or settings.EMBED_PROVIDER or "fastembed").lower() in ("fastembed", "onnx"):
+        if str((spec or {}).get("provider") or "").lower() in ("fastembed", "onnx"):
             gc.collect()
         return {"status": "ok", "source_id": source_id, "embedded": len(pending)}
 

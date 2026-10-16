@@ -1,7 +1,7 @@
 # Install on macOS
 
-Works on Apple Silicon and Intel Macs. Macs have no NVIDIA GPU, so the language model runs in Ollama or
-LM Studio on your Mac, or through a hosted API.
+Works on Apple Silicon and Intel Macs. The language model runs in Ollama or LM Studio on your Mac,
+on Hugging Face Inference, or through a hosted API.
 
 ## 1. Install Docker Desktop
 
@@ -86,14 +86,13 @@ When it finishes, open http://localhost:3000.
 
 ## 4. Choose the model
 
-Open **Models** in the dashboard. The built-in generation, extraction and utility rows point at a
-vLLM server, which a Mac does not run, so **Edit** each of them (or **Add** one and tick
-**Make default**):
+Open **Models** in the dashboard. A new workspace has no generation model, so **Add** one under
+Generation and tick **Make default** (extraction and utility use it too):
 
 | Field | Ollama | LM Studio |
 |---|---|---|
 | Provider | OpenAI-compatible | OpenAI-compatible |
-| Base URL | `http://host.docker.internal:11434/v1` | `http://host.docker.internal:1234/v1` |
+| Server address | `http://host.docker.internal:11434/v1` | `http://host.docker.internal:1234/v1` |
 | Model ID | e.g. `llama3.2-8k` | the model name LM Studio shows |
 
 For a hosted API, pick the provider and enter its API key instead. **Test** confirms the server

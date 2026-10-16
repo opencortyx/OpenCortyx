@@ -39,7 +39,8 @@ test("UI-WF mapper: create a mapping, rename it, add a node, save — the API ho
   const api = await tenantApi();
   const before = new Set(((await (await api.get("/api/v2/schema-mappings")).json()).items ?? []).map((m: { id: string }) => m.id));
   await page.goto("/dashboard/mapper");
-  await page.getByRole("button", { name: /New semi-structured mapping/ }).first().click();
+  // the header's create button; the filter chip beside it reads "Semi-structured <count>"
+  await page.getByRole("button", { name: "Semi-structured", exact: true }).click();
   await expect(page).toHaveURL(/\/dashboard\/mapper\/[0-9a-f-]{36}/, { timeout: 30_000 });
   const id = page.url().split("/").pop()!.split("?")[0];
   expect(before.has(id), "a new mapping was created").toBeFalsy();

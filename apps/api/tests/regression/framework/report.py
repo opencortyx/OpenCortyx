@@ -19,7 +19,7 @@ from xml.sax.saxutils import escape
 from tests.regression.framework.defects import CODE_REVIEW_FINDINGS, DEFECTS, OBSERVATIONS, triage
 
 GAPS = [
-    ("Live dependency outages", "PostgreSQL, NebulaGraph, Qdrant, Redis and vLLM were not taken down; failure handling is covered "
+    ("Live dependency outages", "PostgreSQL, NebulaGraph, Qdrant, Redis and the model server were not taken down; failure handling is covered "
      "with unreachable endpoints (connectors, models), worker SIGKILLs, and in-process fakes."),
     ("Unreadable folder during a sync", "A folder that disappears AFTER files were synced from it (D37) is covered by unit "
      "tests only: making a mounted folder vanish mid-run was not done against the live stack."),

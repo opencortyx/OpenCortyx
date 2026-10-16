@@ -28,6 +28,7 @@ from opencortyx.core.db import V2Session
 from opencortyx.core.substrate import NodeRepo
 from opencortyx.core.substrate import document as _node_document
 from opencortyx.core.inference.llm import complete
+from opencortyx.core.inference.registry import NoModelConfigured
 from opencortyx.stores.graph import NodeQuery
 from opencortyx.stores.graph.query import normalize_name
 from opencortyx.ingest.structured.catalog import _det_id, _parse_json, _s, _uedge
@@ -139,8 +140,8 @@ def _dictionary_records(terms, text: str) -> list:
     return out
 
 
-async def _ner_records(text: str) -> list:
-    """spaCy NER if installed; otherwise a guarded LLM fallback so NER 'works' without the dep."""
+async def _ner_records(text: str, model_spec: dict | None = None) -> list:
+    """spaCy NER if installed; otherwise the extraction's own registry model (`model_spec`)."""
     global _SPACY
     try:
         import spacy  # type: ignore
@@ -154,8 +155,10 @@ async def _ner_records(text: str) -> list:
                 'Extract named entities. Return ONLY JSON {"records":[{"name":"...","type":"PERSON|ORG|..."}]}'
                 "\n\n" + (text or "")[:4000],
                 system="You extract named entities. JSON only.", max_tokens=600,
-                json_mode=True, temperature=0.0)
+                json_mode=True, temperature=0.0, model_spec=model_spec)
             return _records(_parse_json(raw))
+        except NoModelConfigured:
+            raise                                    # the run must say what to connect, not find nothing
         except Exception:
             return []
 
@@ -250,7 +253,7 @@ async def _produce_parsed(mech: dict, ctx: dict, text: str, model_spec: dict | N
             return _parse_json(raw)
         return {"records": _keywords(text, int(ctx.get("top_n") or mech.get("top_n", 8)))}
     if ref == "unstructured.ner":
-        return {"records": await _ner_records(text)}
+        return {"records": await _ner_records(text, model_spec)}
     if ref == "unstructured.python":
         from opencortyx.ingest.extraction.pyextractor import run_python_extractor_async
         inputs = {**(ctx or {}), "text": text}

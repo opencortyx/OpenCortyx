@@ -161,10 +161,7 @@ export default function MapperHubPage() {
         </div>
       ) : !shown.length ? (
         <div className="text-center py-16 border border-dashed border-stone-300 rounded-xl bg-white">
-          <p className="text-sm text-stone-600 mb-3">No mappings match.</p>
-          <Button variant="primary" size="sm" icon={Plus} onClick={() => create("semistructured")}>
-            New semi-structured mapping
-          </Button>
+          <p className="text-sm text-stone-600">No mappings match.</p>
         </div>
       ) : (
         <div className="bg-white border border-stone-200 rounded-xl overflow-hidden">

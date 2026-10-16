@@ -371,10 +371,10 @@ export default function SettingsPage() {
             <div className="text-sm font-medium text-stone-600 bg-stone-50 border border-stone-200 rounded-lg px-3 py-2">{cfgMsg}</div>
           )}
 
-          {/* Compute: where generation runs and what this container may use. Neither is editable
-              from here — a GPU model server is a compose profile and a memory ceiling is a
-              container limit, both fixed before the process starts. They are shown because this is
-              the screen you are on when generation is failing or a worker is being killed. */}
+          {/* Compute: where generation goes and what this container may use. The model is chosen
+              on the Models page; the memory ceiling is a container limit fixed before the process
+              starts. Shown because this is the screen you are on when generation is failing or a
+              worker is being killed. */}
           <div className="pt-4 border-t border-stone-100">
             <h3 className="text-xs font-bold uppercase tracking-wider text-stone-400 mb-3 flex items-center gap-1.5">
               <Cpu size={12} /> Compute &amp; memory
@@ -382,21 +382,15 @@ export default function SettingsPage() {
             <div className="grid gap-3 md:grid-cols-2">
               <div className="bg-stone-50 border border-stone-100 rounded-lg px-3 py-2.5">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-stone-400">GPU model server</span>
-                  <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${
-                    cfgReadonly.gpu_model_server === "enabled"
-                      ? "bg-emerald-100 text-emerald-700"
-                      : "bg-stone-200 text-stone-600"}`}>
-                    {cfgReadonly.gpu_model_server ?? "unknown"}
-                  </span>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-stone-400">Generation model</span>
+                  <span className="text-[11px] font-mono text-stone-600 truncate">{String(cfgReadonly.llm_model ?? "—")}</span>
                 </div>
                 <div className="text-[11.5px] text-stone-500 mt-1.5">
                   Generation goes to <span className="font-mono">{String(cfgReadonly.generation_endpoint ?? "—")}</span>.
                 </div>
                 <div className="text-[11.5px] text-stone-500 mt-1.5">
-                  To change it, set <span className="font-mono">COMPOSE_PROFILES=gpu</span> (or clear it) in
-                  {" "}<span className="font-mono">.env</span> and restart the stack. An NVIDIA GPU is required;
-                  without one, point <span className="font-mono">LLM_BASE_URL</span> at a remote server instead.
+                  To change it, open <b>Models</b> and connect a model server (Ollama, LM Studio, a hosted
+                  API, ...) by its address.
                 </div>
               </div>
 

@@ -21,26 +21,16 @@ async def clear_default(db, workspace_id, role, keep_id=None):
 def provider_default_base(provider: str) -> str:
     """Base URL to discover against when the form left it blank.
 
-    Hosted providers have a well-known public endpoint. SELF-HOSTED ones (vLLM and any other
-    OpenAI-compatible server) do not — there is nothing to hardcode, because the endpoint is
-    wherever this deployment happens to run it. Their default is therefore the CONFIGURED one
-    (`LLM_BASE_URL`, falling back to `EMBED_BASE_URL` since one vLLM deployment commonly fronts both).
-
-    Without this, picking "vLLM" in the Add-model dialog and pressing Discover returned nothing
-    unless the user retyped a URL the deployment already knows — the one case where discovery
-    should be most automatic, since the server is ours.
+    Hosted providers have a well-known public endpoint. A server you run yourself (Ollama, LM Studio,
+    vLLM, ... — `openai_compatible`) has none: its address is whatever you type on the Models page,
+    so blank stays blank and discovery says it needs one.
     """
-    from opencortyx.core.config import SELF_HOSTED_PROVIDERS, settings
-    p = (provider or "").lower()
     hosted = {
         "openai": "https://api.openai.com/v1",
         "groq": "https://api.groq.com/openai/v1",
+        "huggingface": "https://router.huggingface.co/v1",
     }
-    if p in hosted:
-        return hosted[p]
-    if p in SELF_HOSTED_PROVIDERS:
-        return (settings.LLM_BASE_URL or settings.EMBED_BASE_URL or "").rstrip("/")
-    return ""
+    return hosted.get((provider or "").lower(), "")
 
 
 def model_cache_clear():

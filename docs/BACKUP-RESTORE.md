@@ -27,7 +27,7 @@ qdrant_data.tar.gz
 `restore` asks for confirmation, stops the stack, replaces all three stores with the backup and
 starts everything again. Set `OPENCORTYX_YES=1` to skip the prompt in scripts.
 
-If a service fails to come back after `backup` (a GPU container can fail to start under memory
+If a service fails to come back after `backup` (a container can fail to start under memory
 pressure), start the stack again with `docker compose start`; the backup itself is already written.
 
 Recommendations:

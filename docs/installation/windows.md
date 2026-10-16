@@ -16,22 +16,11 @@ Tested on Windows 11 with Docker Desktop (WSL 2 backend).
 
    Then run `wsl --shutdown` and start Docker Desktop again.
 
-## 2. Optional: NVIDIA GPU
+## 2. Optional: a local model server
 
-To run the language model locally on your GPU:
-
-1. Install the current [NVIDIA driver](https://www.nvidia.com/Download/index.aspx) for Windows. It
-   includes WSL support; do not install a driver inside WSL.
-2. Check that containers can see the GPU:
-
-   ```powershell
-   docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
-   ```
-
-The installer detects the GPU and enables the local vLLM model server. On a GPU with 4 GB of memory
-the default 1.5B model fits; the CLI sizes vLLM's memory share to what is free when it starts.
-
-Without a GPU, see [Models](../models.md) to use Ollama, LM Studio or a hosted API.
+To run the language model on this PC, install [Ollama](https://ollama.com/download) or
+[LM Studio](https://lmstudio.ai/) and connect it on the **Models** page after installing (see
+[Models](../models.md)). A hosted API or Hugging Face Inference needs nothing installed.
 
 ## 3. Install OpenCortyx
 

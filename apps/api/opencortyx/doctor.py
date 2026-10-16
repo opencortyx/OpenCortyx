@@ -57,16 +57,11 @@ def check_redis() -> str:
     return OK
 
 
-async def check_llm() -> str:
-    # The generation model the Models page selected; the env values only seed an empty registry.
-    from opencortyx.core.inference.registry import active_generation_spec
-    gen = await active_generation_spec() or {
-        "provider": settings.LLM_PROVIDER, "base_url": settings.LLM_BASE_URL,
-        "model_id": settings.LLM_MODEL, "api_key": settings.LLM_API_KEY}
+async def _probe_generation(label: str, gen: dict) -> str:
     base = (gen.get("base_url") or "").rstrip("/")
     provider, model, key = gen.get("provider"), gen.get("model_id"), gen.get("api_key")
     if not base:
-        _line(OK if key else FAIL, "llm", f"{provider} (hosted, key {'set' if key else 'MISSING'})")
+        _line(OK if key else FAIL, "llm", f"{label}: {provider} (hosted, key {'set' if key else 'MISSING'})")
         return OK if key else FAIL
     headers = {"Authorization": f"Bearer {key}"} if key else {}
     try:
@@ -75,13 +70,38 @@ async def check_llm() -> str:
             r.raise_for_status()
             served = [m.get("id") for m in (r.json().get("data") or [])]
     except Exception as e:  # noqa: BLE001
-        _line(FAIL, "llm", f"{provider} at {base} unreachable: {str(e)[:160]}")
+        _line(FAIL, "llm", f"{label}: {provider} at {base} unreachable: {str(e)[:160]}")
         return FAIL
     if model not in served:
-        _line(FAIL, "llm", f"model '{model}' not served by {base} (serves: {served})")
+        _line(FAIL, "llm", f"{label}: model '{model}' not served by {base} (serves: {served})")
         return FAIL
-    _line(OK, "llm", f"{provider} serving '{model}'")
+    _line(OK, "llm", f"{label}: {provider} serving '{model}'")
     return OK
+
+
+async def check_llm() -> str:
+    """Each workspace's generation model, from its Model Registry. There is no deployment-wide one."""
+    from sqlalchemy import text
+    from opencortyx.core.config import V2_SCHEMA
+    from opencortyx.core.db import V2Session
+    from opencortyx.core.inference.registry import resolve_model
+    async with V2Session() as db:
+        workspaces = (await db.execute(text(
+            f"SELECT workspace_id, name FROM {V2_SCHEMA}.workspace ORDER BY created_at"))).all()
+    if not workspaces:
+        _line(WARN, "llm", "no workspace yet: create the admin at the dashboard, then connect a model "
+                           "on the Models page")
+        return WARN
+    results = []
+    for workspace_id, name in workspaces:
+        label = f"workspace {name or str(workspace_id)[:8]}"
+        gen = await resolve_model(workspace_id, "generation")
+        if not gen:
+            _line(WARN, "llm", f"{label}: no generation model - connect one on the Models page")
+            results.append(WARN)
+            continue
+        results.append(await _probe_generation(label, gen))
+    return FAIL if FAIL in results else (WARN if WARN in results else OK)
 
 
 async def check_embedding() -> str:
@@ -95,7 +115,8 @@ async def check_embedding() -> str:
     if dim != settings.EMBED_DIMENSIONS:
         _line(FAIL, "embedding", f"model returns {dim} dims, EMBED_DIMENSIONS={settings.EMBED_DIMENSIONS}")
         return FAIL
-    _line(OK, "embedding", f"{settings.EMBED_MODEL} ({dim} dims)")
+    from opencortyx.core.inference.embedding import active_embedding_spec
+    _line(OK, "embedding", f"{(await active_embedding_spec() or {}).get('model_id')} ({dim} dims)")
     return OK
 
 
@@ -103,7 +124,7 @@ def check_reranker() -> str:
     try:
         import sentence_transformers  # noqa: F401
     except Exception:  # noqa: BLE001
-        _line(WARN, "reranker", "not installed (INSTALL_RERANK=0); LLM reranker is used instead")
+        _line(WARN, "reranker", "not installed (INSTALL_RERANK=0); retrieval ranks without it")
         return WARN
     _line(OK, "reranker", "sentence-transformers available")
     return OK

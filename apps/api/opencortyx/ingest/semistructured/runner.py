@@ -608,7 +608,9 @@ async def run_semistructured(workspace_id: uuid.UUID, data, *, pipeline_stages: 
                 continue
             structure = ss.build_structure(rec, text_min_chars=cfg.get("auto_text_min_chars"),
                                            embed_small=bool(cfg.get("auto_embed_small")))
-            structure = await ss.scout_structure([rec], structure)      # one LLM refine, best-effort
+            from opencortyx.core.inference.registry import resolve_model
+            structure = await ss.scout_structure(                         # one optional LLM refine
+                [rec], structure, await resolve_model(workspace_id, "utility"))
             ss.apply_auto_rules(structure, skip_nodes=cfg.get("auto_skip_nodes"),
                                 skip_attrs=cfg.get("auto_skip_attrs"))   # auto-mode exclusion rules
             ss.apply_rules(structure, rules)                             # pattern rules (P23)

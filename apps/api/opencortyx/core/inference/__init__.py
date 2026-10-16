@@ -1,6 +1,6 @@
 """Model access: the providers, the registry that resolves them, and keeping them resident.
 
-    llm.py        complete() / stream_complete() — vLLM, OpenAI-compatible, Anthropic, mock
+    llm.py        complete() / stream_complete() — OpenAI-compatible servers, Anthropic, HuggingFace
     embedding.py  embed() / embed_batch() / sparse_embed(), and the in-process model caches
                   (fastembed ONNX, SentenceTransformers, the rerank cross-encoder)
     registry.py   resolve a model REFERENCE (a registered Model row, or nothing) to a concrete

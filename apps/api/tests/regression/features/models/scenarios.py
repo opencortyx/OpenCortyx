@@ -4,7 +4,7 @@ from __future__ import annotations
 from tests.regression.framework.matrix import Scenario
 
 MODEL_ROLES = ("generation", "embedding", "rerank", "bogus")
-MODEL_PROVIDERS = ("vllm", "openai", "fastembed", "bogus")
+MODEL_PROVIDERS = ("openai_compatible", "openai", "fastembed", "bogus")
 
 
 

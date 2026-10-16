@@ -8,11 +8,11 @@ domain you control.
 | Model backend | vCPU | Memory | Disk |
 |---|---|---|---|
 | Hosted API (OpenAI, Anthropic, Azure, …) | 4 | 16 GB | 50 GB |
-| Local vLLM on an NVIDIA GPU | 8 | 32 GB | 100 GB |
+| Your own model server (vLLM, Ollama) on the same VM | 8 | 32 GB, plus the GPU the model needs | 100 GB |
 
 ## 2. Install Docker
 
-Follow [linux.md](linux.md) steps 1-2 (and the GPU step if you use vLLM).
+Follow [linux.md](linux.md) step 1.
 
 ## 3. Point DNS at the server
 

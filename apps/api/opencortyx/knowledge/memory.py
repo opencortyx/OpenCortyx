@@ -104,8 +104,10 @@ async def _distill(workspace_id, turns) -> dict:
         return {}
     prompt = (await _summarizer_prompt(workspace_id)).replace("{transcript}", transcript)
     try:
+        from opencortyx.core.inference.registry import resolve_model
         raw = await complete(prompt, system="You distill AI sessions into durable memory. Return only JSON.",
-                             max_tokens=700, temperature=0.1)
+                             max_tokens=700, temperature=0.1,
+                             model_spec=await resolve_model(workspace_id, "utility"))
         data = _parse_json(raw)
     except Exception:
         data = {}

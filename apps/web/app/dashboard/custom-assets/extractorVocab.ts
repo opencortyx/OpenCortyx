@@ -1,4 +1,4 @@
-// Vocabulary shared by the Custom Metadata screens. Moved out of page.tsx unchanged when the UI was
+// Vocabulary shared by the Custom Extractors screens. Moved out of page.tsx unchanged when the UI was
 // split from its logic (useExtractorDraft.ts) — `test_mechanism_vocabulary.py` reads
 // DEPENDENT_MECHANISMS from THIS file.
 import {

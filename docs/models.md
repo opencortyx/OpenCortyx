@@ -2,78 +2,99 @@
 
 OpenCortyx uses a model for each of these roles:
 
-- **Generation** (answers, planning), **Extraction** and **Utility**: any OpenAI-compatible endpoint
-  or hosted provider.
-- **Embedding**: `fastembed` inside the API and workers, on CPU. No GPU or server needed.
-- **Rerank**: a local cross-encoder, or the generation model when the cross-encoder is not installed.
+- **Generation** (answers, planning), **Extraction** and **Utility**: a model server you connect.
+  Extraction and Utility use the Generation model unless you give them their own.
+- **Embedding**: `fastembed` inside the API and workers, on CPU. No server needed.
+- **Rerank** (optional): a cross-encoder inside the API, on CPU. Without one, retrieval ranks by its
+  other signals.
 
-Models are chosen in the dashboard under **Models**, not in `.env`. For each role, **Add** a model
-(provider, Model ID, Base URL, API key) and tick **Make default**; the default is what that role
-uses everywhere, and API keys are stored encrypted. **Test** checks that the server answers, and
-the **Model server** panel shows which names the server actually serves. `bin/opencortyx doctor`
-checks the default generation and embedding models from the command line.
+Models are chosen in the dashboard under **Models**, and nowhere else: not in `.env`, and OpenCortyx
+does not ship or start a model server of its own. For each role, **Add** a model (provider, Model ID,
+server address, API key) and tick **Make default**; the default is what that role uses everywhere,
+and API keys are stored encrypted. **Test** checks that the server answers, and the **Model server**
+panel shows which names the server actually serves. `bin/opencortyx doctor` checks each workspace's
+generation model from the command line.
 
-A new workspace starts with built-in rows for every role. They point at the local vLLM server, so
-without an NVIDIA GPU, edit the generation, extraction and utility rows first.
+A new workspace starts with the embedding and rerank models (they run inside OpenCortyx) and **no
+generation model**. Until you add one, the AI Assistant and extraction say "No generation model is
+connected" instead of answering.
 
-## Local GPU with vLLM
-
-Requires an NVIDIA GPU and the NVIDIA container toolkit (on Windows, Docker Desktop with the WSL2
-backend). `bin/opencortyx init` enables the vLLM server when it detects a GPU, by setting
-`COMPOSE_PROFILES=gpu` in `.env`. The built-in rows already point at it:
-
-| Field | Value |
-|---|---|
-| Provider | vLLM |
-| Base URL | `http://vllm:8000/v1` |
-| Model ID | `opencortyx-llm` (the name vLLM serves the model under) |
-
-vLLM loads one model, chosen when the server starts. To serve a different one, set these in `.env`
-and run `bin/opencortyx up`:
-
-- `VLLM_MODEL`: the Hugging Face repository to download (default `Qwen/Qwen2.5-1.5B-Instruct-AWQ`).
-  About 1.5B parameters (4-bit) fits 4 GB, 7-8B (4-bit) fits 8-12 GB. Set `HUGGING_FACE_HUB_TOKEN`
-  for gated models.
-- `VLLM_GPU_FRACTION`: GPU memory vLLM may reserve. `bin/opencortyx up` sizes it from free memory.
-- `LLM_MAX_MODEL_LEN`: the context window (default 8192). Larger values use more GPU memory.
-
-The first start downloads the weights into the `model_cache` volume.
-
-## Ollama, LM Studio or another local server
+## Ollama, LM Studio, vLLM or another server you run
 
 | Field | Value |
 |---|---|
-| Provider | OpenAI-compatible |
-| Base URL | `http://host.docker.internal:11434/v1` (LM Studio: port `1234`) |
-| Model ID | the name from `ollama list` |
+| Provider | OpenAI-compatible server |
+| Server address | `http://host.docker.internal:11434/v1` (Ollama) · `:1234/v1` (LM Studio) · your vLLM's `/v1` |
+| Model ID | the name the server lists (`ollama list`, or pick it from the list in the form) |
 
-The server must listen on an address reachable from containers. With Docker Desktop (macOS,
-Windows) the default works; on Linux set `OLLAMA_HOST=0.0.0.0`. Keep the `/v1` suffix.
+Inside Docker, a server on the same computer is `host.docker.internal`, not `localhost`. The server
+must listen on an address reachable from containers: with Docker Desktop (macOS, Windows) the default
+works; on Linux set `OLLAMA_HOST=0.0.0.0`. Keep the `/v1` suffix.
 
 Ollama's default context window (2048 or 4096 tokens, depending on the version) is smaller than the
-8192 tokens OpenCortyx sends, and Ollama cuts off longer prompts without an error. Unlike vLLM,
-Ollama does not report its window, so OpenCortyx cannot detect this. Either raise Ollama's window
-with `OLLAMA_CONTEXT_LENGTH=8192` (newer versions), or create a model with it built in (any
-version):
+8192 tokens OpenCortyx sends, and Ollama cuts off longer prompts without an error. Ollama does not
+report its window, so OpenCortyx cannot detect this. Either raise Ollama's window with
+`OLLAMA_CONTEXT_LENGTH=8192` (newer versions), or create a model with it built in (any version):
 
 ```bash
 printf 'FROM llama3.2\nPARAMETER num_ctx 8192\n' > Modelfile
 ollama create llama3.2-8k -f Modelfile     # then use llama3.2-8k as the Model ID
 ```
 
-## Hosted providers
+## Download a model from Hugging Face
 
-Choose OpenAI, Anthropic, Groq or HuggingFace Inference as the provider, enter the API key and the
-Model ID (for example `gpt-4o-mini`), and leave Base URL empty. For Together, Azure and other
-OpenAI-compatible APIs, choose OpenAI-compatible and enter the provider's Base URL.
+A model that is not on this machine yet can be downloaded while you add it: on the **Models** page,
+press **Add**, pick the provider, type the Model ID, and press **Download** under it. When it is
+done, **Save** the model as usual. This works for every role: embedders and rerankers come from
+fastembed (see [Embeddings](#embeddings) and [Reranker](#reranker)). For generation, extraction and
+utility, choose where the model runs with the provider:
+
+| | Ollama | OpenCortyx (CPU) |
+|---|---|---|
+| Speed | Fast; uses your GPU when it has one | Slow: a 0.5B model writes a few words a second |
+| Provider | OpenAI-compatible server, with Ollama's address | Hugging Face model in OpenCortyx (CPU) |
+| Install | [Ollama](https://ollama.com/download) on this computer | Nothing |
+| Model | A GGUF repository, e.g. `Qwen/Qwen2.5-1.5B-Instruct-GGUF:Q4_K_M`, or an Ollama name such as `qwen2.5:1.5b` | A text-generation repository with safetensors weights, e.g. `Qwen/Qwen2.5-0.5B-Instruct` |
+| Stored in | Ollama's own model folder | The `model_cache` Docker volume |
+
+**Ollama** pulls the GGUF files from Hugging Face itself (`hf.co/<repository>`); the button reads
+**Download into Ollama** when the server does not have the Model ID yet. Keep the form open until
+it finishes; if it stops, download again and it resumes.
+
+**OpenCortyx (CPU)** downloads the weights into the model cache that the API and the workers share,
+and runs them with `transformers`. The form shows the download size and the memory the model needs.
+Each service that generates (the API for answers, the workers for extraction) loads
+its own copy, and the API's memory limit is 3 GB by default (`API_MEM_LIMIT` in `.env`), so keep to
+small models. Gated models need a Hugging Face token with access; it is used for that download only
+and not stored. Downloaded models are listed above the Model ID; **Delete files** frees the disk.
+
+## Hugging Face Inference
+
+Choose **HuggingFace Inference**, enter a Hugging Face access token (with the *Make calls to Inference
+Providers* permission), and pick a Model ID from the list, for example `Qwen/Qwen3-4B-Instruct-2507`.
+Requests go through Hugging Face's OpenAI-compatible router (`https://router.huggingface.co/v1`);
+leave the address empty. To use your own Text Generation Inference server instead, enter its `/v1`
+address.
+
+## Other hosted providers
+
+Choose OpenAI, Anthropic or Groq as the provider, enter the API key and the Model ID (for example
+`gpt-4o-mini`), and leave the address empty. For Together, Azure and other OpenAI-compatible APIs,
+choose OpenAI-compatible server and enter the provider's address.
 
 ## Embeddings
 
-The default is `nomic-ai/nomic-embed-text-v1.5` on `fastembed` (768 dimensions). Changing the
-embedding model requires re-indexing existing data, and a model with a different dimension also
-needs `EMBED_DIMENSIONS` in `.env` to match.
+A new workspace uses `nomic-ai/nomic-embed-text-v1.5` on `fastembed` (768 dimensions). To use
+another, **Add** under Embedding: the provider is fastembed, and the list shows every model it can
+run with its vector size; pick one and press **Download**. Changing the embedding model requires
+re-indexing existing data, and a model with a different vector size also needs `EMBED_DIMENSIONS`
+in `.env` to match (the form refuses one that does not).
 
 ## Reranker
 
-A local cross-encoder reranker improves retrieval ranking. It adds about 200 MB to the API image,
-so it is built in only with `INSTALL_RERANK=1` in `.env` and `bin/opencortyx up --build`.
+A reranker reads the question and each retrieved passage together and improves the order of the
+results. **Add** under Reranker, keep the provider fastembed, pick a model (for example
+`Xenova/ms-marco-MiniLM-L-6-v2`, 80 MB) and press **Download**, then make it the default. Retrieval
+uses the workspace's default reranker from then on. The seeded `BAAI/bge-reranker-v2-m3` row runs on
+sentence-transformers, which the API image includes only when built with `INSTALL_RERANK=1` in
+`.env` and `bin/opencortyx up --build`; without it that row is skipped.

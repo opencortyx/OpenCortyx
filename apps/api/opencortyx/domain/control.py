@@ -209,16 +209,16 @@ class Ingestion(V2Base):
 class Model(V2Base):
     """A registered model — bring-your-own for generation / embedding / reranking. Used anywhere a
     model is needed (built-in & custom extraction prompts, retrieval, rerank). `api_key` is encrypted
-    at rest via core.security.secrets. One `is_default` per role is the org-wide fallback for that role."""
+    at rest via core.security.secrets. One `is_default` per role is what the workspace uses for that role."""
     __tablename__ = "model"
     __table_args__ = ({"schema": V2_SCHEMA},)
     id: Mapped[uuid.UUID] = _pk()
     workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     name: Mapped[str] = mapped_column(String(160), nullable=False)            # friendly label
     role: Mapped[str] = mapped_column(String(20), default="generation")       # generation | embedding | rerank
-    provider: Mapped[str] = mapped_column(String(40), default="vllm")        # vllm|openai|openai_compatible|anthropic|huggingface|fastembed|tei|…
-    model_id: Mapped[str] = mapped_column(String(200), nullable=False)       # what the API is CALLED with: vLLM's --served-model-name, or gpt-4o / claude-… / a HF repo
-    base_url: Mapped[str | None] = mapped_column(String(300))                # provider endpoint (vLLM / OpenAI-compatible / HF); NULL = resolve from provider
+    provider: Mapped[str] = mapped_column(String(40), default="openai_compatible")  # openai_compatible|openai|anthropic|huggingface|groq|fastembed|sentence-transformers
+    model_id: Mapped[str] = mapped_column(String(200), nullable=False)       # what the API is CALLED with: the server's model name, or gpt-4o / claude-… / a HF repo
+    base_url: Mapped[str | None] = mapped_column(String(300))                # the server address (required for openai_compatible); NULL = the hosted provider's own
     api_key: Mapped[str | None] = mapped_column(Text)                         # encrypted secret (enc: prefix)
     params: Mapped[dict] = mapped_column(JSONB, default=dict)                 # {temperature, dimensions, …}
     is_default: Mapped[bool] = mapped_column(default=False)                   # the org default for its role

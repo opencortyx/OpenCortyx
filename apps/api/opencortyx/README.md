@@ -99,9 +99,9 @@ uvicorn opencortyx.main:app --host 0.0.0.0 --port 8000
 # Worker (note the v2 Celery app)
 celery -A opencortyx.core.worker.celery_app worker -Q graphrag --loglevel=info
 ```
-Needs PostgreSQL, NebulaGraph, Qdrant and a reachable vLLM server (embeddings run in-process,
-else nodes store but retrieval always abstains). Cross-encoder rerank is optional
-(`pip install sentence-transformers`); without it the planner falls back to the LLM reranker.
+Needs PostgreSQL, NebulaGraph and Qdrant, plus a generation model connected on the Models page
+(any OpenAI-compatible server, e.g. Ollama, or a hosted API). Embeddings run in-process. Cross-encoder rerank is optional
+(`pip install sentence-transformers`); without it retrieval ranks by its other signals.
 
 ## Extend it (the contributor contract)
 - **Custom node/edge/entity type:** `POST /ontology/types` (or add to `ontology/`). No

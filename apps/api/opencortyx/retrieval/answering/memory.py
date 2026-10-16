@@ -51,6 +51,7 @@ async def contextualize(query: str, workspace_id: uuid.UUID, conv_id) -> str:
         return query
     convo = "\n".join(f"{r}: {_clean_turn(t)[:300]}" for r, t in hist)
     try:
+        from opencortyx.core.inference.registry import resolve_model
         out = await complete(
             f"Conversation so far:\n{convo}\n\nFollow-up question: {query}\n\n"
             "Rewrite the follow-up as a STANDALONE question by replacing every pronoun and "
@@ -58,7 +59,8 @@ async def contextualize(query: str, workspace_id: uuid.UUID, conv_id) -> str:
             "refers to. Change nothing else. If it is already standalone, repeat it verbatim. "
             "Reply with the question only.",
             system="You rewrite follow-up questions into self-contained ones.",
-            max_tokens=120, temperature=0.0)
+            max_tokens=120, temperature=0.0,
+            model_spec=await resolve_model(workspace_id, "utility"))
     except Exception:
         return query
     out = (out or "").strip().strip('"').split("\n")[0].strip()

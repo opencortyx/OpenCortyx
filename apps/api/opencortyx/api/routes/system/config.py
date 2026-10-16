@@ -2,7 +2,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 
 from opencortyx.api.schemas.system.config import ConfigUpdate
-from opencortyx.api.services.access.auth import materialize_for_mode
 from opencortyx.domain.control import AuditLog
 from opencortyx.core.security.auth import CurrentUser, require_admin, require_auth
 from opencortyx.core.db import V2Session
@@ -25,13 +24,14 @@ async def get_config(user: CurrentUser = Depends(require_auth)):
     from opencortyx.core.config import runtime as rc
     await rc.load()
     readonly = rc.readonly_snapshot()
-    # Which models run is chosen on the Models page, so report what the registry resolves — the env
-    # values are only the seed for a workspace with no rows yet.
+    # Which models run is the Model Registry's to say (the Models page); nothing else supplies one.
     from opencortyx.core.inference.registry import resolve_model
-    gen = await resolve_model(user.workspace_id, "generation")
-    emb = await resolve_model(user.workspace_id, "embedding")
-    readonly.update({"llm_model": gen.get("model_id"), "embed_model": emb.get("model_id"),
-                     "generation_endpoint": gen.get("base_url") or f"({gen.get('provider')} API)"})
+    gen = await resolve_model(user.workspace_id, "generation") or {}
+    emb = await resolve_model(user.workspace_id, "embedding") or {}
+    readonly.update({
+        "llm_model": gen.get("model_id") or "(none: add one on the Models page)",
+        "embed_model": emb.get("model_id") or "(none: add one on the Models page)",
+        "generation_endpoint": (gen.get("base_url") or f"({gen.get('provider')} API)") if gen else "(none)"})
     return {"tunable": {**rc.current(), **await _workspace_values(user.workspace_id)},
             "schema": rc.SCHEMA, "readonly": readonly}
 
@@ -55,9 +55,7 @@ async def update_config(spec: ConfigUpdate, user: CurrentUser = Depends(require_
         raise HTTPException(status_code=422, detail=f"Not saved — {exc}") from exc
     changed = rc.changes(before, updated, values.keys())
     changed.update({("workspace_name" if k == "name" else k): v for k, v in ws_changed.items()})
-    if "mode" in ws_changed:                   # switching mode → put that hierarchy on the graph
-        await materialize_for_mode(user.workspace_id, ws_changed["mode"]["to"])
-    elif "name" in ws_changed:                 # the central node was relabelled: show it now
+    if "mode" in ws_changed or "name" in ws_changed:   # the central node was retyped/relabelled: show it now
         from opencortyx.tasks.graph_tree import schedule_tree_index
         schedule_tree_index(str(user.workspace_id), now=True)
     updated = {**updated, **await _workspace_values(user.workspace_id)}

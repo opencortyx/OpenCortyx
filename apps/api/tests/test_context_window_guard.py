@@ -1,9 +1,10 @@
 """The context window is a hard wall, so the dispatcher must make every request fit.
 
-vLLM rejects an over-long prompt with a 400 instead of trimming it. Without a guard that means one
-oversized node extracts NOTHING — measured: a 200,000-character input against an 8,192-token window
-failed every extractor on that node. These tests pin the three properties that make the guard worth
-having: it fits, it keeps BOTH ends of the template, and it says so.
+A model server such as vLLM rejects an over-long prompt with a 400 instead of trimming it. Without
+a guard that means one oversized node extracts NOTHING — measured: a 200,000-character input
+against an 8,192-token window failed every extractor on that node. These tests pin the three
+properties that make the guard worth having: it fits, it keeps BOTH ends of the template, and it
+says so.
 """
 import asyncio
 
@@ -23,7 +24,7 @@ def _no_endpoint_probe(monkeypatch):
 
 def _fit(prompt, max_tokens=1200):
     return asyncio.run(
-        L._fit_to_window(prompt, max_tokens, "http://vllm:8000/v1", "opencortyx-llm", discover=True))
+        L._fit_to_window(prompt, max_tokens, "http://model-server:8000/v1", "test-model", discover=True))
 
 
 def test_short_prompt_is_untouched():

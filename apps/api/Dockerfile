@@ -40,7 +40,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     rm /tmp/requirements.txt /tmp/requirements.cpu.txt /tmp/torch.txt
 # torch/torchvision go first, from the CPU index, at the locked versions. Docling depends on torch,
 # and from PyPI that resolves to the CUDA build — gigabytes of NVIDIA libraries in an image that
-# never touches a GPU (inference runs in the vllm container). `==2.13.0` in requirements is then
+# never touches a GPU (text generation runs on a model server you connect). `==2.13.0` in requirements is then
 # already satisfied by `2.13.0+cpu`, so the second install leaves it alone.
 # The export also lists the CUDA build's own dependencies (nvidia-*, cuda-*, triton) as separate
 # lines marked `platform_system == "Linux"`, which every container is, so they are dropped: only

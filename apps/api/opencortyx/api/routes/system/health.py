@@ -10,16 +10,16 @@ router = APIRouter()
 
 
 def _model_server_name(provider: str | None) -> str:
-    """The check's name says which server it is: this deployment's may be vLLM, Ollama or a hosted
-    API behind the OpenAI protocol, and "Model server (vLLM)" misnamed every one but the first."""
+    """The check names the connection type: a server you run (Ollama, LM Studio, vLLM, ...) or a
+    hosted API, all of which may speak the OpenAI protocol."""
     prov = (provider or "").lower()
-    return "Model server (vLLM)" if prov == "vllm" else f"Model server ({prov or 'LLM'})"
+    return f"Model server ({prov or 'LLM'})"
 
 
 @router.get("/health")
 async def system_health(user: CurrentUser = Depends(require_auth)):
-    """Probe API, Postgres, the Celery worker, the vLLM model server (reachable + serving the model
-    ids this workspace actually requests) and run a live test embed. Each check returns status
+    """Probe API, Postgres, the Celery worker, the workspace's generation model server (reachable +
+    serving the model ids this workspace actually requests) and run a live test embed. Each check returns status
     (ok|warn|down), a human detail line, and a fix hint."""
     import time
 
@@ -164,16 +164,21 @@ async def system_health(user: CurrentUser = Depends(require_auth)):
         add("Worker (Celery)", "down", f"Cannot reach the broker: {e}",
             "Check that Redis (the broker) and the worker container are both running.")
 
-    # The model server checked is the one the Models page selected for generation — not whatever
-    # the environment says, which no longer decides where requests go.
-    from opencortyx.core.config import OPENAI_COMPATIBLE_PROVIDERS
+    # The model server checked is the one this workspace's Model Registry selected for generation;
+    # nothing else decides where requests go.
+    from opencortyx.core.config import OPENAI_COMPATIBLE_PROVIDERS, SELF_HOSTED_PROVIDERS
     from opencortyx.core.inference.registry import resolve_model
-    gen = await resolve_model(user.workspace_id, "generation")
+    gen = await resolve_model(user.workspace_id, "generation") or {}
     provider = str(gen.get("provider") or "").lower()
     base = (gen.get("base_url") or "").rstrip("/")
     _model_server_name_ = _model_server_name(provider)
-    if provider in OPENAI_COMPATIBLE_PROVIDERS:
-        if not base and provider in ("vllm", "openai_compatible"):
+    if not gen:
+        add("Model server", "down", "No generation model is connected to this workspace.",
+            "Add one on the Models page: a server you run (Ollama, LM Studio, vLLM, ... by its "
+            "address, e.g.  http://host.docker.internal:11434/v1  for Ollama on this computer) or a "
+            "hosted API with its key.")
+    elif provider in OPENAI_COMPATIBLE_PROVIDERS:
+        if not base and provider in SELF_HOSTED_PROVIDERS:
             add(_model_server_name_, "down",
                 f"The generation model uses '{provider}' but has no Base URL, so requests would go "
                 f"to the public OpenAI API and fail on auth.",
@@ -181,7 +186,7 @@ async def system_health(user: CurrentUser = Depends(require_auth)):
         elif base:
             want = set()
             for role in ("generation", "extraction", "utility"):
-                spec = gen if role == "generation" else await resolve_model(user.workspace_id, role)
+                spec = gen if role == "generation" else (await resolve_model(user.workspace_id, role) or {})
                 if (spec.get("base_url") or "").rstrip("/") == base and spec.get("model_id"):
                     want.add(spec["model_id"])
             try:
@@ -200,15 +205,14 @@ async def system_health(user: CurrentUser = Depends(require_auth)):
                     add(_model_server_name_, "warn",
                         f"Reachable at {base} and serving: {served_str}. But this workspace requests "
                         f"{', '.join(missing)}, which it does NOT serve - those calls return 404.",
-                        f"Set the Model ID on the Models page to  {sorted(served)[0]} , or restart "
-                        f"vLLM with  --served-model-name {missing[0]} .")
+                        f"Set the Model ID on the Models page to one it serves, e.g.  {sorted(served)[0]} .")
                 else:
                     add(_model_server_name_, "ok",
                         f"Reachable at {base} - serving: {served_str}.")
             except Exception as e:
                 add(_model_server_name_, "down", f"Not reachable at {base}: {e}",
-                    "Start it (  docker compose up -d vllm  ). A cold start downloads the weights "
-                    "and can take several minutes; check  docker compose logs -f vllm .")
+                    "Start your model server and check the address on the Models page. From inside "
+                    "Docker, a server on this computer is  host.docker.internal , not  localhost .")
 
     # 5 — Live test embed (exercises the real embedding path end-to-end)
     try:
@@ -220,13 +224,12 @@ async def system_health(user: CurrentUser = Depends(require_auth)):
             add("Embedding", "ok", f"Generated a {dim}-dim vector in {int((time.time() - t1) * 1000)} ms.")
         else:
             add("Embedding", "down", "The embedding call returned an empty vector.",
-                "Confirm the embedding model is pulled and there is free GPU/CPU memory.")
+                "Check the embedding model on the Models page and that there is free memory.")
     except Exception as e:
         msg = str(e)
         oom = "memory" in msg.lower() or "oom" in msg.lower()
         add("Embedding", "down", f"Embedding failed: {msg}",
-            ("Looks like an out-of-memory error - close other GPU apps, or lower VLLM_GPU_FRACTION "
-             "so the embedder is not competing with the pinned generation model."
+            ("Looks like an out-of-memory error - close other apps or give Docker more memory."
              if oom else
              "Check the embedding model on the Models page; with an HTTP embedder, check its Base "
              "URL is reachable."))

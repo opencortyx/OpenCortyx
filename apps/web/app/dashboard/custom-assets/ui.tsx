@@ -1,6 +1,6 @@
 "use client";
 
-// Small building blocks shared by the Custom Metadata screens. Presentation only.
+// Small building blocks shared by the Custom Extractors screens. Presentation only.
 import type { ReactNode } from "react";
 
 export const LANE = {

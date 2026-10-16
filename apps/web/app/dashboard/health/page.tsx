@@ -28,7 +28,7 @@ function iconFor(name: string) {
   const n = name.toLowerCase();
   if (n.includes("postgres") || n.includes("database")) return Database;
   if (n.includes("worker") || n.includes("celery")) return Boxes;
-  if (n.includes("vllm") || n.includes("model server") || n.includes("embed")) return Cpu;
+  if (n.includes("model server") || n.includes("embed")) return Cpu;
   if (n.includes("api")) return Server;
   return HeartPulse;
 }

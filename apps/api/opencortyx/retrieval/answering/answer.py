@@ -11,7 +11,7 @@ from opencortyx.retrieval.answering import trust
 from opencortyx.retrieval.answering import memory as _mem
 from opencortyx.core.inference.llm import complete, stream_complete
 from opencortyx.core.config import runtime as rc
-from opencortyx.core.inference.registry import resolve_model
+from opencortyx.core.inference.registry import NoModelConfigured, resolve_model
 from opencortyx.capabilities.modules.trust import score_relevance
 from opencortyx.domain.control import ExtractionTemplate
 from opencortyx.core.db import V2Session
@@ -200,8 +200,8 @@ def _crag_rejects(trust_score: float, threshold: float, pkg: dict) -> bool:
       * retrieval's OWN measured confidence — `pkg["confidence"]` is max(cross-encoder, cosine) over
         the kept nodes, the same number the retrieval-side abstain gate already cleared.
 
-    The judge is the `utility` model — on a single-GPU install that is the same pinned vLLM model
-    as generation, and on a constrained one it is deliberately small. A 1B model returning a binary
+    The judge is the `utility` model — often the same model as generation (it is used when no
+    utility model is registered), and on a constrained one it is deliberately small. A 1B model returning a binary
     YES/NO must not overrule a numeric relevance the retrieval stack measured — the same rule
     `trust._relevance` applies to the reranker: a weak secondary opinion may PROMOTE, never bury.
     Measured: 14 of 47 end-to-end failures abstained on contexts verified complete.
@@ -382,8 +382,10 @@ async def _run_pipeline(query: str, ctx: RetrieveContext, stream: bool):
             parts.append(await complete(ans_prompt, system=_ANS_SYS, max_tokens=1000,
                                         temperature=0.1, model_spec=gen_spec))
     except Exception as e:
-        yield _abstain([], error=str(e), citations=pkg["citations"],
-                       confidence=pkg["confidence"])
+        # Not a judgement on the evidence: the answer could not be generated. `model_missing` lets
+        # the caller say "connect a model" instead of "not enough information".
+        yield _abstain([], error=str(e), model_missing=isinstance(e, NoModelConfigured),
+                       citations=pkg["citations"], confidence=pkg["confidence"])
         return
 
     _raw = "".join(parts)

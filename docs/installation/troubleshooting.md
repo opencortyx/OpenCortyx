@@ -5,7 +5,7 @@ Start with:
 ```bash
 opencortyx doctor
 opencortyx status
-opencortyx logs <service>     # api, worker, extraction-worker, web, mcp, vllm, postgres
+opencortyx logs <service>     # api, worker, extraction-worker, web, mcp, postgres
 ```
 
 ## Installation
@@ -24,11 +24,10 @@ opencortyx logs <service>     # api, worker, extraction-worker, web, mcp, vllm, 
 | Symptom | Fix |
 |---|---|
 | `doctor`: model `…` not served | The generation model's Model ID on the **Models** page must match a name the server serves (the **Model server** panel lists them). For Ollama run `ollama list` |
-| `doctor`: LLM unreachable, local Ollama | Linux: Ollama must listen on `0.0.0.0` (see [linux.md](linux.md)). All platforms: check the model's Base URL on the **Models** page ends with `/v1` |
-| vLLM restarts with "Free memory on device … is less than desired GPU memory utilization" | Another program holds GPU memory. Close it and run `opencortyx up` (the CLI re-measures free memory), or set `VLLM_GPU_FRACTION` and `OPENCORTYX_GPU_FRACTION_FIXED=1` |
-| vLLM fails with `nvidia-container-cli: … ldconfig terminated` | A transient GPU runtime error; run `opencortyx up` again. If it repeats, restart Docker |
-| Log shows `LLM_PROVIDER=ollama is no longer supported` | On the **Models** page, set the provider to OpenAI-compatible and keep the Base URL pointing at Ollama |
-| With Ollama, long documents extract poorly or answers ignore part of the context | Ollama's context window is smaller than the 8192 tokens OpenCortyx sends and it drops the rest of the prompt. Raise it to 8192 (see [models.md](../models.md#ollama-lm-studio-or-another-local-server)) |
+| `doctor` or the AI Assistant: no generation model is connected | Add one on the **Models** page and tick **Make default**. A new workspace starts without one |
+| `doctor`: LLM unreachable, local Ollama | Linux: Ollama must listen on `0.0.0.0` (see [linux.md](linux.md)). All platforms: the server address on the **Models** page uses `host.docker.internal`, not `localhost`, and ends with `/v1` |
+| A model row still points at `http://vllm:8000/v1` | The bundled vLLM server was removed; upgrading deletes those rows. Add the model server you use on the **Models** page |
+| With Ollama, long documents extract poorly or answers ignore part of the context | Ollama's context window is smaller than the 8192 tokens OpenCortyx sends and it drops the rest of the prompt. Raise it to 8192 (see [models.md](../models.md#ollama-lm-studio-vllm-or-another-server-you-run)) |
 | Answers say there is not enough information | Ingestion or extraction may still be running (see **Runs** in the dashboard), or the question is outside your data |
 
 ## Memory

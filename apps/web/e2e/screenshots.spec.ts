@@ -42,7 +42,7 @@ const PREPARE: Record<string, (p: Page) => Promise<unknown>> = {
     await p.getByText(/Running case/).waitFor({ timeout: 15_000 });
     await p.getByText(/Running case/).waitFor({ state: "detached", timeout: 600_000 });
   },
-  "custom-metadata": (p) => p.getByRole("tab", { name: /Built-in/ }).click({ timeout: 15_000 }),
+  "custom-extractors": (p) => p.getByRole("tab", { name: /Built-in/ }).click({ timeout: 15_000 }),
 };
 
 for (const page of DASHBOARD_PAGES) {

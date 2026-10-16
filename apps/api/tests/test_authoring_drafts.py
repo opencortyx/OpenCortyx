@@ -1,7 +1,7 @@
 """Drafting: the sample, the three drafters, and the promises the API makes about a draft.
 
 These run offline. Every model call goes through `authoring.llm.ask_json`, which is monkeypatched
-here — partly so the suite does not need vLLM, but mostly because the interesting cases are the
+here — partly so the suite does not need a model server, but mostly because the interesting cases are the
 ones where the model is WRONG: unreachable, unparseable, or confidently naming a type that cannot
 exist. Those are the paths that decide whether a bad answer becomes a bad extractor or a warning,
 and they cannot be provoked by a model that is behaving.
@@ -54,7 +54,7 @@ def _json_sample(records: list, name: str = "contracts.json") -> Sample:
 #: Every name `ask_json` is reachable under. The drafters do `from ...llm import ask_json`, which
 #: binds the function into their own module at import — so patching only `authoring.llm.ask_json`
 #: patches a name nobody reads. That mistake does not fail loudly here: this suite runs inside the
-#: api container, the real call reaches vLLM, and the test passes or fails on what a live model
+#: api container, the real call reaches the model server, and the test passes or fails on what a live model
 #: happened to say. Patch every binding, or the isolation is imaginary.
 _ASK_JSON = ("opencortyx.drafting.llm.ask_json",
              "opencortyx.drafting.drafters.mapping.ask_json",

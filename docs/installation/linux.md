@@ -15,26 +15,7 @@ docker compose version
 
 For distribution packages, follow [Install Docker Engine](https://docs.docker.com/engine/install/).
 
-## 2. Optional: NVIDIA GPU
-
-1. Install the NVIDIA driver for your distribution and confirm `nvidia-smi` works.
-2. Install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html),
-   then register it with Docker:
-
-   ```bash
-   sudo nvidia-ctk runtime configure --runtime=docker
-   sudo systemctl restart docker
-   ```
-
-3. Check that containers can see the GPU:
-
-   ```bash
-   docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
-   ```
-
-The installer detects the GPU and enables the local vLLM model server.
-
-## 3. Optional: Ollama on the host
+## 2. Optional: Ollama on the host
 
 Containers reach the host through Docker's bridge, not `127.0.0.1`, so Ollama must listen on all
 interfaces:
@@ -50,7 +31,7 @@ ollama pull llama3.2
 
 Keep port 11434 closed in your firewall to anything but local containers.
 
-## 4. Install OpenCortyx
+## 3. Install OpenCortyx
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/opencortyx/OpenCortyx/main/install.sh | bash

@@ -985,8 +985,10 @@ async def seed_domain(workspace_id: uuid.UUID, domain: str, n_tables: int = 6, c
         '"columns":[{"name":"col","type":"TEXT|INTEGER|DECIMAL|DATE|BOOLEAN","primary_key":false,'
         '"references_table":null,"references_column":null}]}]}')
     try:
+        from opencortyx.core.inference.registry import resolve_model
         raw = await complete(prompt, system="You are a senior data architect. JSON only.",
-                             max_tokens=3000, json_mode=True, temperature=0.3)
+                             max_tokens=3000, json_mode=True, temperature=0.3,
+                             model_spec=await resolve_model(workspace_id, "generation"))
     except Exception as e:
         return {"status": "error", "error": str(e)}
     data = _parse_json(raw) or {}

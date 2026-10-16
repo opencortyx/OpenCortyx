@@ -8,6 +8,9 @@ x-logging: &logging
     max-size: "10m"
     max-file: "3"
 
+# Built (and pulled) by the `api` service only. The other services run the same image with
+# `pull_policy: never`: giving each its own `build:` made `up --build` build it five times at once,
+# and the copies then failed to export under the one tag ("image ... already exists").
 x-api-build: &api-build
   context: ./apps/api
   args:
@@ -31,15 +34,9 @@ x-api-env: &api-env
   NEBULA_PASSWORD: ${NEBULA_PASSWORD:-nebula}
   NEBULA_SPACE: ${NEBULA_SPACE:-opencortyx}
   CORS_ORIGINS: '["${PUBLIC_WEB_URL:-http://localhost:3000}"]'
-  LLM_PROVIDER: ${LLM_PROVIDER:-vllm}
-  LLM_BASE_URL: ${LLM_BASE_URL:-http://vllm:8000/v1}
-  LLM_API_KEY: ${LLM_API_KEY:-}
-  # With the gpu profile this is also vLLM's --served-model-name.
-  LLM_MODEL: ${LLM_MODEL:-opencortyx-llm}
-  LLM_MODEL_WEIGHTS: ${VLLM_MODEL:-Qwen/Qwen2.5-1.5B-Instruct-AWQ}
+  # Which models run is set on the Models page (the Model Registry), not here. This is only the
+  # context window assumed when a model server does not report its own.
   LLM_MAX_MODEL_LEN: ${LLM_MAX_MODEL_LEN:-8192}
-  EMBED_PROVIDER: ${EMBED_PROVIDER:-fastembed}
-  EMBED_MODEL: ${EMBED_MODEL:-nomic-ai/nomic-embed-text-v1.5}
   EMBED_DIMENSIONS: ${EMBED_DIMENSIONS:-768}
   RATELIMIT_HEAVY_PER_MIN: ${RATELIMIT_HEAVY_PER_MIN:-30}
   GROUNDING_EMBED_BATCH: ${GROUNDING_EMBED_BATCH:-4}
@@ -213,8 +210,8 @@ services:
   # The graph step issues that registration (the adapter's own bootstrap, not a copy of the
   # statement here) and then waits for storage itself. Waiting on storaged deadlocked first installs.
   setup:
-    build: *api-build
     image: *api-image
+    pull_policy: never        # the image `api` builds or pulls
     restart: "no"
     logging: *logging
     mem_limit: ${SETUP_MEM_LIMIT:-768m}
@@ -258,8 +255,8 @@ services:
       - "host.docker.internal:host-gateway"
 
   worker:
-    build: *api-build
     image: *api-image
+    pull_policy: never        # the image `api` builds or pulls
     restart: unless-stopped
     logging: *logging
     # Ingestion embeds in-process, so a child holds the embedding model (~1.2 GiB resident).
@@ -285,8 +282,8 @@ services:
       - "host.docker.internal:host-gateway"
 
   extraction-worker:
-    build: *api-build
     image: *api-image
+    pull_policy: never        # the image `api` builds or pulls
     restart: unless-stopped
     logging: *logging
     # Entity resolution embeds in-process, so extraction holds the embedding model (~1.2 GiB peak).
@@ -306,8 +303,8 @@ services:
       - "host.docker.internal:host-gateway"
 
   maintenance-worker:
-    build: *api-build
     image: *api-image
+    pull_policy: never        # the image `api` builds or pulls
     restart: unless-stopped
     logging: *logging
     mem_limit: ${MAINTENANCE_WORKER_MEM_LIMIT:-832m}
@@ -326,8 +323,8 @@ services:
       - "host.docker.internal:host-gateway"
 
   embedding-worker:
-    build: *api-build
     image: *api-image
+    pull_policy: never        # the image `api` builds or pulls
     restart: unless-stopped
     logging: *logging
     # The embedding model is resident here by design; measured at ~1.35 GiB under a batch.
@@ -411,45 +408,6 @@ services:
       timeout: 10s
       retries: 10
       start_period: 20s
-
-  # Local model server. Enabled with COMPOSE_PROFILES=gpu (NVIDIA GPU required).
-  vllm:
-    profiles: ["gpu"]
-    # Pinned: newer releases fail to start under Docker Desktop / WSL2.
-    image: vllm/vllm-openai:${VLLM_IMAGE_TAG:-v0.11.0}
-    restart: unless-stopped
-    logging: *logging
-    mem_limit: ${VLLM_MEM_LIMIT:-2560m}
-    memswap_limit: ${VLLM_MEM_LIMIT:-2560m}
-    command: >
-      --model ${VLLM_MODEL:-Qwen/Qwen2.5-1.5B-Instruct-AWQ}
-      --served-model-name ${LLM_MODEL:-opencortyx-llm}
-      --gpu-memory-utilization ${VLLM_GPU_FRACTION:-0.90}
-      --max-model-len ${LLM_MAX_MODEL_LEN:-8192}
-      --max-num-seqs ${VLLM_MAX_NUM_SEQS:-64}
-      --enable-prefix-caching
-      --swap-space ${VLLM_SWAP_GB:-1}
-    environment:
-      HF_HOME: /cache/huggingface
-      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-}
-    volumes:
-      - model_cache:/cache
-    shm_size: "1gb"
-    ports:
-      - "127.0.0.1:${VLLM_PORT:-8002}:8000"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 600s
 
 volumes:
   postgres_data:

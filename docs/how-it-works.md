@@ -21,7 +21,7 @@ flowchart LR
         G[(NebulaGraph<br/>nodes · edges)]
         V[(Qdrant<br/>vectors · keyword documents)]
         DB[(PostgreSQL<br/>collections · pipelines · runs · ontology)]
-        LLM[LLM<br/>vLLM, Ollama or hosted API]
+        LLM[LLM<br/>your model server or a hosted API]
     end
     U --> W --> API
     A --> API
@@ -49,7 +49,6 @@ flowchart LR
 | `setup` | Runs once at start-up: prepares the graph and vector stores, then creates and upgrades the database schema. |
 | `postgres` | The only datastore: graph, vectors, full-text index and control plane. |
 | `redis` | Task queues between the API and workers. |
-| `vllm` | Optional local model server on an NVIDIA GPU. |
 
 ## Data model
 
@@ -115,7 +114,7 @@ flowchart TD
    (chunking, then extractors) assigned to sources.
 4. **Extraction.** Extractors are declarative templates. Nothing is extracted from documents by
    default: a pipeline names the extractors it runs, built-in or
-   [your own](features/administration.md#custom-metadata).
+   [your own](features/integration.md#custom-extractors).
 5. **Embedding.** Nodes and their attributes get vectors for semantic search.
 6. **Accounting.** Every intended write is counted; anything that fails lands in quarantine instead of
    disappearing. Progress is visible under **Runs**.

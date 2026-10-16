@@ -40,9 +40,21 @@ async def _close_chat(chat_id, text: str, meta: dict = None) -> None:
         logging.getLogger(__name__).warning("chat_history.append_failed: %r", e)
 
 
+def _surface_error(res: dict) -> dict:
+    """A generation that FAILED (no model connected, server down) is not an abstention on the
+    evidence: its answer becomes the reason, in words the user can act on."""
+    if not isinstance(res, dict) or not res.get("error"):
+        return res
+    err = res["error"]
+    msg = err if res.get("model_missing") else humanize_backend_error(RuntimeError(err))
+    return {**res, "answer": msg}
+
+
 def _answer_text(res: dict) -> str:
     """The answer as the chat shows it — an abstain reads as one, not as an empty bubble."""
-    if res.get("abstained") and not res.get("error"):
+    if res.get("error"):
+        return f"⚠ {res.get('answer') or res['error']}"
+    if res.get("abstained"):
         return "No grounded evidence found — abstained instead of guessing."
     return str(res.get("answer") or "")
 
@@ -111,7 +123,7 @@ async def answer(payload: ContextQuery, request: Request, user: CurrentUser = De
     ctx = await scoped_ctx(user, payload)
     chat_id = await _open_chat(user, payload, ctx)
     try:
-        res = await answer_query(payload.query, ctx)
+        res = _surface_error(await answer_query(payload.query, ctx))
     except Exception as e:                              # surface a clear reason (esp. model server/embed)
         await _close_chat(chat_id, f"⚠ {humanize_backend_error(e)}", {"error": True})
         raise HTTPException(status_code=503, detail=humanize_backend_error(e))
@@ -181,7 +193,7 @@ async def answer_stream(payload: ContextQuery, request: Request, user: CurrentUs
         try:
             async for ev in answer_query_stream(payload.query, ctx):
                 if ev.get("type") == "done":
-                    final = ev
+                    ev = final = _surface_error(ev)
                 yield f"data: {_json.dumps(ev, default=str)}\n\n"
         except Exception as e:                          # esp. model server/embed down -> clear, single event
             err = {"type": "done", "answer": humanize_backend_error(e), "abstained": True,

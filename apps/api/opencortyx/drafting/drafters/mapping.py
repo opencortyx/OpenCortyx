@@ -69,7 +69,9 @@ class SemistructuredMappingDrafter(Drafter):
                             f"appears later will be missing from this mapping")
 
         if req.use_model:
-            confidence, note = await _scout(sample.records, structure, confidence)
+            from opencortyx.core.inference.registry import resolve_model
+            spec = await resolve_model(req.workspace_id, "utility", req.model_ref)
+            confidence, note = await _scout(sample.records, structure, confidence, spec)
             if note:
                 warnings.append(note)
 
@@ -394,7 +396,8 @@ def _mapping_spec(name: str, paradigm: str, source_type: str, body: dict) -> dic
             "payload": body, "status": "active"}
 
 
-async def _scout(records: list, structure: dict, confidence: Confidence) -> tuple[Confidence, str]:
+async def _scout(records: list, structure: dict, confidence: Confidence,
+                 model_spec: dict | None) -> tuple[Confidence, str]:
     """Let the model review the measured roles in place. Returns the confidence and one note.
 
     A model that CHANGES a measured role is worth saying out loud: the measurement is checkable
@@ -403,9 +406,11 @@ async def _scout(records: list, structure: dict, confidence: Confidence) -> tupl
     """
     from opencortyx.ingest.semistructured import schema as ss
 
+    if not model_spec:
+        return confidence, "no model is connected, so the key roles are the measured ones only"
     before = {k.get("path"): k.get("role") for k in structure.get("keys") or []}
     try:
-        await ss.scout_structure(records, structure)
+        await ss.scout_structure(records, structure, model_spec)
     except Exception as exc:                          # noqa: BLE001 — measured roles already stand
         log.warning("authoring.scout_failed", error=f"{type(exc).__name__}: {exc}")
         return confidence, "the model could not review the key roles; kept the measured ones"

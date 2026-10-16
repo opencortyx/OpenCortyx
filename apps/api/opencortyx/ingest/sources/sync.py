@@ -111,7 +111,7 @@ def classify_failure(exc) -> str:
         return "memory"
     if "celery" in blob or "broker" in blob or "redis" in blob or "queue" in blob or "worker" in blob:
         return "queue"
-    if ("vllm" in blob or "llm" in blob or "completion" in blob or "prompt" in blob
+    if ("llm" in blob or "completion" in blob or "prompt" in blob
             or "token" in blob):
         return "llm"
     if ("timeout" in blob or "connection" in blob or "httpx" in blob or "http" in blob

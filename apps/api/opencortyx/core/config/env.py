@@ -80,35 +80,16 @@ class V2Settings(BaseSettings):
     CELERY_BROKER_URL: str = "redis://localhost:6379/1"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
 
-    LLM_PROVIDER: Literal["vllm", "openai", "openai_compatible", "azure", "groq", "together",
-                          "anthropic", "huggingface", "mock"] = "vllm"
-    LLM_API_KEY: str = ""
-    LLM_MODEL: str = "opencortyx-llm"
-    LLM_MODEL_WEIGHTS: str = ""
-    VISION_MODEL: str = "gpt-4o"
-    #: Endpoint of the vLLM server (or any OpenAI-compatible server). Defaults to the compose
-    #: service so the stack works with no env at all; point it anywhere for a remote/shared GPU box.
-    LLM_BASE_URL: str = "http://vllm:8000/v1"
-
+    # Which models run is NOT configured here: the Model Registry (Models page) is the only source,
+    # per workspace. These are transport limits for whatever server a registry row points at.
     LLM_MAX_MODEL_LEN: int = Field(
         12288, validation_alias=AliasChoices("LLM_MAX_MODEL_LEN", "LLM_NUM_CTX"))
     LLM_MAX_CONNECTIONS: int = 256      # in-flight HTTP requests the pool allows
     LLM_MAX_KEEPALIVE: int = 128        # connections kept warm between calls (must exceed steady concurrency)
-    LLM_TIMEOUT_S: float = 600.0        # a deep vLLM queue is slow, not dead
+    LLM_TIMEOUT_S: float = 600.0        # a deep server queue is slow, not dead
     LLM_CONNECT_TIMEOUT_S: float = 10.0
 
-    FAST_MODEL_PROVIDER: str = ""
-    FAST_MODEL: str = ""
-    FAST_MODEL_BASE_URL: str = ""
-    # The WEIGHTS behind the fast alias — same rule as LLM_MODEL_WEIGHTS above. Surfaced on the
-    # registry row so the Models page stays the single place that answers "which model is running".
-    FAST_MODEL_WEIGHTS: str = ""
-
-    EMBED_PROVIDER: Literal["fastembed", "vllm", "openai", "openai_compatible", "azure",
-                            "huggingface", "sentence-transformers", "local"] = "fastembed"
-    EMBED_MODEL: str = "nomic-ai/nomic-embed-text-v1.5"
     EMBED_DIMENSIONS: int = 768
-    EMBED_BASE_URL: str = ""
     EMBED_BATCH_SIZE: int = 64
     # In-process embedder: most characters one ONNX run may hold (texts x longest text).
     FASTEMBED_MAX_BATCH_CHARS: int = 8000
@@ -171,8 +152,6 @@ class V2Settings(BaseSettings):
     CONTEXT_MAX_TOKENS: int = 0
     RETRIEVAL_WORKFLOW_CACHE: bool = False
     RETRIEVAL_INCLUDE_CITATIONS: bool = False
-    #: Blank = use LLM_MODEL. Set to answer with a different model than the one doing extraction.
-    GENERATION_MODEL: str = ""
 
     # ── Grounding verification (per-sentence check against retrieved context) ──
     GROUNDING_MAX_BLOCK_CHARS: int = 6000
@@ -206,36 +185,6 @@ class V2Settings(BaseSettings):
                              "(openssl rand -hex 32) in .env.")
         return v
 
-    # The two validators below print rather than log ON PURPOSE: they run while V2Settings is being
-    # constructed, which is before logging is configured, so a logger call here would either be
-    # swallowed or would pull observability into config's import. See core/observability.py.
-    @field_validator("LLM_PROVIDER", mode="before")
-    @classmethod
-    def _migrate_llm_provider(cls, v):
-        if isinstance(v, str) and v.strip().lower() == "ollama":
-            print("WARN: LLM_PROVIDER=ollama is no longer supported - using 'vllm'. Set "
-                  "LLM_PROVIDER=vllm and LLM_BASE_URL=<your vLLM>/v1 in .env to silence this. "
-                  "NOTE: LLM_MODEL must be vLLM's --served-model-name, not an Ollama tag.")
-            return "vllm"
-        return v
-
-    @field_validator("EMBED_PROVIDER", mode="before")
-    @classmethod
-    def _migrate_embed_provider(cls, v):
-        if isinstance(v, str) and v.strip().lower() == "ollama":
-            print("WARN: EMBED_PROVIDER=ollama is no longer supported - using 'fastembed' "
-                  "(in-process, no server, same 768-dim nomic family, no re-index needed).")
-            return "fastembed"
-        return v
-
-    @field_validator("EMBED_MODEL", mode="before")
-    @classmethod
-    def _migrate_embed_model(cls, v):
-        # The Ollama tag and the fastembed repo id are the SAME weights; only the naming differs.
-        # Left as-is, the migrated fastembed provider would be handed a model name it cannot resolve.
-        if isinstance(v, str) and v.strip() == "nomic-embed-text":
-            return "nomic-ai/nomic-embed-text-v1.5"
-        return v
 
 
 @lru_cache
@@ -281,7 +230,10 @@ CROSS_ENCODER_MODEL = "BAAI/bge-reranker-v2-m3"   # stronger cross-encoder (dist
 # "discusses X" where bge-reranker-base was fooled by topical density). No re-indexing — scores (query,
 # text) live at query time. Downloads ~2GB into the container on first use. Needs `sentence-transformers`.
 
-GENERATION_MODEL = settings.GENERATION_MODEL or settings.LLM_MODEL
+#: The in-process embedder a new workspace's registry is seeded with (a visible, editable row; never a
+#: fallback). Its vectors are EMBED_DIMENSIONS wide.
+BUILTIN_EMBED_PROVIDER = "fastembed"
+BUILTIN_EMBED_MODEL = "nomic-ai/nomic-embed-text-v1.5"
 PROFILE_RERANK = {
     "fast":       ["cross"],
     "docs_qa":    ["cross"],
@@ -303,13 +255,17 @@ SCRATCHPAD_EVERY = 20          # rebuild the running scratchpad every N messages
 ONTOLOGY_MODE = "hybrid"
 
 OPENAI_COMPATIBLE_PROVIDERS = frozenset({
-    "vllm", "openai", "openai_compatible", "azure", "groq", "together", "deepinfra", "fireworks",
+    "openai", "openai_compatible", "azure", "groq", "together", "deepinfra", "fireworks",
 })
 
 #: Providers that need an explicit base_url to be usable at all (no public default endpoint).
-SELF_HOSTED_PROVIDERS = frozenset({"vllm", "openai_compatible"})
+SELF_HOSTED_PROVIDERS = frozenset({"openai_compatible"})
+
+#: A Hugging Face model downloaded into the model cache and run by OpenCortyx itself, on CPU
+#: (core/inference/local_llm.py). No server and no address.
+LOCAL_LLM_PROVIDERS = frozenset({"transformers"})
 
 LOCAL_FREE_PROVIDERS = frozenset({
-    "vllm", "openai_compatible", "fastembed", "onnx", "sentence-transformers",
-    "sentence_transformers", "local", "st", "tei", "infinity",
+    "openai_compatible", "fastembed", "onnx", "sentence-transformers",
+    "sentence_transformers", "local", "st", "transformers",
 })

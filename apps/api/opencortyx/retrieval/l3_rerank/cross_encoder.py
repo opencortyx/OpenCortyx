@@ -33,10 +33,12 @@ mass entirely. Scoring the top 30 and reading "absent" as "worst" would make bei
 bound into a demotion, which is the conflation this codebase already paid for once when a
 cross-encoder's pool size silently capped how much evidence could survive.
 
-OFF BY DEFAULT
+ON WHEN A RERANKER IS REGISTERED
 
-At ~2.4s for a 30-candidate pool this is not free, and the engine ranks perfectly well without
-it. It is opt-in per query via `WorkflowConfig.cross_encoder`.
+At ~2.4s for a 30-candidate pool (bge-reranker-v2-m3; a small fastembed reranker is far cheaper)
+this is not free, and the engine ranks perfectly well without it. It runs when the workspace's
+Model Registry has a rerank model this image can run, or when a query asks for it via
+`WorkflowConfig.cross_encoder`.
 """
 from __future__ import annotations
 
@@ -67,14 +69,14 @@ class CrossEncoderResult:
         return bool(self.scores)
 
 
-def _load(model_id: Optional[str] = None):
+def _load(model_id: Optional[str] = None, provider: Optional[str] = None):
     """The shared loader. Reuses the existing engine's cache so a model is not held twice.
 
     A ~2GB model resident in one process and again in another is not a caching subtlety, it is
     an out-of-memory error on a machine already running an embedder and an LLM.
     """
     from opencortyx.core.inference.embedding import get_cross_encoder
-    return get_cross_encoder(model_id)
+    return get_cross_encoder(model_id, provider)
 
 
 def _pair_text(cand) -> str:
@@ -83,7 +85,7 @@ def _pair_text(cand) -> str:
 
 
 async def score(query: str, candidates: list, *, pool: int = DEFAULT_POOL,
-                model_id: Optional[str] = None) -> CrossEncoderResult:
+                model_id: Optional[str] = None, provider: Optional[str] = None) -> CrossEncoderResult:
     """Score the top `pool` candidates against the question.
 
     Returns an empty result when the model is unavailable — not an exception and not zeros. The
@@ -94,10 +96,11 @@ async def score(query: str, candidates: list, *, pool: int = DEFAULT_POOL,
     if not subject:
         return CrossEncoderResult(scores={}, error="no candidate carried text")
 
-    model = _load(model_id)
+    # loading can read a model from disk the first time: off the event loop like the scoring
+    model = await asyncio.to_thread(_load, model_id, provider)
     if model is None:
         return CrossEncoderResult(
-            scores={}, error="cross-encoder unavailable (sentence-transformers or model missing)")
+            scores={}, error="cross-encoder unavailable (library or model missing)")
 
     pairs = [(query, _pair_text(c)) for c in subject]
     try:

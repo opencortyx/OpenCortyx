@@ -1,6 +1,6 @@
 """Shared fixtures for the live API test suite.
 
-These tests exercise the REAL running stack (api + worker + Postgres + vLLM), not mocks — that's the
+These tests exercise the REAL running stack (api + worker + Postgres + the connected model server), not mocks — that's the
 point: prove the product actually works end-to-end, the gap that static `py_compile`/CI never covered.
 
 Run them inside the api container so they can reach the API:

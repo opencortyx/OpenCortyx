@@ -681,10 +681,13 @@ def match_structure(record, structures: list, min_score: float = 0.45):
 
 
 # ── LLM scout (optional refinement for auto-accepted structures) ─────────────
-async def scout_structure(records: list, structure: dict) -> dict:
-    """One LLM call: refine guessed roles + write key descriptions so a human or agent can
-    understand every key. Best-effort — heuristic roles survive any failure. Only called when a
-    pipeline auto-accepts a NEW structure (never per record)."""
+async def scout_structure(records: list, structure: dict, model_spec: dict | None = None) -> dict:
+    """One LLM call on the workspace's model (`model_spec`): refine guessed roles + write key
+    descriptions so a human or agent can understand every key. Optional — the measured roles stand
+    on their own, so a workspace with no model connected skips this rather than borrowing one. Only
+    called when a pipeline auto-accepts a NEW structure (never per record)."""
+    if not model_spec:
+        return structure
     import json as _json
     from opencortyx.core.inference.llm import complete
     keys = structure.get("keys") or []
@@ -703,7 +706,7 @@ async def scout_structure(records: list, structure: dict) -> dict:
         '"description": "<one plain-English sentence>"}]}')
     try:
         raw = await complete(prompt, system="You classify JSON keys. JSON only.",
-                             max_tokens=1200, json_mode=True, temperature=0.1)
+                             max_tokens=1200, json_mode=True, temperature=0.1, model_spec=model_spec)
         parsed = _json.loads(raw)
         by_path = {k.get("path"): k for k in (parsed.get("keys") or []) if isinstance(k, dict)}
         for k in attr_keys:

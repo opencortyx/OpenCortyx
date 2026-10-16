@@ -47,26 +47,27 @@ async def scoped_ctx(user, payload):
 
 def humanize_backend_error(e: Exception) -> str:
     """Turn a raw retrieval/answer exception into a clear, actionable message for the UI (instead of
-    a generic 500). Especially detects vLLM / embedding-backend failures."""
+    a generic 500), above all a model that is missing, unreachable or misnamed."""
+    from opencortyx.core.inference.registry import NoModelConfigured
+    if isinstance(e, NoModelConfigured):
+        return str(e)                        # already says what to add, and where
     s = str(e)
     low = s.lower()
     if "out of memory" in low or "cudamalloc" in low or "oom" in low:
-        return ("The model server (vLLM) ran out of GPU memory. vLLM PREALLOCATES its KV cache at "
-                "startup, so this is a sizing problem, not a load spike: lower VLLM_GPU_FRACTION or "
-                "VLLM_MAX_MODEL_LEN and restart it, or free the card of other GPU apps.")
+        return ("The model server ran out of memory. Use a smaller model, a shorter context, or give "
+                "the server more memory.")
     if "model" in low and ("does not exist" in low or "not found" in low or "404" in low):
         return ("The model server is running but does not serve the model this workspace asks for. "
-                "vLLM only answers to its --served-model-name; set the Model ID on the Models page "
-                "(or LLM_MODEL) to that exact name.")
+                "Set the Model ID on the Models page to a name the server lists.")
     if ("connecterror" in low or "connection refused" in low or "unreachable" in low
             or "all connection attempts failed" in low or "apiconnectionerror" in low):
-        return ("The model server (vLLM) is unreachable. Start it (  docker compose up -d vllm  ) "
-                "and check LLM_BASE_URL still ends in /v1.")
+        return ("The model server is unreachable. Start it and check its address on the Models page "
+                "(from inside Docker, a server on this computer is host.docker.internal, not "
+                "localhost; OpenAI-compatible addresses end in /v1).")
     if "embed" in low:
         return f"Embedding backend error: {s[:200]}"
     if "timeout" in low or "timed out" in low:
-        return ("The model server timed out. A cold vLLM start loads weights before it answers "
-                "anything — retry in a moment.")
+        return ("The model server timed out. It may still be loading the model; retry in a moment.")
     return f"Retrieval/answer failed: {s[:240]}"
 
 
@@ -144,7 +145,7 @@ async def month_token_spend(db, workspace_id) -> int:
 
 async def enforce_budget(workspace_id):
     """Refuse paid LLM answers when a hard cap is set and this month's token budget is exceeded.
-    Self-hosted models (vLLM and the in-process embedders) cost nothing per token, so the cap only
+    Self-hosted models (your own server and the in-process embedders) cost nothing per token, so the cap only
     bites when the active generation model is billed by a third party."""
     from opencortyx.domain.control import CostBudget
     async with V2Session() as db:

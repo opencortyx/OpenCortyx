@@ -412,12 +412,13 @@ export interface ModelEntry {
   created_at?: string | null;
 }
 
-// The model actually in effect per wired role (GET /models/active) — registry default or env/built-in.
+// The model in effect per role (GET /models/active): a registry row, or none. There is no other source.
 export interface ActiveModel {
   role: string;   // any registry role — the default set for it is what that role uses
-  source: "registry" | "env" | "default";
-  provider: string;
-  model_id: string;
+  source: "registry" | "none";
+  shared_from?: string;   // extraction/utility with no row of their own use the generation model
+  provider: string | null;
+  model_id: string | null;
   base_url?: string | null;
   name?: string | null;
   has_key: boolean;
@@ -435,9 +436,26 @@ export interface ModelSpecInput {
   is_default?: boolean;
 }
 
-// One model a provider serves right now — a vLLM --served-model-name, or a hosted /v1/models entry.
-export interface DiscoveredModel { id: string; size?: number | null; detail?: string | null; }
+// One model a provider serves right now — an entry of the server's /v1/models list.
+export interface DiscoveredModel {
+  id: string; size?: number | null; detail?: string | null;
+  dim?: number | null;          // fastembed embedders: the vector size
+  downloaded?: boolean;         // fastembed: already in the model cache
+}
 export interface ModelDiscovery { items: DiscoveredModel[]; source: string; provider: string; note?: string | null; }
+
+// A Hugging Face model, before it is downloaded (POST /models/hf/info).
+export interface HFModelInfo {
+  repo: string; task: string | null; bytes: number; gguf: boolean; gated: boolean;
+  runs_in_opencortyx: boolean; why_not: string | null; memory_bytes: number;
+}
+// A download into OpenCortyx's model cache (GET /models/hf/download).
+export interface HFDownloadStatus {
+  repo?: string; model?: string; status: "none" | "downloading" | "done" | "failed";
+  done_bytes: number; total_bytes: number | null; error: string | null;
+}
+// One line of an Ollama pull's progress, as Ollama reports it.
+export interface OllamaPullEvent { status?: string; model?: string; total?: number; completed?: number; error?: string; }
 
 export interface RuntimeModelRow {
   id: string; name: string; role: string; model_id: string; weights?: string | null;
@@ -445,7 +463,7 @@ export interface RuntimeModelRow {
 }
 export interface RuntimeServer {
   base_url: string; reachable: boolean; error?: string | null;
-  served_models: string[]; models: RuntimeModelRow[]; is_env_default: boolean;
+  served_models: string[]; models: RuntimeModelRow[]; is_generation: boolean;
 }
 export interface ModelRuntime { servers: RuntimeServer[]; note: string; }
 
@@ -850,11 +868,58 @@ export const contextV2Api = {
   testModel: (id: string) =>
     apiClient.post<{ ok: boolean; role: string; sample?: string; dimensions?: number }>(
       `/api/v2/models/${id}/test`).then((r) => r.data),
-  // live-list what a provider serves (vLLM's --served-model-name / a hosted /v1/models catalogue)
-  discoverModels: (body: { provider: string; base_url?: string; api_key?: string; model_id?: string }) =>
+  // live-list what a provider serves (the server's / a hosted provider's /v1/models catalogue)
+  discoverModels: (body: { provider: string; base_url?: string; api_key?: string; model_id?: string; role?: string }) =>
     apiClient.post<ModelDiscovery>("/api/v2/models/discover", body).then((r) => r.data),
   modelRuntime: () =>
     apiClient.get<ModelRuntime>("/api/v2/models/runtime").then((r) => r.data),
+  // Hugging Face models run in OpenCortyx itself (CPU): look one up, download it, list/delete them.
+  hfModelInfo: (repo: string, token?: string) =>
+    apiClient.post<HFModelInfo>("/api/v2/models/hf/info", { repo, token: token || undefined }).then((r) => r.data),
+  hfDownload: (repo: string, token?: string) =>
+    apiClient.post<HFDownloadStatus>("/api/v2/models/hf/download", { repo, token: token || undefined }).then((r) => r.data),
+  hfDownloadStatus: (repo: string) =>
+    apiClient.get<HFDownloadStatus>("/api/v2/models/hf/download", { params: { repo } }).then((r) => r.data),
+  // fastembed (ONNX, CPU) embedders and rerankers: download one ahead of its first use.
+  fastembedDownload: (model: string, role: string) =>
+    apiClient.post<HFDownloadStatus>("/api/v2/models/fastembed/download", { model, role }).then((r) => r.data),
+  fastembedDownloadStatus: (model: string, role: string) =>
+    apiClient.get<HFDownloadStatus>("/api/v2/models/fastembed/download", { params: { model, role } }).then((r) => r.data),
+  hfLocalModels: () =>
+    apiClient.get<{ items: DiscoveredModel[] }>("/api/v2/models/hf/local").then((r) => r.data),
+  hfDeleteLocal: (repo: string) =>
+    apiClient.delete("/api/v2/models/hf/local", { params: { repo } }).then((r) => r.data),
+  // Have an Ollama server pull a model (a HF GGUF repo or an Ollama name); progress per NDJSON line.
+  ollamaPull: async (baseUrl: string, model: string, onEvent: (e: OllamaPullEvent) => void) => {
+    const session = (await getSession()) as any;
+    const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/v2/models/ollama/pull`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(session?.accessToken ? { Authorization: `Bearer ${session.accessToken}` } : {}),
+      },
+      body: JSON.stringify({ base_url: baseUrl, model }),
+    });
+    if (!res.ok || !res.body) {
+      let detail = `HTTP ${res.status}`;
+      try { detail = (await res.json())?.detail || detail; } catch { /* keep status */ }
+      throw new Error(detail);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx: number;
+      while ((idx = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        if (line) { try { onEvent(JSON.parse(line)); } catch { /* skip a partial line */ } }
+      }
+    }
+  },
 
   // ── ingestion progress (the Progress tab) ──────────────────────────────
   listProgress: (limit = 100) =>
@@ -1318,10 +1383,15 @@ export const contextV2Api = {
    * pipeline body rather than naming a saved one).
    */
   addSource: (file: File, opts?: { pipelineId?: string; collectionId?: string; batchId?: string;
+                                   /** a pipeline per file kind ("document" | "structured" | "semistructured");
+                                    *  the server detects the file's kind and uses that one, else its default */
+                                   pipelineIds?: Record<string, string>;
                                    /** read it again even if this exact file is already in */
                                    replace?: boolean; tags?: string[] }) => {
     const fd = new FormData();
     fd.append("file", file);
+    const perKind = Object.fromEntries(Object.entries(opts?.pipelineIds || {}).filter(([, id]) => id));
+    if (Object.keys(perKind).length) fd.append("pipeline_ids", JSON.stringify(perKind));
     if (opts?.replace) fd.append("replace", "true");
     if (opts?.tags?.length) fd.append("tags", JSON.stringify(opts.tags));
     if (opts?.pipelineId) fd.append("pipeline_id", opts.pipelineId);

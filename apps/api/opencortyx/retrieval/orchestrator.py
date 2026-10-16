@@ -29,6 +29,7 @@ from "there is no such data".
 from __future__ import annotations
 
 import asyncio
+import functools
 import time
 import uuid
 from datetime import datetime, timezone
@@ -105,9 +106,12 @@ class _Timer:
         self._t0 = now
 
 
-async def _default_complete(prompt, max_tokens=200, temperature=0.0, model=None):
+async def _default_complete(prompt, max_tokens=200, temperature=0.0, model=None, *, workspace_id=None):
+    """The question-rewriting model: the searched workspace's `utility` model from its registry."""
     from opencortyx.core.inference.llm import complete as _c
-    return await _c(prompt, max_tokens=max_tokens, temperature=temperature, model=model)
+    from opencortyx.core.inference.registry import resolve_model
+    return await _c(prompt, max_tokens=max_tokens, temperature=temperature, model=model,
+                    model_spec=await resolve_model(workspace_id, "utility"))
 
 
 _MID_FLOOR_TOKENS = 12
@@ -158,6 +162,13 @@ class RetrievalWorkflow:
                node_types=plan.node_types, edge_types=plan.edge_types)
         return plan
 
+    def _bound_complete(self, workspace_id: uuid.UUID):
+        """The rewriting callable for ONE workspace: the default resolves that workspace's own model;
+        an injected one (tests) is used as given."""
+        if self._complete is not _default_complete:
+            return self._complete
+        return functools.partial(_default_complete, workspace_id=workspace_id)
+
     async def vocabulary(self, workspace_id: uuid.UUID, t: _Timer) -> Optional[TypeVocabulary]:
         """The corpus's type names, for L0 to score the question against.
 
@@ -181,9 +192,9 @@ class RetrievalWorkflow:
         hypo_reps: dict[str, str] = {}
         if experiments.on("query_expansion") or experiments.on("multi_query"):
             if experiments.on("multi_query"):
-                hyps = await expansion.rephrasings(plan.raw_query, self._complete)
+                hyps = await expansion.rephrasings(plan.raw_query, self._bound_complete(workspace_id))
             else:
-                hyps = await expansion.hypotheticals(plan.raw_query, self._complete)
+                hyps = await expansion.hypotheticals(plan.raw_query, self._bound_complete(workspace_id))
             for i, h in enumerate(hyps):
                 hypo_reps[f"hypo{i}"] = h
             t.mark("L0", "expand", n_out=len(hyps), detail=" | ".join(h[:60] for h in hyps))
@@ -515,7 +526,30 @@ class RetrievalWorkflow:
         return graph
 
     # ── L3 ───────────────────────────────────────────────────────────────────────────────────
-    async def rank(self, plan: QueryPlan, graph: CandidateGraph, t: _Timer) -> list:
+    async def _registry_reranker(self, workspace_id) -> tuple:
+        """(model_id, provider) of the workspace's reranker when it can run here, else (None, None).
+
+        The query's own `cross_encoder_model` wins; otherwise the Model Registry's rerank default is
+        used, as for every other role. A row this image cannot run (sentence-transformers without
+        INSTALL_RERANK=1) leaves ranking to the other features rather than failing each query.
+        """
+        if workspace_id is None:
+            return None, None
+        from opencortyx.core.inference.registry import resolve_model
+        spec = await resolve_model(workspace_id, "rerank")
+        prov = str((spec or {}).get("provider") or "").lower()
+        if not spec or not spec.get("model_id"):
+            return None, None
+        if prov == "fastembed":
+            return spec["model_id"], prov
+        if prov in ("sentence-transformers", "sentence_transformers", "st"):
+            from opencortyx.core.inference.embedding import cross_encoder_installed
+            if cross_encoder_installed():
+                return spec["model_id"], prov
+        return None, None
+
+    async def rank(self, plan: QueryPlan, graph: CandidateGraph, t: _Timer,
+                   workspace_id: Optional[uuid.UUID] = None) -> list:
         pool = fusion.cut(graph, self.cfg.rerank_pool)
         # The GRAPH is passed, not just the pool: `connectivity` is a property of a candidate's
         # position among the others, and it is the one signal a flat list cannot produce.
@@ -531,10 +565,13 @@ class RetrievalWorkflow:
                    detail="cardinality=%s reordered %d of the top 30, %d carried to L4"
                           % (plan.cardinality.value, moved, len(self._aspect_selected)))
 
-        if self.cfg.cross_encoder:
+        ce_model, ce_provider = self.cfg.cross_encoder_model, None
+        if not ce_model:
+            ce_model, ce_provider = await self._registry_reranker(workspace_id)
+        if self.cfg.cross_encoder or ce_model:
             ce = await cross_encoder.score(
                 plan.normalized_query or plan.raw_query, ranked,
-                pool=self.cfg.cross_encoder_pool, model_id=self.cfg.cross_encoder_model)
+                pool=self.cfg.cross_encoder_pool, model_id=ce_model, provider=ce_provider)
             n = cross_encoder.apply(ce, ranked)
             if n:
                 ranked = reranker.rerank(ranked, plan)
@@ -807,7 +844,7 @@ class RetrievalWorkflow:
                                       scope_dialogues=scope_dialogues)
         graph = self._apply_scope(graph, t)
         graph = self._apply_validity(graph, plan, t)
-        ranked = await self.rank(plan, graph, t)
+        ranked = await self.rank(plan, graph, t, workspace_id=workspace_id)
 
         abstain = reranker.should_abstain(ranked)
         if abstain:

@@ -63,7 +63,8 @@ async def _workspaces() -> None:
     async with V2Session() as db:
         with_people = set((await db.execute(select(User.workspace_id).distinct())).scalars())
         have_row = set((await db.execute(select(Workspace.workspace_id))).scalars())
-    log.info("4/4 workspaces: %d with people", len(with_people))
+    log.info("4/4 workspaces: %s", f"{len(with_people)} in use" if with_people
+             else "none yet (the first is created when the admin signs up)")
     for wid in sorted(with_people, key=str):
         if wid in have_row:
             await ensure_central_node(wid)

@@ -1,9 +1,8 @@
 """Get the models resident WITHOUT anyone waiting for them.
 
-A first install downloads ~4.2 GB of weights:
+A first install downloads ~2.7 GB of weights (the generation model lives on the server you connect):
 
     BAAI/bge-reranker-v2-m3          2.1 GB   first retrieval query
-    Qwen2.5-1.5B-Instruct-AWQ        1.5 GB   vLLM, at its own startup
     nomic-embed-text-v1.5            523 MB   first embed
     all-MiniLM-L6-v2                  87 MB
 
@@ -66,8 +65,11 @@ async def _step(name: str, coro_factory) -> None:
 
 
 async def _embedder() -> None:
-    from opencortyx.core.inference.embedding import embed_batch
-    vecs = await embed_batch(["warmup"])
+    from opencortyx.core.inference.embedding import active_embedding_spec, embed_batch
+    spec = await active_embedding_spec()
+    if not spec:
+        raise _NotApplicable("no embedding model registered yet (added when the first workspace is created)")
+    vecs = await embed_batch(["warmup"], model_spec=spec)
     if not vecs or not vecs[0]:
         raise RuntimeError("embedder returned an empty vector")
 
@@ -77,28 +79,31 @@ class _NotApplicable(Exception):
 
 
 async def _reranker() -> None:
-    """The cross-encoder — 2.1 GB when it is carried in-process, which it no longer is.
+    """The rerankers the Model Registry names as defaults, loaded before the first query uses one.
 
-    `sentence-transformers` is deliberately NOT in the API image: reranking is a model SERVER role
-    like every other (see HTTP_RERANK_PROVIDERS in retrieve/rerank.py), so an HTTP reranker is a
-    registry row and the image carries no torch. `get_cross_encoder()` therefore returns None here
-    by design, and reporting that as a failed warmup is a warning about working-as-intended.
-
-    NB the 2.1 GB `BAAI--bge-reranker-v2-m3` sitting in the model cache is a leftover from an image
-    that did carry the library. Nothing loads it. It is half of what a first install appears to
-    need, and it can be deleted.
+    A fastembed reranker (ONNX) always runs here. A sentence-transformers one needs the library,
+    which the image carries only when built with INSTALL_RERANK=1; without it such a row is skipped,
+    exactly as retrieval skips it.
     """
     from opencortyx.core import config as cfg
     if not getattr(cfg, "RERANK_ENABLED", False):
         raise _NotApplicable("reranking is disabled")
-    try:
-        from sentence_transformers import CrossEncoder    # noqa: F401
-    except Exception:
-        raise _NotApplicable("served over HTTP — no in-process model to load")
-    from opencortyx.core.inference.embedding import get_cross_encoder
-    m = await asyncio.to_thread(get_cross_encoder)
-    if m is None:
-        raise RuntimeError("cross-encoder unavailable")
+    from sqlalchemy import select
+    from opencortyx.core.db import V2Session
+    from opencortyx.domain import Model
+    from opencortyx.core.inference.embedding import cross_encoder_installed, get_cross_encoder
+    providers = ["fastembed"]
+    if cross_encoder_installed():
+        providers += ["sentence-transformers", "sentence_transformers"]
+    async with V2Session() as db:
+        rows = sorted(set((await db.execute(select(Model.model_id, Model.provider).where(
+            Model.role == "rerank", Model.is_default == True,          # noqa: E712
+            Model.provider.in_(providers)))).all()))
+    if not rows:
+        raise _NotApplicable("no reranker this image can run is registered")
+    for mid, prov in rows:
+        if await asyncio.to_thread(get_cross_encoder, mid, prov) is None:
+            raise RuntimeError(f"reranker {mid} unavailable")
 
 
 async def _run() -> None:

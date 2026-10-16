@@ -6,7 +6,6 @@ below and persisted in the `runtime_setting` table so changes survive restarts. 
 (HNSW build params, pool size, replica URL, vector dim) remain env-only — the Settings UI shows
 those read-only with a "restart/reindex required" note.
 """
-import os
 from typing import Any
 
 import opencortyx.core.config.env as cfg
@@ -253,7 +252,7 @@ SCHEMA: list[dict[str, Any]] = [
     # ── Extraction efficiency ─────────────────────────────────────────────
     {"key": "llm_concurrency", "label": "Parallel extraction LLM calls", "kind": "int",
      "min": 1, "max": 32, "group": "Parallelism", "help": "How many extraction LLM calls run concurrently per document. "
-     "vLLM batches concurrent requests into one continuous batch, so raising this speeds ingestion "
+     "A batching model server runs concurrent requests together, so raising this speeds ingestion "
      "up roughly linearly until the model server saturates. Accuracy is unaffected — the exact "
      "same prompts run, just in parallel."},
     {"key": "structured_default_mode", "label": "Default table reading mode", "kind": "select",
@@ -320,7 +319,6 @@ def _env_int(name: str, default: int) -> int:
 def readonly_snapshot() -> dict:
     return {
         "llm_max_model_len": settings.LLM_MAX_MODEL_LEN,
-        "llm_model": settings.LLM_MODEL,
         "query_cache_size": settings.QUERY_CACHE_SIZE,
         "embed_cache_size": settings.EMBED_CACHE_SIZE,
         "ingest_worker_pool": _env_int("CELERY_WORKER_CONCURRENCY",
@@ -330,19 +328,17 @@ def readonly_snapshot() -> dict:
         "db_pool_size": settings.DB_POOL_SIZE,
         "db_max_overflow": settings.DB_MAX_OVERFLOW,
         "read_replica_configured": bool(settings.DATABASE_READ_URL),
-        "embed_model": settings.EMBED_MODEL,
         "vector_dim": settings.EMBED_DIMENSIONS,
         **_compute_snapshot(),
     }
 
 
 def _compute_snapshot() -> dict:
-    """Where generation runs, and what this container is allowed to use.
+    """What this container is allowed to use.
 
-    Both are decided before the process starts — the GPU model server is a compose profile and the
-    memory ceiling is a container limit — so neither is editable here. They are reported because
-    this is the screen an operator is on when generation is failing or a worker is being killed,
-    and "which of these is even switched on" should not require reading compose.yaml.
+    Decided before the process starts — the memory ceiling is a container limit — so not editable
+    here. Reported because this is the screen an operator is on when a worker is being killed. Which
+    MODELS run is the Model Registry's to say; the config route adds them per workspace.
 
     Only THIS container's memory is reported. Showing the whole stack would mean handing the API the
     Docker socket, which is root on the host; `scripts/check-memory-budget.py` does that job from
@@ -350,11 +346,7 @@ def _compute_snapshot() -> dict:
     """
     from opencortyx.core.observability import container_memory
 
-    profiles = {p.strip() for p in os.environ.get("COMPOSE_PROFILES", "").split(",") if p.strip()}
-    out: dict = {
-        "gpu_model_server": "enabled" if "gpu" in profiles else "disabled",
-        "generation_endpoint": settings.LLM_BASE_URL or "(none)",
-    }
+    out: dict = {}
     mem = container_memory()
     if mem:
         used, limit = mem["used_bytes"], mem["limit_bytes"]        # both bytes — keep them that way

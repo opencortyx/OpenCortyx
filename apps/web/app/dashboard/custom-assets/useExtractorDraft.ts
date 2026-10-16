@@ -1,6 +1,6 @@
 "use client";
 
-// Every piece of state and every builder the Custom Metadata page runs on — moved here VERBATIM from
+// Every piece of state and every builder the Custom Extractors page runs on — moved here VERBATIM from
 // page.tsx when the UI was redesigned, so the screens can change without the save payload changing.
 // buildMechanism / buildEmit / sourceSpec / buildSpec / generateYaml / buildRelMechanism are the
 // contract with the engine: edit them here, never re-derive them in a view.

@@ -19,6 +19,5 @@ Desktop; only the checkout and the CLI live in your WSL distribution.
 
 - Keep the checkout inside the Linux filesystem (`~/opencortyx`), not under `/mnt/c`. File access
   across the Windows boundary is much slower, especially for development mode.
-- GPU support comes from the Windows NVIDIA driver; nothing needs to be installed inside WSL.
 - Docker Engine installed directly inside WSL (without Docker Desktop) also works; follow
   [linux.md](linux.md) in that case.

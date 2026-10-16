@@ -7,24 +7,26 @@ import {
 } from "lucide-react";
 import PageHeader from "@/components/layout/PageHeader";
 import Button from "@/components/ui/Button";
+import ModelDownload, { DOWNLOADABLE } from "./ModelDownload";
 
+// A server you run yourself is "openai_compatible" + its address: Ollama, LM Studio, vLLM, ... all
+// speak that protocol. Inside Docker, a server on this computer is host.docker.internal.
 const PROVIDERS = [
-  { id: "vllm", label: "vLLM (self-hosted — default)", needsKey: false, base: "" },
+  { id: "openai_compatible", label: "OpenAI-compatible server (Ollama, LM Studio, vLLM, …)", needsKey: false, base: "http://host.docker.internal:11434/v1" },
   { id: "openai", label: "OpenAI", needsKey: true, base: "" },
-  { id: "groq", label: "Groq", needsKey: true, base: "https://api.groq.com/openai/v1" },
-  { id: "openai_compatible", label: "OpenAI-compatible (Together, Azure…)", needsKey: true, base: "https://…/v1" },
   { id: "anthropic", label: "Anthropic (Claude)", needsKey: true, base: "" },
-  { id: "huggingface", label: "HuggingFace Inference", needsKey: true, base: "" },
-  // EMBEDDING providers that run in this process — no server, no endpoint, no VRAM.
-  { id: "fastembed", label: "fastembed (in-process ONNX — default embedder)", needsKey: false, base: "" },
-  { id: "tei", label: "TEI — HF Text Embeddings Inference (self-hosted)", needsKey: false, base: "" },
-  { id: "infinity", label: "Infinity (self-hosted reranker)", needsKey: false, base: "" },
-  { id: "cohere", label: "Cohere Rerank", needsKey: true, base: "https://api.cohere.com/v2" },
-  { id: "jina", label: "Jina Rerank", needsKey: true, base: "https://api.jina.ai/v1" },
+  { id: "huggingface", label: "HuggingFace Inference (needs a HF token)", needsKey: true, base: "" },
+  { id: "groq", label: "Groq", needsKey: true, base: "https://api.groq.com/openai/v1" },
+  // Run inside OpenCortyx itself — no server, no address.
+  { id: "transformers", label: "Hugging Face model in OpenCortyx (CPU, download first)", needsKey: false, base: "" },
+  { id: "fastembed", label: "fastembed (in OpenCortyx, ONNX on CPU: embedding, rerank)", needsKey: false, base: "" },
   { id: "sentence-transformers", label: "sentence-transformers (in-process, needs INSTALL_RERANK=1)", needsKey: false, base: "" },
 ];
-// providers that expose a live model list at /v1/models (vLLM's served names, or a hosted catalogue)
-const DISCOVERABLE = new Set(["vllm", "openai", "groq", "openai_compatible", "together", "azure"]);
+// providers that expose a live model list at /v1/models; for `transformers`, what is downloaded;
+// for `fastembed`, every model it can run for the role
+const DISCOVERABLE = new Set(["openai", "groq", "openai_compatible", "together", "azure", "huggingface", "transformers", "fastembed"]);
+// providers with no address and no key: they run inside OpenCortyx
+const IN_PROCESS = new Set(["fastembed", "sentence-transformers", "transformers"]);
 // priority tiers shown as badges (matches the model-stack matrix)
 const TIER: Record<string, { label: string; cls: string }> = {
   mandatory:   { label: "Required",    cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
@@ -35,22 +37,22 @@ const TIER: Record<string, { label: string; cls: string }> = {
 
 const ROLES = [
   { id: "generation", label: "Generation (LLM)", icon: Sparkles, tier: "mandatory", wired: true,
-    purpose: "Answer questions, summarize incidents, generate SAR narratives.", hint: "Used by extractors, chat answers, rerank-LLM." },
+    purpose: "Answer questions, summarize incidents, generate SAR narratives.", hint: "Used by chat answers, and by extraction and utility unless they have their own." },
   { id: "embedding", label: "Embedding", icon: Layers, tier: "mandatory", wired: true,
     purpose: "Convert text to vectors for semantic search.", hint: "Vectors for search. Changing this needs a re-index." },
-  { id: "rerank", label: "Reranker", icon: Box, tier: "mandatory", wired: true,
-    purpose: "Re-rank retrieved documents before sending to the LLM.", hint: "Re-orders retrieved candidates." },
+  { id: "rerank", label: "Reranker", icon: Box, tier: "optional", wired: true,
+    purpose: "Re-rank retrieved documents before sending to the LLM.", hint: "Re-orders retrieved candidates. Without it, retrieval still ranks by its other signals." },
   { id: "extraction", label: "Extraction", icon: Tags, tier: "recommended", wired: true,
     purpose: "Run the per-chunk extractors (entities, claims, and your custom extractors).",
-    hint: "The high-volume per-chunk calls. A cheaper/faster model here cuts ingest cost; falls back to Generation. Per-extractor model overrides on each Extractor card still win." },
+    hint: "The high-volume per-chunk calls. A cheaper/faster model here cuts ingest cost; with none set, the Generation model is used. Per-extractor model overrides on each Extractor card still win." },
   { id: "utility", label: "Utility / Judge", icon: Brain, tier: "recommended", wired: true,
     purpose: "The relevance check (CRAG) and the grounding / entailment judge that enforce abstention.",
-    hint: "Give this a capable model to make strict (entailment) abstention reliable — a weak judge over-rejects. Falls back to Generation." },
+    hint: "Give this a capable model to make strict (entailment) abstention reliable — a weak judge over-rejects. With none set, the Generation model is used." },
 ];
 
 const EMPTY: ModelSpecInput & { id?: string } = {
-  id: "", name: "", role: "generation", provider: "vllm", model_id: "",
-  base_url: "", api_key: "", is_default: false,
+  id: "", name: "", role: "generation", provider: "openai_compatible", model_id: "",
+  base_url: "http://host.docker.internal:11434/v1", api_key: "", is_default: true,
 };
 
 export default function ModelRegistryPage() {
@@ -67,6 +69,8 @@ export default function ModelRegistryPage() {
   const [discover, setDiscover] = useState<{ loading: boolean; items: DiscoveredModel[]; note?: string | null }>({ loading: false, items: [] });
   // what the model server is ACTUALLY running, and whether the saved rows agree with it
   const [runtime, setRuntime] = useState<ModelRuntime | null>(null);
+  // a download for the form's Model ID is running: the form must not close or save under it
+  const [downloading, setDownloading] = useState(false);
 
   const fetchItems = async () => {
     try {
@@ -85,7 +89,12 @@ export default function ModelRegistryPage() {
   useEffect(() => { fetchItems(); }, []);
 
   const resetPicker = () => setDiscover({ loading: false, items: [] });
-  const openAdd = (role = "generation") => { setForm({ ...EMPTY, role }); setMsg({ text: "", type: "" }); resetPicker(); setModal(true); };
+  // Embedding and reranking run in OpenCortyx (fastembed) unless the user picks a server.
+  const openAdd = (role = "generation") => {
+    const local = role === "embedding" || role === "rerank";
+    setForm({ ...EMPTY, role, ...(local ? { provider: "fastembed", base_url: "" } : {}) });
+    setMsg({ text: "", type: "" }); resetPicker(); setModal(true);
+  };
   const openEdit = (m: ModelEntry) => {
     setForm({ id: m.id, name: m.name, role: m.role, provider: m.provider, model_id: m.model_id,
       base_url: m.base_url || "", api_key: "", is_default: m.is_default });
@@ -98,7 +107,7 @@ export default function ModelRegistryPage() {
     try {
       const res = await contextV2Api.discoverModels({
         provider: form.provider, base_url: form.base_url || undefined,
-        api_key: form.api_key || undefined, model_id: form.id || undefined,
+        api_key: form.api_key || undefined, model_id: form.id || undefined, role: form.role,
       });
       setDiscover({ loading: false, items: res.items || [], note: res.note });
     } catch (e: any) {
@@ -106,7 +115,7 @@ export default function ModelRegistryPage() {
     }
   };
   // auto-discover when the modal opens or the provider changes
-  useEffect(() => { if (modal) runDiscover(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [modal, form.provider]);
+  useEffect(() => { if (modal) runDiscover(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [modal, form.provider, form.role]);
 
   const save = async () => {
     if (!form.name.trim() || !form.model_id.trim()) { setMsg({ text: "Name and Model ID are required.", type: "error" }); return; }
@@ -126,7 +135,7 @@ export default function ModelRegistryPage() {
   };
 
   const onDelete = async (m: ModelEntry) => {
-    if (!confirm(`Delete model "${m.name}"? Extractors using it will fall back to the default/env model.`)) return;
+    if (!confirm(`Delete model "${m.name}"? Whatever uses it will have no model until you choose another.`)) return;
     try { await contextV2Api.deleteModel(m.id); await fetchItems(); }
     catch { alert("Failed to delete."); }
   };
@@ -158,20 +167,25 @@ export default function ModelRegistryPage() {
           </h2>
           <button onClick={() => openAdd(role.id)} className="text-xs font-semibold text-emerald-600 hover:text-emerald-800 flex items-center gap-1"><Plus size={12} /> Add</button>
         </div>
-        {act && (
+        {act && act.source === "none" && (
+          <div className="mb-2 flex items-center gap-2 text-xs bg-amber-50/70 border border-amber-200 rounded-lg px-3 py-2 text-amber-800">
+            <AlertCircle size={13} className="shrink-0" />
+            <span className="font-semibold">Not connected.</span>
+            <span>Add a model for this role and mark it default.</span>
+          </div>
+        )}
+        {act && act.source === "registry" && (
           <div className="mb-2 flex items-center gap-2 text-xs bg-emerald-50/60 border border-emerald-100 rounded-lg px-3 py-2">
             <Zap size={13} className="text-emerald-500 shrink-0" />
             <span className="font-semibold text-emerald-800">Active now:</span>
             <span className="font-mono text-stone-700 truncate">{act.model_id}</span>
             <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-white border border-stone-200 text-stone-500">{act.provider}</span>
-            <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border" style={{}}>
-              {act.source === "registry"
-                ? <span className="text-emerald-700">registry default{act.name ? ` · ${act.name}` : ""}</span>
-                : <span className="text-stone-500">{act.source === "default" ? "built-in default" : "environment default"}</span>}
+            <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border text-emerald-700">
+              {act.shared_from ? `uses the ${act.shared_from} model` : `default${act.name ? ` · ${act.name}` : ""}`}
             </span>
           </div>
         )}
-        {act?.note && (
+        {act?.source === "registry" && act.note && (
           <p className="-mt-1 mb-2 flex items-start gap-1.5 text-[11.5px] text-amber-800">
             <AlertCircle size={13} className="shrink-0 mt-px" /> {act.note}
           </p>
@@ -223,11 +237,10 @@ export default function ModelRegistryPage() {
         description="Bring your own models across the full stack — local, hosted API, or tiered. Every model type is equal: whatever you mark as the default for a role is the model that role uses — no code changes, no .env settings. Set it here and it's saved (encrypted) and used wherever that capability runs. Keys are encrypted at rest."
       />
 
-      {/* What the inference server is ACTUALLY running.
-          The registry says what this workspace INTENDS to call; this says what is really loaded.
-          They can disagree in a way nothing else surfaces: vLLM answers only to its
-          --served-model-name, so a healthy, running server will 404 every request made under any
-          other name. Without this strip that reads as "the model is broken". */}
+      {/* What each connected model server is ACTUALLY serving.
+          The registry says what this workspace INTENDS to call; this says what is really there.
+          A server answers 404 to a model name it does not serve, which without this strip reads
+          as "the model is broken". */}
       {runtime?.servers?.length ? (
         <div className="mb-6 space-y-3">
           {runtime.servers.map((sv) => {
@@ -241,8 +254,8 @@ export default function ModelRegistryPage() {
                   <Server size={15} className="text-stone-500 shrink-0" />
                   <span className="text-sm font-semibold text-stone-800">Model server</span>
                   <span className="font-mono text-xs text-stone-500">{sv.base_url}</span>
-                  {sv.is_env_default && (
-                    <span className="text-[10px] uppercase tracking-wider font-bold text-stone-400">default</span>
+                  {sv.is_generation && (
+                    <span className="text-[10px] uppercase tracking-wider font-bold text-stone-400">generation</span>
                   )}
                   <span className="ml-auto">
                     {!sv.reachable ? (
@@ -264,7 +277,7 @@ export default function ModelRegistryPage() {
                   <p className="text-xs text-stone-600 mt-1.5">
                     Running: {sv.served_models.length
                       ? sv.served_models.map((m) => <span key={m} className="font-mono mr-2">{m}</span>)
-                      : <span className="italic">nothing yet — still loading weights</span>}
+                      : <span className="italic">no models yet — pull or load one on the server</span>}
                   </p>
                 ) : (
                   <p className="text-xs text-red-700 mt-1.5">{sv.error}</p>
@@ -290,11 +303,11 @@ export default function ModelRegistryPage() {
       )}
 
       {modal && (
-        <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm z-[60] flex items-center justify-center p-4" onClick={() => !busy && setModal(false)}>
+        <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm z-[60] flex items-center justify-center p-4" onClick={() => !busy && !downloading && setModal(false)}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="px-6 py-4 border-b border-stone-100 flex items-center justify-between sticky top-0 bg-white">
               <h2 className="font-bold text-stone-900 flex items-center gap-2"><Cpu size={18} className="text-emerald-500" /> {form.id ? "Edit" : "Add"} Model</h2>
-              <button onClick={() => setModal(false)} className="p-1.5 text-stone-400 hover:bg-stone-100 rounded-md"><X size={18} /></button>
+              <button aria-label="Close" disabled={downloading} onClick={() => setModal(false)} className="p-1.5 text-stone-400 hover:bg-stone-100 rounded-md disabled:opacity-40"><X size={18} /></button>
             </div>
             <div className="p-6 space-y-4">
               <div className="grid grid-cols-2 gap-3">
@@ -308,22 +321,33 @@ export default function ModelRegistryPage() {
               <Field label="Provider">
                 <select value={form.provider} onChange={(e) => {
                   const p = PROVIDERS.find((x) => x.id === e.target.value);
-                  setForm({ ...form, provider: e.target.value, base_url: form.base_url || (p?.base || "") });
+                  setForm({ ...form, provider: e.target.value, base_url: p?.base || "" });
                 }} className={inp}>
                   {PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
                 </select>
               </Field>
-              <Field label="Base URL (optional)"><input value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })} className={inp + " font-mono"} placeholder="provider endpoint" /></Field>
-              {needsKey && (
-                <Field label="API Key"><input type="password" value={form.api_key} onChange={(e) => setForm({ ...form, api_key: e.target.value })} className={inp} placeholder={form.id ? "•••••• (leave blank to keep)" : "sk-…"} /></Field>
+              {!IN_PROCESS.has(form.provider) && (
+                <Field label={form.provider === "openai_compatible" ? "Server address" : "Base URL (optional)"}>
+                  <input value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })} className={inp + " font-mono"}
+                    placeholder={form.provider === "openai_compatible" ? "http://host.docker.internal:11434/v1" : "provider endpoint"} />
+                </Field>
+              )}
+              {form.provider === "openai_compatible" && (
+                <p className="text-[11px] text-stone-400 -mt-2">
+                  A server on this computer is <span className="font-mono">host.docker.internal</span>, not <span className="font-mono">localhost</span>.
+                  Ollama: <span className="font-mono">:11434/v1</span> · LM Studio: <span className="font-mono">:1234/v1</span>.
+                </p>
+              )}
+              {(needsKey || form.provider === "openai_compatible") && (
+                <Field label={needsKey ? "API Key" : "API Key (if the server needs one)"}><input type="password" value={form.api_key} onChange={(e) => setForm({ ...form, api_key: e.target.value })} className={inp} placeholder={form.id ? "•••••• (leave blank to keep)" : needsKey ? "sk-… / hf_…" : "optional"} /></Field>
               )}
 
-              {/* Live picker — what this provider serves RIGHT NOW, asked of the provider itself.
-                  For vLLM these are its --served-model-name(s): the only names it will answer to. */}
+              {/* Live picker — what this provider serves RIGHT NOW, asked of the provider itself:
+                  the only model names it will answer to. */}
               <div className="border border-stone-200 rounded-xl p-3 bg-stone-50/60">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs font-bold text-stone-500 uppercase tracking-wider flex items-center gap-1.5">
-                    <HardDriveDownload size={13} /> Models this server is running
+                    <HardDriveDownload size={13} /> {form.provider === "transformers" ? "Downloaded to OpenCortyx" : form.provider === "fastembed" ? "Models fastembed can run" : "Models this server is running"}
                   </span>
                   <button type="button" onClick={runDiscover} disabled={discover.loading}
                     className="text-xs font-semibold text-emerald-600 hover:text-emerald-800 flex items-center gap-1 disabled:opacity-50">
@@ -339,7 +363,7 @@ export default function ModelRegistryPage() {
                         className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-mono flex items-center justify-between gap-2 border transition-colors ${form.model_id === d.id ? "bg-emerald-50 border-emerald-300 text-emerald-800" : "bg-white border-stone-200 hover:border-emerald-300 text-stone-700"}`}>
                         <span className="truncate">{d.id}</span>
                         <span className="text-[10px] text-stone-400 shrink-0 flex items-center gap-1">
-                          {d.detail || (d.size ? fmtBytes(d.size) : "")}
+                          {[d.detail, d.size ? fmtBytes(d.size) : "", d.downloaded ? "downloaded" : ""].filter(Boolean).join(" · ")}
                           {form.model_id === d.id && <CheckCircle2 size={12} className="text-emerald-500" />}
                         </span>
                       </button>
@@ -351,12 +375,12 @@ export default function ModelRegistryPage() {
 
               </div>
 
-              <Field label="Model ID"><input value={form.model_id} onChange={(e) => setForm({ ...form, model_id: e.target.value })} className={inp + " font-mono"} placeholder={form.role === "embedding" ? "nomic-ai/nomic-embed-text-v1.5 / text-embedding-3-small" : "opencortyx-llm (vLLM served name) / gpt-4o / claude-sonnet-5-5"} /></Field>
-              {form.provider === "vllm" && (
-                <p className="text-[11px] text-stone-400 -mt-1">
-                  For vLLM this must be the server&apos;s <span className="font-mono">--served-model-name</span>, not a
-                  HuggingFace repo — pick it from the list above. Any other name returns 404 on every call.
-                </p>
+              <Field label="Model ID"><input value={form.model_id} onChange={(e) => setForm({ ...form, model_id: e.target.value })} className={inp + " font-mono"} placeholder={form.role === "embedding" ? "nomic-ai/nomic-embed-text-v1.5 / text-embedding-3-small" : form.role === "rerank" ? "Xenova/ms-marco-MiniLM-L-6-v2" : form.provider === "transformers" ? "Qwen/Qwen2.5-0.5B-Instruct" : "qwen2.5:1.5b (Ollama) / Qwen/Qwen2.5-1.5B-Instruct / gpt-4o"} /></Field>
+              {/* Not on this machine yet: download it here, into OpenCortyx or into Ollama. */}
+              {DOWNLOADABLE.has(form.provider) && !discover.loading && (
+                <ModelDownload provider={form.provider} role={form.role} baseUrl={form.base_url || ""} modelId={form.model_id}
+                  available={discover.items} onBusy={setDownloading}
+                  onDone={(id) => { if (id) setForm((f) => ({ ...f, model_id: id, name: f.name || id.split("/").pop() || id })); runDiscover(); }} />
               )}
               <label className="flex items-center gap-2 text-sm text-stone-700">
                 <input type="checkbox" checked={form.is_default} onChange={(e) => setForm({ ...form, is_default: e.target.checked })} className="rounded border-stone-300" />
@@ -369,8 +393,8 @@ export default function ModelRegistryPage() {
               )}
             </div>
             <div className="px-6 py-4 border-t border-stone-100 flex justify-end gap-3 sticky bottom-0 bg-white">
-              <Button variant="secondary" disabled={busy} onClick={() => setModal(false)}>Cancel</Button>
-              <Button variant="primary" icon={CheckCircle2} busy={busy} onClick={save}>{form.id ? "Update" : "Save"} Model</Button>
+              <Button variant="secondary" disabled={busy || downloading} onClick={() => setModal(false)}>Cancel</Button>
+              <Button variant="primary" icon={CheckCircle2} busy={busy} disabled={downloading} onClick={save}>{form.id ? "Update" : "Save"} Model</Button>
             </div>
           </div>
         </div>

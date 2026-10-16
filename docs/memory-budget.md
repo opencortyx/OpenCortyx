@@ -24,9 +24,8 @@ Check it against your Docker VM:
 | web | 85 MiB | 512m | production build |
 | mcp | 65 MiB | 192m | |
 | redis | 20 MiB | 192m | |
-| vllm | 2351 MiB | 2560m | `gpu` profile only — **92% of its ceiling** |
 | setup | exits | 768m | one-shot: graph `ADD HOSTS` + schema, vector collection, database migrations |
-| **sum** | **6.4 GiB** | **19.31 GiB** | |
+| **sum** | **4.1 GiB** | **16.81 GiB** | |
 
 The graph and vector stores were missing from this table until 2026-09-19: it still described the
 single-Postgres world from ADR-001, which is why the documented ceiling total read 13.25 GiB while
@@ -36,16 +35,14 @@ Measured on a FRESHLY WIPED install with no ingested corpus, so the store rows a
 than working sets — postgres, nebula-storaged and qdrant all grow with the data. Re-measure under
 your own load before trusting them.
 
-Two things this table is currently telling you:
+What this table is currently telling you: **the ceilings total 16.81 GiB and the measured working
+set is 4.1 GiB.** The stack fits an 8 GiB VM in practice and does not fit on paper, which is exactly
+the condition where the kernel, not Docker, decides what dies. `setup` exits after start-up.
 
-* **vllm sits at 92% of its ceiling while loading.** That is why its engine core dies with
-  `EngineCore_DP0: -9` (SIGKILL) on a constrained VM, and why the model server never comes up.
-  Raising it means lowering something else, or giving the VM more.
-* **The ceilings total 19.31 GiB and the measured working set is 6.4 GiB.** The stack fits a 10 GiB
-  VM in practice and does not fit on paper, which is exactly the condition where the kernel, not
-  Docker, decides what dies.
+The generation model is not in this table: it runs on the model server you connect (Ollama, LM
+Studio, a hosted API, ...), outside this stack — on the same machine, it needs its own memory on top.
 
-Without the `gpu` profile the ceilings total 16.81 GiB and `setup` exits after start-up. Give Docker at least 8 GiB (12 GiB with a local vLLM). On Windows set `memory=` in
+Give Docker at least 8 GiB. On Windows set `memory=` in
 `%USERPROFILE%\.wslconfig` and run `wsl --shutdown`.
 
 ## Setting the limits
@@ -63,7 +60,7 @@ Every ceiling above is a default. Override any of them in `.env`, then run `dock
 | `POSTGRES_MEM_LIMIT`, `QDRANT_MEM_LIMIT` | 1024m | postgres, qdrant |
 | `NEBULAGRAPH_MEM_LIMIT`, `NEBULA_STORAGED_MEM_LIMIT`, `NEBULA_METAD_MEM_LIMIT` | 1024m, 1024m, 512m | the graph store |
 | `WEB_MEM_LIMIT`, `MCP_MEM_LIMIT`, `REDIS_MEM_LIMIT` | 512m, 192m, 192m | web, mcp, redis |
-| `SETUP_MEM_LIMIT`, `VLLM_MEM_LIMIT` | 768m, 2560m | the one-shot setup, vLLM |
+| `SETUP_MEM_LIMIT` | 768m | the one-shot setup |
 | `CELERY_WORKER_MAX_MEMORY_KB` | 1500000 | worker, per child |
 | `EXTRACTION_WORKER_MAX_MEMORY_KB` | 1000000 | extraction-worker, per child |
 | `MAINTENANCE_WORKER_MAX_MEMORY_KB` | 300000 | maintenance-worker, per child |

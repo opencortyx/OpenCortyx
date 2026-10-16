@@ -1,6 +1,6 @@
 "use client";
 
-// The three lists on the Custom Metadata page: your extractors, relationships, built-ins.
+// The three lists on the Custom Extractors page: your extractors, relationships, built-ins.
 // Every card action from the old page is here (Run / Edit / Delete, approve / reject, companion
 // Run + Edit prompt & model); the dense built-in card body now opens from a row instead of always
 // being on screen.

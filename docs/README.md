@@ -14,11 +14,11 @@
 | [Trust](features/trust.md) | Curation, Nodes & Relationships, Review Queue, Evaluations, Quarantine |
 | [Integration](features/integration.md) | Add data, Connections, Ingestion, Mapper, Pipelines, Runs |
 | [Intelligence](features/intelligence.md) | AI Assistant, Conversations, MCP tools |
-| [Administration](features/administration.md) | Users & Access, Custom Metadata, Models, System Health, Settings |
+| [Administration](features/administration.md) | Users & Access, Models, System Health, Settings |
 
 ## Operating OpenCortyx
 
-- [Models](models.md): local GPU, Ollama and LM Studio, hosted providers
+- [Models](models.md): Ollama, LM Studio and vLLM, Hugging Face Inference, hosted providers
 - [Updating](installation/updating.md)
 - [Backup and restore](BACKUP-RESTORE.md)
 - [Memory budget](memory-budget.md)

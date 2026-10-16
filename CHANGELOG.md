@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+### Added
+- Download a model while adding it on the Models page, for every role. A text model: Ollama pulls
+  a GGUF model from Hugging Face to run on your GPU, or OpenCortyx downloads a small model and runs
+  it on the CPU with no other install (the new **Hugging Face model in OpenCortyx** provider). An
+  embedder or reranker: any model fastembed supports, downloaded before its first use.
+- fastembed rerankers (ONNX, CPU), so reranking no longer needs `INSTALL_RERANK=1`.
+
+### Changed
+- Models are chosen on the **Models** page and nowhere else. `.env` no longer selects a model
+  (`LLM_PROVIDER`, `LLM_MODEL`, `LLM_BASE_URL`, `EMBED_PROVIDER`, `EMBED_MODEL` and the like are
+  ignored), and nothing falls back to a model that was not chosen there. Each workspace calls its
+  own models.
+- A new workspace starts with the embedding and rerank models only. Until a generation model is
+  added, the AI Assistant and extraction say that no generation model is connected.
+- Ollama, LM Studio and vLLM are all connected as an **OpenAI-compatible server** with their
+  address; the separate vLLM provider is merged into it. Migration `0030` converts existing rows
+  and deletes the ones that pointed at the bundled server (`http://vllm:8000/v1`).
+- Hugging Face Inference goes through Hugging Face's OpenAI-compatible router
+  (`https://router.huggingface.co/v1`).
+- **Custom Metadata** is now **Custom Extractors**, under Integration.
+- **Add data** takes several files at once, and lets you choose a pipeline per kind of file; without
+  a choice, the default pipeline for the file type is used.
+- A new workspace no longer writes its template's types into the graph, so the catalogue and
+  Lineage start empty. The start-up log no longer prints the confusing `4/4 workspaces: 0 with
+  people`.
+- Model names no longer carry "(built-in)".
+
+### Removed
+- The bundled vLLM server: the `vllm` service, its image, the `gpu` profile and the GPU detection
+  in `bin/opencortyx init`.
+- The TEI, Infinity, Cohere Rerank and Jina Rerank providers. Models that used them are deleted on
+  upgrade.
+- The "New semi-structured mapping" button on the empty Mapper page.
+
+### Fixed
+- `bin/opencortyx up --build` failed with `image ... already exists`: five services built the same
+  API image at once. Only `api` builds it now; the others use it.
+- Retrieval never used the reranker chosen on the Models page. It now uses the workspace's default
+  reranker when the image can run it.
+- The AI Assistant said "no grounded evidence" when no generation model was connected, or the model
+  server was down. It now says what is wrong.
+- Windows: a first install no longer stops on an expected failure under Windows PowerShell 5.1.
+
 ## 0.1.0-beta.2 - 2026-10-16
 
 First release under the MIT license.

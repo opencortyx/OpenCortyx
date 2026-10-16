@@ -56,6 +56,7 @@ const SECTIONS = [
       { href: "/dashboard/add", label: "Add data", icon: Sparkles },
       { href: "/dashboard/connectors", label: "Connections", icon: Cable },
       { href: "/dashboard/mapper", label: "Mapper", icon: Workflow },
+      { href: "/dashboard/custom-assets", label: "Custom Extractors", icon: SlidersHorizontal },
       { href: "/dashboard/pipelines", label: "Pipelines", icon: GitBranch },
       { href: "/dashboard/ingest", label: "Ingestion", icon: UploadCloud },
       { href: "/dashboard/progress", label: "Runs", icon: Activity },
@@ -72,7 +73,6 @@ const SECTIONS = [
     title: "Administration",
     items: [
       { href: "/dashboard/users", label: "Users & Access", icon: UserCog, adminOnly: true },
-      { href: "/dashboard/custom-assets", label: "Custom Metadata", icon: SlidersHorizontal },
       { href: "/dashboard/models", label: "Models", icon: Cpu, adminOnly: true },
       { href: "/dashboard/health", label: "System Health", icon: HeartPulse },
     ],

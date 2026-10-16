@@ -5,7 +5,9 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, select
 
-from opencortyx.api.schemas.system.models import ModelDiscover, ModelSpec
+from opencortyx.api.schemas.system.models import (
+    FastembedDownload, HFDownload, ModelDiscover, ModelSpec, OllamaPull,
+)
 from opencortyx.api.services.system.models import (
     clear_default,
     model_cache_clear,
@@ -15,7 +17,7 @@ from opencortyx.api.services.system.models import (
 from opencortyx.core.security.auth import CurrentUser, require_auth, require_write
 from opencortyx.core.db import V2Session
 from opencortyx.domain.control import Model
-from opencortyx.core.inference.registry import MODEL_ROLES, ensure_default_models, resolve_model
+from opencortyx.core.inference.registry import MODEL_ROLES, resolve_model
 from opencortyx.core.security.secrets import encrypt_secret
 
 router = APIRouter()
@@ -23,8 +25,6 @@ router = APIRouter()
 
 @router.get("/models")
 async def list_models(role: Optional[str] = None, user: CurrentUser = Depends(require_auth)):
-    from opencortyx.core.inference.registry import ensure_default_models
-    await ensure_default_models(user.workspace_id)        # self-heal: existing orgs get the built-in defaults
     async with V2Session() as db:
         q = select(Model).where(Model.workspace_id == user.workspace_id)
         if role:
@@ -35,78 +35,64 @@ async def list_models(role: Optional[str] = None, user: CurrentUser = Depends(re
 
 @router.get("/models/active")
 async def active_models(user: CurrentUser = Depends(require_auth)):
-    """The model ACTUALLY IN EFFECT per wired role right now — proof the registry is connected to the
-    pipeline. Resolution is: a registered model marked default for the role → else the env/built-in
-    default. The UI shows this so you can see what's running and that assigning a default takes over."""
-    from opencortyx.core.config import CROSS_ENCODER_MODEL
-
-    await ensure_default_models(user.workspace_id)        # self-heal: existing orgs get the built-in defaults
+    """The model IN EFFECT per role right now — proof the registry drives the pipeline. Each role is
+    served by its own default row, shares the generation model (extraction, utility), or is not
+    connected; there is no other source."""
     out = []
     for role in MODEL_ROLES:
         spec = await resolve_model(user.workspace_id, role)
-        registered = bool(spec.get("id"))
-        if role == "rerank" and not registered:
-            # the built-in default reranker is a LOCAL cross-encoder, not the LLM env fallback
-            out.append({"role": role, "source": "default", "provider": "sentence-transformers (local)",
-                        "model_id": CROSS_ENCODER_MODEL, "base_url": None, "name": None, "has_key": False,
-                        "note": "Local cross-encoder; LLM rerank used as fallback if unavailable."})
+        if not spec:
+            out.append({"role": role, "source": "none", "provider": None, "model_id": None,
+                        "base_url": None, "name": None, "has_key": False,
+                        "note": "Not connected - add a model for this role."})
             continue
-        row = {"role": role, "source": "registry" if registered else "env",
+        row = {"role": role, "source": "registry",
                "provider": spec.get("provider"), "model_id": spec.get("model_id"),
                "base_url": spec.get("base_url"), "name": spec.get("name"),
                "has_key": bool(spec.get("api_key"))}
+        if spec.get("role") and spec.get("role") != role:
+            row["shared_from"] = spec.get("role")
         if role == "rerank" and str(spec.get("provider") or "").lower() == "sentence-transformers":
             from opencortyx.core.inference.embedding import cross_encoder_installed
             if not cross_encoder_installed():
                 # Registered is not the same as running: this image cannot load it, and every query
-                # is reranked by the LLM instead. Said where the model is shown as "active".
-                row["note"] = ("not installed in this image — searches use the LLM reranker. "
-                               "Rebuild with INSTALL_RERANK=1 or point this role at an HTTP reranker.")
+                # ranks without the cross-encoder. Said where the model is shown as "active".
+                row["note"] = ("not installed in this image — searches rank without it. "
+                               "Rebuild with INSTALL_RERANK=1 to use it.")
         out.append(row)
     return {"items": out}
 
 
 @router.get("/models/runtime")
 async def model_runtime(user: CurrentUser = Depends(require_auth)):
-    """What the inference server is ACTUALLY running, and whether this workspace agrees with it.
+    """What each connected model server is ACTUALLY serving, and whether this workspace agrees.
 
-    This replaces the old Ollama "pull a model" endpoint, which has no vLLM equivalent and could not
-    be made to have one: vLLM loads exactly one model, chosen by the flags it was STARTED with, and
-    holds it pinned for the process lifetime. There is no runtime download to trigger, so a Download
-    button here could only ever fail.
-
-    What is genuinely needed instead is the answer to "is the server up, and is it serving the name
-    my rows ask for?" — because vLLM answers 404 to every name that is not its `--served-model-name`,
-    and a healthy server serving the wrong alias is indistinguishable, from the UI, from a broken
-    model. Each row is reported as ok / mismatch / unreachable with the served names to choose from.
+    The question that matters is "is the server up, and is it serving the name my rows ask for?" — a
+    server answers 404 to a model name it does not serve, and a healthy server serving a different
+    name is indistinguishable, from the UI, from a broken model. Each row is reported as ok /
+    mismatch / unreachable with the served names to choose from.
     """
     import httpx
 
     from opencortyx.core.config import OPENAI_COMPATIBLE_PROVIDERS
 
-    await ensure_default_models(user.workspace_id)
     async with V2Session() as db:
         rows = (await db.execute(select(Model).where(Model.workspace_id == user.workspace_id))).scalars().all()
 
     # Group the rows we must check by ENDPOINT, so one server is probed once however many roles
-    # point at it — the single-GPU default, where every text role shares one vLLM.
+    # point at it — commonly one server answering every text role.
     by_url: dict = {}
     for m in rows:
         prov = (m.provider or "").lower()
         if prov not in OPENAI_COMPATIBLE_PROVIDERS:
             continue                     # in-process or hosted-SDK provider: nothing to probe here
-        spec = await resolve_model(user.workspace_id, m.role, str(m.id))
+        spec = await resolve_model(user.workspace_id, m.role, str(m.id)) or {}
         url = (spec.get("base_url") or "").rstrip("/")
         if url:
             by_url.setdefault(url, []).append((m, spec))
 
-    # Always include the generation model's server, even with no rows pointing at it — an empty
-    # registry must not read as "nothing to report" when the whole stack depends on that endpoint.
-    gen = await resolve_model(user.workspace_id, "generation")
-    gen_provider = str(gen.get("provider") or "").lower()
-    env_url = (gen.get("base_url") or "").rstrip("/")
-    if env_url and env_url not in by_url and gen_provider in OPENAI_COMPATIBLE_PROVIDERS:
-        by_url[env_url] = []
+    gen = await resolve_model(user.workspace_id, "generation") or {}
+    gen_url = (gen.get("base_url") or "").rstrip("/")
 
     servers = []
     for url, entries in by_url.items():
@@ -130,18 +116,18 @@ async def model_runtime(user: CurrentUser = Depends(require_auth)):
             else:
                 status = "mismatch"
                 hint = (f"This server serves {served or 'nothing yet'}. Set this row's Model ID to "
-                        f"one of those names"
-                        + (f", or restart the server with --served-model-name {spec.get('model_id')}."
-                           if str(spec.get("provider") or "").lower() == "vllm" else "."))
+                        f"one of those names.")
             models.append({"id": str(m.id), "name": m.name, "role": m.role,
                            "model_id": spec.get("model_id"),
                            "weights": (spec.get("params") or {}).get("weights"),
                            "status": status, "hint": hint})
         servers.append({"base_url": url, "reachable": error is None, "error": error,
                         "served_models": served, "models": models,
-                        "is_env_default": url == env_url})
+                        "is_generation": url == gen_url})
 
-    return {"servers": servers, "note": _server_note(gen_provider)}
+    return {"servers": servers,
+            "note": ("A server lists the models it can serve. Set a role's Model ID to one of those "
+                     "names; to add a model, pull or load it on the server itself.")}
 
 
 def _check_role(role: str) -> None:
@@ -150,14 +136,19 @@ def _check_role(role: str) -> None:
                             detail=f"'{role}' is not a model role — use one of {', '.join(MODEL_ROLES)}")
 
 
-def _server_note(provider: str) -> str:
-    """How models get onto THIS deployment's server — vLLM and a multi-model server differ."""
-    if provider == "vllm":
-        return ("vLLM serves one model per process, loaded at startup. To change which model runs, "
-                "change the server's --model / --served-model-name and restart it — there is "
-                "nothing to download from here.")
-    return ("This server lists every model it can serve. Set a role's Model ID to one of the names "
-            "above; to add a model, pull it on the server itself.")
+def _check_dimensions(spec: ModelSpec) -> None:
+    """An embedder must make vectors the size the index holds, or nothing it embeds can be stored."""
+    if spec.role != "embedding" or spec.provider.lower() != "fastembed":
+        return
+    from opencortyx.core.config import settings
+    from opencortyx.core.inference.fastembed_models import describe
+    d = describe("embedding", spec.model_id)
+    dim = (d or {}).get("dim")
+    if dim and dim != settings.EMBED_DIMENSIONS:
+        raise HTTPException(status_code=400, detail=(
+            f"{spec.model_id} makes {dim}-dimension vectors, and the index holds "
+            f"{settings.EMBED_DIMENSIONS}. Pick a {settings.EMBED_DIMENSIONS}-dimension model, or set "
+            f"EMBED_DIMENSIONS={dim} in .env, restart, and re-index."))
 
 
 @router.post("/models")
@@ -165,6 +156,7 @@ async def create_model(spec: ModelSpec, user: CurrentUser = Depends(require_writ
     if not spec.name.strip() or not spec.model_id.strip():
         raise HTTPException(status_code=400, detail="name and model_id are required")
     _check_role(spec.role)
+    _check_dimensions(spec)
     async with V2Session() as db:
         if spec.is_default:
             await clear_default(db, user.workspace_id, spec.role)
@@ -182,6 +174,7 @@ async def create_model(spec: ModelSpec, user: CurrentUser = Depends(require_writ
 @router.put("/models/{model_id}")
 async def update_model(model_id: str, spec: ModelSpec, user: CurrentUser = Depends(require_write)):
     _check_role(spec.role)
+    _check_dimensions(spec)
     async with V2Session() as db:
         m = await db.get(Model, uuid.UUID(model_id))
         if not m or m.workspace_id != user.workspace_id:
@@ -271,17 +264,21 @@ async def _probe(m, spec) -> dict:
         try:
             with anyio.fail_after(20):
                 model = await anyio.to_thread.run_sync(
-                    lambda: get_cross_encoder(spec.get("model_id")))
+                    lambda: get_cross_encoder(spec.get("model_id"), prov))
         except TimeoutError:
             return {"ok": True, "role": m.role, "pending": True,
                     "sample": "downloading weights — this is the first load and continues in "
                               "the background. Test again shortly."}
+        if model is None and prov == "fastembed":
+            return {"ok": False, "role": m.role,
+                    "error": f"{spec.get('model_id')} could not be loaded: it is not a fastembed "
+                             "reranker, or its download failed. Pick one from the list and press "
+                             "Download."}
         if model is None:
             return {"ok": False, "role": m.role,
                     "error": "sentence-transformers is not installed in this image. Rebuild "
-                             "with INSTALL_RERANK=1, or point this role at an HTTP reranker "
-                             "(TEI / Infinity / Cohere / Jina). Retrieval currently falls back "
-                             "to the LLM reranker."}
+                             "with INSTALL_RERANK=1 to use it. Until then, retrieval ranks "
+                             "without the cross-encoder."}
         return {"ok": True, "role": m.role, "sample": "cross-encoder loaded"}
     from opencortyx.core.inference.llm import complete
     out = await complete("Reply with the single word: OK", max_tokens=8, temperature=0.0, model_spec=spec)
@@ -290,19 +287,17 @@ async def _probe(m, spec) -> dict:
 
 @router.post("/models/discover")
 async def discover_models(body: ModelDiscover, user: CurrentUser = Depends(require_auth)):
-    """List the models a provider serves RIGHT NOW, from `GET /v1/models` — the vLLM server's own
-    `--served-model-name`(s), or a hosted endpoint's catalogue (OpenAI, Groq, Together, Azure).
+    """List the models a provider serves RIGHT NOW, from `GET /v1/models` — a server you run (Ollama,
+    LM Studio, vLLM, ...) or a hosted endpoint's catalogue (OpenAI, Groq, Together, Azure).
 
-    This is what powers the Add-model picker, and for vLLM it is more than a convenience: the served
-    name is an alias chosen at server start, so it is genuinely unguessable from the outside, and
-    typing it by hand is the single most common way to end up with a row that 404s on every call.
-    Picking from this list makes that class of mistake unreachable. Never raises — returns
+    This is what powers the Add-model picker: a server's model names are its own, and typing one by
+    hand is the most common way to end up with a row that 404s on every call. Never raises — returns
     {items, source, note} with a plain-English note when the provider can't be reached."""
     import httpx
 
     from opencortyx.core.security.secrets import decrypt_secret
 
-    provider = (body.provider or "vllm").lower()
+    provider = (body.provider or "openai_compatible").lower()
     base = (body.base_url or "").rstrip("/")
     api_key = body.api_key or None
     # editing an existing model → reuse its stored base/key when the form didn't re-supply them
@@ -317,12 +312,30 @@ async def discover_models(body: ModelDiscover, user: CurrentUser = Depends(requi
         except Exception:
             pass
 
+    if provider == "fastembed":                         # every model fastembed can run, by role
+        import anyio
+
+        from opencortyx.core.inference import fastembed_models
+        role = "rerank" if body.role == "rerank" else "embedding"
+        items = await anyio.to_thread.run_sync(fastembed_models.catalogue, role)
+        return {"items": items, "source": "fastembed", "provider": provider, "note": None}
+
+    if provider == "transformers":                      # what is downloaded into the model cache
+        import anyio
+
+        from opencortyx.core.inference import hf_hub
+        items = await anyio.to_thread.run_sync(hf_hub.downloaded)
+        return {"items": items, "source": "model cache", "provider": provider,
+                "note": None if items else ("Nothing downloaded yet. Type a Hugging Face model as "
+                                            "the Model ID and press Download.")}
+
     try:
-        if provider in ("vllm", "openai", "openai_compatible", "groq", "together", "azure"):
+        if provider in ("openai", "openai_compatible", "groq", "together", "azure", "huggingface"):
             b = (base or provider_default_base(provider)).rstrip("/")
             if not b:
                 return {"items": [], "source": b, "provider": provider,
-                        "note": "Enter this provider's Base URL, then Refresh to list its models."}
+                        "note": "Enter the server's address (e.g. http://host.docker.internal:11434/v1 "
+                                "for Ollama on this computer), then Refresh to list its models."}
             headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
             async with httpx.AsyncClient(timeout=12.0) as c:
                 r = await c.get(f"{b}/models", headers=headers)
@@ -334,8 +347,8 @@ async def discover_models(body: ModelDiscover, user: CurrentUser = Depends(requi
             items.sort(key=lambda x: x["id"] or "")
             note = None
             if not items:
-                note = ("Endpoint reachable but advertised no models — for vLLM this usually means "
-                        "it is still loading weights; its /health goes ready only after the load.")
+                note = ("Endpoint reachable but advertised no models — the server may still be "
+                        "loading one, or none is pulled yet.")
             return {"items": items, "source": b, "provider": provider, "note": note}
     except Exception as e:
         return {"items": [], "source": base, "provider": provider,
@@ -345,3 +358,143 @@ async def discover_models(body: ModelDiscover, user: CurrentUser = Depends(requi
     # no universal listing endpoint.
     return {"items": [], "source": base, "provider": provider,
             "note": "This provider has no model-list endpoint — enter the model id manually."}
+
+
+# ── Downloading models ────────────────────────────────────────────────────────────────────────────
+# Two ways to run a Hugging Face model on this machine: in OpenCortyx itself (CPU, `transformers`,
+# downloaded into the shared model cache), or in an Ollama server the user runs (fast, GPU), which
+# pulls GGUF repositories straight from the Hub. OpenCortyx still ships no model server.
+
+def _hf_error(e: Exception) -> HTTPException:
+    if isinstance(e, ValueError):
+        return HTTPException(status_code=400, detail=str(e))
+    return HTTPException(status_code=502, detail=f"Couldn't reach Hugging Face: {str(e)[:200]}")
+
+
+@router.post("/models/hf/info")
+async def hf_model_info(body: HFDownload, user: CurrentUser = Depends(require_write)):
+    """Size, type and whether `repo` can run in OpenCortyx, before anything is downloaded."""
+    import anyio
+
+    from opencortyx.core.inference import hf_hub
+    try:
+        return await anyio.to_thread.run_sync(hf_hub.info, body.repo.strip(), body.token)
+    except Exception as e:
+        raise _hf_error(e)
+
+
+@router.post("/models/hf/download")
+async def hf_download(body: HFDownload, user: CurrentUser = Depends(require_write)):
+    """Start downloading a model into the model cache; poll GET /models/hf/download for progress."""
+    import anyio
+
+    from opencortyx.core.inference import hf_hub
+    try:
+        return await anyio.to_thread.run_sync(hf_hub.start, body.repo.strip(), body.token)
+    except Exception as e:
+        raise _hf_error(e)
+
+
+@router.get("/models/hf/download")
+async def hf_download_status(repo: str, user: CurrentUser = Depends(require_auth)):
+    import anyio
+
+    from opencortyx.core.inference import hf_hub
+    return await anyio.to_thread.run_sync(hf_hub.status, repo.strip())
+
+
+@router.get("/models/hf/local")
+async def hf_local_models(user: CurrentUser = Depends(require_auth)):
+    """The text-generation models downloaded into the model cache."""
+    import anyio
+
+    from opencortyx.core.inference import hf_hub
+    return {"items": await anyio.to_thread.run_sync(hf_hub.downloaded)}
+
+
+@router.delete("/models/hf/local")
+async def hf_delete_local(repo: str, user: CurrentUser = Depends(require_write)):
+    """Free the disk a downloaded model uses. A registry row that names it stops working."""
+    import anyio
+
+    from opencortyx.core.inference import hf_hub
+    if not await anyio.to_thread.run_sync(hf_hub.delete, repo.strip()):
+        raise HTTPException(status_code=404, detail=f"'{repo}' is not downloaded")
+    return {"status": "ok", "deleted": repo}
+
+
+@router.post("/models/fastembed/download")
+async def fastembed_download(body: FastembedDownload, user: CurrentUser = Depends(require_write)):
+    """Download a fastembed embedder or reranker now, rather than on its first use."""
+    import anyio
+
+    from opencortyx.core.inference import fastembed_models
+    try:
+        return await anyio.to_thread.run_sync(fastembed_models.start, body.role, body.model.strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/models/fastembed/download")
+async def fastembed_download_status(model: str, role: str = "embedding",
+                                    user: CurrentUser = Depends(require_auth)):
+    import anyio
+
+    from opencortyx.core.inference import fastembed_models
+    return await anyio.to_thread.run_sync(fastembed_models.status, role, model.strip())
+
+
+def _ollama_name(model: str) -> str:
+    """Ollama's name for a model: a Hugging Face repository is `hf.co/<repo>[:quant]`."""
+    name = model.strip()
+    for prefix in ("https://huggingface.co/", "huggingface.co/"):
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+    if "/" in name and not name.startswith("hf.co/"):
+        name = "hf.co/" + name
+    return name
+
+
+@router.post("/models/ollama/pull")
+async def ollama_pull(body: OllamaPull, user: CurrentUser = Depends(require_write)):
+    """Have an Ollama server download a model, streaming its progress as NDJSON lines.
+
+    Ollama pulls GGUF repositories from Hugging Face itself (`hf.co/<repo>`), so the weights go
+    straight to the server that runs them. If the page closes, Ollama stops; pulling again resumes.
+    """
+    import json
+
+    import httpx
+    from fastapi.responses import StreamingResponse
+
+    root = body.base_url.strip().rstrip("/")
+    if root.endswith("/v1"):
+        root = root[:-3]
+    name = _ollama_name(body.model)
+    if not name:
+        raise HTTPException(status_code=400, detail="enter a model to download")
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as c:
+            (await c.get(f"{root}/api/version")).raise_for_status()
+    except Exception:
+        raise HTTPException(status_code=400, detail=(
+            f"No Ollama server answers at {root}. Downloading works with Ollama; LM Studio and vLLM "
+            "load models themselves. Ollama on this computer: http://host.docker.internal:11434/v1"))
+
+    async def progress():
+        yield json.dumps({"model": name, "status": "starting"}) + "\n"
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(None, connect=10.0)) as c:
+                async with c.stream("POST", f"{root}/api/pull",
+                                    json={"model": name, "stream": True}) as r:
+                    if r.status_code >= 400:
+                        text = (await r.aread()).decode(errors="replace")
+                        yield json.dumps({"error": text[:300] or f"HTTP {r.status_code}"}) + "\n"
+                        return
+                    async for line in r.aiter_lines():
+                        if line.strip():
+                            yield line + "\n"
+        except Exception as e:                          # noqa: BLE001 — reported in the stream
+            yield json.dumps({"error": f"The download stopped: {str(e)[:200]}"}) + "\n"
+
+    return StreamingResponse(progress(), media_type="application/x-ndjson")

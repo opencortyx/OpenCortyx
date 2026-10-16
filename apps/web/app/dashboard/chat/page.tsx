@@ -179,7 +179,11 @@ export default function ChatPage() {
           ensure();
           setMsgs((m) => {
             const c = [...m]; const last = c[c.length - 1];
-            const text = d.abstained
+            // A failed generation (no model connected, server down) carries the reason in
+            // `answer`; only a real abstention on the evidence reads as one.
+            const text = d.error
+              ? `⚠ ${d.answer || d.error}`
+              : d.abstained
               ? "No grounded evidence found — abstained instead of guessing."
               : (d.answer ?? last?.text ?? "");
             c[c.length - 1] = {
@@ -212,7 +216,7 @@ export default function ChatPage() {
         }]);
       }
     } catch (e: any) {
-      // surface the API's real reason (e.g. "vLLM out of GPU memory") instead of a generic message
+      // surface the API's real reason (e.g. "No generation model is connected") instead of a generic message
       const detail = e?.response?.data?.detail || e?.response?.data?.message || e?.message || String(e);
       setMsgs((m) => [...m, { role: "assistant", text: `⚠ ${detail}` }]);
     } finally {

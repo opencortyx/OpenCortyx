@@ -1,6 +1,6 @@
 # Administration
 
-Manage people, models, extractors and the running system. You find these pages under
+Manage people, models and the running system. You find these pages under
 **Administration** in the dashboard menu. Most of them need the `admin` role.
 
 ## Users & Access
@@ -36,37 +36,6 @@ Decide who can use the workspace and what they can do, and create keys for agent
 - The first visit to a new installation creates the admin account. There is no default password.
 - Revoke a key you no longer use. Anything using it stops working at once.
 
-## Custom Metadata
-
-Extractors turn what you already have into new nodes, relationships and attributes, for example
-the people and organisations named in a document. You define them here, without code.
-
-![Custom Metadata](../assets/screenshots/custom-metadata.png)
-
-### How to use it
-
-1. Open **Custom Metadata**. The three tabs are:
-   - **Your extractors**: the ones you created.
-   - **Relationships**: rules that connect nodes into typed relationships.
-   - **Built-in**: the extractors that ship with OpenCortyx, grouped by what they read (structured
-     tables, documents and text, and more).
-2. To create one, press **New extractor** and say:
-   - which node types it reads (for example `Chunk`),
-   - how it works (an AI prompt, code, or a rule),
-   - what it produces: the node types, relationships and attributes.
-3. Preview it on a few sample nodes, then save.
-4. Press **Run** on any extractor to run it over the workspace now, or add it as a step in a
-   [pipeline](integration.md#pipelines) so it runs on every new asset.
-5. Press **Edit** to change an extractor, or the bin to delete one of yours.
-
-### Resolution settings
-
-An extractor's **Resolution** section says when two nodes it creates are the same thing: the fields
-they are **identified by**, the **Scorer** (exact or similar), and when a match is applied
-automatically or sent for review. It is the same setting, per node type, that you find on
-[Nodes & Relationships](trust.md#match-the-same-record-across-files-resolution), which works for
-every type, including the record types of a JSON mapping.
-
 ## Models
 
 Choose which models OpenCortyx uses for each job.
@@ -75,31 +44,35 @@ Choose which models OpenCortyx uses for each job.
 
 ### How to use it
 
-1. Open **Models**. The box at the top shows the local model server and the model it is serving.
-2. Each role lists the model it uses now, under **Active now**:
+1. Open **Models**. The **Model server** box at the top lists what each connected server is serving.
+2. Each role shows the model it uses now, under **Active now**, or **Not connected**:
 
    | Role | Used for |
    |---|---|
-   | Generation | answers, planning, and extraction when no extraction model is set (required) |
-   | Embedding | vectors for semantic search. `fastembed` runs on CPU inside the stack by default (required) |
-   | Reranker | putting retrieved passages in order of relevance. Without one, the generation model does it |
-   | Extraction | entity and relationship extraction during ingestion |
-   | Utility / Judge | the grounding checks behind abstention. Give it a capable model |
+   | Generation | answers and planning (required for the AI Assistant) |
+   | Embedding | vectors for semantic search. `fastembed` runs on CPU inside the stack (required) |
+   | Reranker | putting retrieved passages in order of relevance |
+   | Extraction | entity and relationship extraction during ingestion. Uses the generation model unless set |
+   | Utility / Judge | the grounding checks behind abstention. Uses the generation model unless set |
 
-3. To use another model, press **Add** next to a role and fill in the provider, model ID, endpoint
-   and key.
+3. Press **Add** next to a role and fill in the provider, Model ID, server address and key.
 4. Press **Test** to check that it answers before you rely on it.
-5. Make it the default for the role. Changing the embedding model means re-indexing your data.
+5. Tick **Make default** for the role. Changing the embedding model means re-indexing your data.
 
 ### Good to know
 
-- Providers include vLLM, OpenAI, Anthropic, Groq, Hugging Face Inference and any
-  OpenAI-compatible endpoint (Ollama, LM Studio, Together, Azure) for generation; fastembed and Text
-  Embeddings Inference for embeddings; Cohere, Jina, Infinity and sentence-transformers for
-  reranking.
-- The local vLLM server serves one model, chosen when it starts. To change it, change the server's
-  `--model` and restart it. There is nothing to download from this page.
-- The first configuration comes from `.env`. See [Models](../models.md).
+- A new workspace has no generation model. Until you add one, the AI Assistant and extraction say
+  that no generation model is connected.
+- Providers: an OpenAI-compatible server (Ollama, LM Studio, vLLM, Together, Azure), OpenAI,
+  Anthropic, Groq, Hugging Face Inference, and a Hugging Face model running in OpenCortyx for
+  generation; fastembed for embeddings and reranking (sentence-transformers too, for reranking,
+  when the image is built with it).
+- A model that is not on this machine yet can be downloaded from the **Add** form, for any role:
+  a text model into Ollama (fast, GPU) or into OpenCortyx itself (CPU, nothing to install), an
+  embedder or reranker from fastembed. See
+  [Models](../models.md#download-a-model-from-hugging-face).
+- This page is the only place models are chosen. Nothing in `.env` selects one, and OpenCortyx
+  does not start a model server. See [Models](../models.md).
 
 ## System Health
 

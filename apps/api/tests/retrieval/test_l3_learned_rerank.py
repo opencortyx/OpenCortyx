@@ -145,7 +145,7 @@ async def test_an_unavailable_model_degrades_to_the_other_features():
     mean "rank on everything else", never "rank on nothing"."""
     import opencortyx.retrieval.l3_rerank.cross_encoder as ce_mod
     original = ce_mod._load
-    ce_mod._load = lambda model_id=None: None
+    ce_mod._load = lambda model_id=None, provider=None: None
     try:
         result = await cross_encoder.score("q", [cand(text="something")])
     finally:
@@ -164,7 +164,7 @@ async def test_a_failing_model_degrades_rather_than_raising():
             raise RuntimeError("out of memory")
 
     original = ce_mod._load
-    ce_mod._load = lambda model_id=None: Boom()
+    ce_mod._load = lambda model_id=None, provider=None: Boom()
     try:
         result = await cross_encoder.score("q", [cand(text="something")])
     finally:
@@ -182,7 +182,7 @@ async def test_only_the_budgeted_candidates_are_scored_and_the_rest_stay_unmeasu
 
     cands = [cand(text=f"text number {i}") for i in range(20)]
     original = ce_mod._load
-    ce_mod._load = lambda model_id=None: Fake()
+    ce_mod._load = lambda model_id=None, provider=None: Fake()
     try:
         result = await cross_encoder.score("q", cands, pool=5)
     finally:
@@ -207,7 +207,7 @@ async def test_a_candidate_with_no_text_is_not_sent_to_the_model():
 
     cands = [cand(text=""), cand(text="real text"), Candidate(node_id=uuid.uuid4())]
     original = ce_mod._load
-    ce_mod._load = lambda model_id=None: Fake()
+    ce_mod._load = lambda model_id=None, provider=None: Fake()
     try:
         await cross_encoder.score("q", cands)
     finally:

@@ -33,7 +33,6 @@ opencortyx up
 
    ```bash
    docker image ls "*opencortyx*" -q | xargs docker image rm
-   docker image rm vllm/vllm-openai:v0.11.0   # if you used the GPU profile
    ```
 
 3. Delete the installation directory (`~/opencortyx`, or `%USERPROFILE%\opencortyx` on Windows).

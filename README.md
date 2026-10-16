@@ -72,8 +72,8 @@ citations and human review. The two work well side by side.
 - **Serve agents**: a built-in MCP server gives Claude, Cursor, VS Code and other clients search,
   answers, memory and governed write-back.
 - **Run anywhere**: NebulaGraph holds the graph, Qdrant its search surfaces, Postgres the control
-  plane, and all three start with the stack. Use a local GPU model, a model already running on your
-  machine (Ollama, LM Studio), or a hosted API.
+  plane, and all three start with the stack. Connect a model already running on your machine
+  (Ollama, LM Studio, vLLM), Hugging Face Inference, or a hosted API.
 
 ## Install
 
@@ -121,13 +121,14 @@ utility, embedding, rerank). No `.env` setting is involved.
 
 | Setup | Generation model on the Models page |
 |---|---|
-| NVIDIA GPU (local vLLM, started by `bin/opencortyx init` when detected) | The built-in rows: vLLM, `http://vllm:8000/v1` |
-| Ollama or LM Studio on the same machine | OpenAI-compatible, `http://host.docker.internal:11434/v1`, Model ID from `ollama list` |
+| Ollama, LM Studio or vLLM on the same machine | OpenAI-compatible, `http://host.docker.internal:11434/v1`, Model ID from `ollama list` |
+| Hugging Face Inference | HuggingFace Inference, your HF token, a Model ID such as `Qwen/Qwen3-4B-Instruct-2507` |
 | OpenAI, Anthropic, Groq | The provider, its API key and a Model ID such as `gpt-4o-mini` |
 | Azure, Together | OpenAI-compatible, the provider's Base URL and API key |
 
-Embeddings run on CPU inside the stack, so no GPU is needed for them. The local vLLM server needs
-an NVIDIA GPU and about 40 GB more disk. See [docs/models.md](docs/models.md).
+A new workspace has no generation model: the AI Assistant answers once you add one. Embeddings run
+on CPU inside the stack, so they need no server. OpenCortyx does not start a model server of its
+own. See [docs/models.md](docs/models.md).
 
 ## Features
 
@@ -196,9 +197,9 @@ database, worker and models, with suggested fixes.
 |---|---|---|
 | Discover | Assets, Lineage | [discover.md](docs/features/discover.md) |
 | Trust | Curation, Nodes & Relationships, Review Queue, Evaluations, Quarantine | [trust.md](docs/features/trust.md) |
-| Integration | Add data, Connections, Ingestion, Mapper, Pipelines, Runs | [integration.md](docs/features/integration.md) |
+| Integration | Add data, Connections, Ingestion, Mapper, Custom Extractors, Pipelines, Runs | [integration.md](docs/features/integration.md) |
 | Intelligence | AI Assistant, Conversations, MCP tools | [intelligence.md](docs/features/intelligence.md) |
-| Administration | Users & Access, Custom Metadata, Models, System Health, Settings | [administration.md](docs/features/administration.md) |
+| Administration | Users & Access, Models, System Health, Settings | [administration.md](docs/features/administration.md) |
 
 ## How it works
 
@@ -233,7 +234,7 @@ the data model and the answer pipeline, is in [docs/how-it-works.md](docs/how-it
 | API and workers | Python 3.11, FastAPI, SQLAlchemy 2, Celery |
 | Storage | NebulaGraph (graph) · Qdrant (vectors + BM25) · PostgreSQL 16 (control plane) |
 | Queue | Redis |
-| Models | vLLM or any OpenAI-compatible endpoint; fastembed for embeddings |
+| Models | Any OpenAI-compatible server, Hugging Face Inference or a hosted API; fastembed for embeddings |
 
 ## Usage
 

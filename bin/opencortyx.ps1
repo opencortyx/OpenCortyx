@@ -19,7 +19,7 @@ function Info($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 function Warn($msg) { Write-Host "!  $msg" -ForegroundColor Yellow }
 function Die($msg) { Write-Host "x  $msg" -ForegroundColor Red; exit 1 }
 
-# Runs a native command whose stderr is noise or an expected failure (an image not pulled yet, no GPU,
+# Runs a native command whose stderr is noise or an expected failure (an image not pulled yet,
 # Docker stopped) and returns its stdout; callers read $LASTEXITCODE. Windows PowerShell 5.1 turns
 # redirected native stderr into a terminating error under $ErrorActionPreference = "Stop", so a plain
 # `& docker image inspect <not-yet-pulled> *> $null` aborted a first install.
@@ -68,54 +68,6 @@ function Assert-Docker {
     if ($LASTEXITCODE -ne 0) { Die "Docker Compose v2 is required." }
 }
 
-function Test-NvidiaGpu {
-    $runtimes = Invoke-Quiet docker info --format "{{json .Runtimes}}"
-    if ($runtimes -match "nvidia") { return $true }
-    if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
-        Invoke-Quiet nvidia-smi -L | Out-Null
-        return ($LASTEXITCODE -eq 0)
-    }
-    return $false
-}
-
-# Fraction of GPU memory vLLM may reserve: what is free now, minus a margin, capped at 0.90.
-# Measured the way vLLM checks it (torch, inside its image); nvidia-smi overstates usable memory.
-function Get-GpuFraction {
-    $line = $null
-    $margin = 768
-    $tag = Get-EnvValue "VLLM_IMAGE_TAG"; if (-not $tag) { $tag = "v0.11.0" }
-    $image = "vllm/vllm-openai:$tag"
-    Invoke-Quiet docker image inspect $image | Out-Null
-    if ($LASTEXITCODE -eq 0) {
-        $probe = 'import torch; f, t = torch.cuda.mem_get_info(); print(f"{t // 2**20}, {f // 2**20}")'
-        $line = Invoke-Quiet docker run --rm --gpus all --entrypoint python3 $image -c $probe | Select-Object -Last 1
-        if ($line -match '^\s*\d+,\s*\d+\s*$') { $margin = 256 } else { $line = $null }
-    }
-    if (-not $line -and (Get-Command nvidia-smi -ErrorAction SilentlyContinue)) {
-        # Quoted: unquoted, PowerShell reads the commas as a list and nvidia-smi gets the query split apart.
-        $line = Invoke-Quiet nvidia-smi "--query-gpu=memory.total,memory.free" "--format=csv,noheader,nounits" | Select-Object -First 1
-    }
-    # Two numbers or nothing: an error message here would otherwise crash the install on the cast below.
-    if (-not ($line -match '^\s*\d+(\.\d+)?,\s*\d+(\.\d+)?\s*$')) { return $null }
-    $parts = $line -split ","
-    $total = [double]$parts[0].Trim()
-    $free = [double]$parts[1].Trim()
-    if ($total -le 0) { return $null }
-    $x = [math]::Min(0.90, [math]::Max(0.50, ($free - $margin) / $total))
-    return ([math]::Floor($x * 100) / 100).ToString("0.00", [Globalization.CultureInfo]::InvariantCulture)
-}
-
-function Set-GpuFraction {
-    if (("," + (Get-EnvValue "COMPOSE_PROFILES") + ",") -notmatch ",gpu,") { return }
-    if ((Get-EnvValue "OPENCORTYX_GPU_FRACTION_FIXED") -eq "1") { return }
-    $running = Invoke-Quiet docker compose --project-directory $Root -f compose.yaml ps --status running -q vllm
-    if ($running) { return }
-    $frac = Get-GpuFraction
-    if (-not $frac) { return }
-    Set-EnvValue "VLLM_GPU_FRACTION" $frac
-    Info "vLLM GPU memory fraction: $frac"
-}
-
 function Wait-Http($url, $name, $tries) {
     for ($i = 0; $i -lt $tries; $i++) {
         try {
@@ -141,16 +93,10 @@ function Invoke-Init {
     }
     # The release channel `update` follows; the installer passes the one it installed from.
     if ($env:OPENCORTYX_CHANNEL) { Set-EnvValue "OPENCORTYX_CHANNEL" $env:OPENCORTYX_CHANNEL }
-    # Which models run is chosen on the Models page, not in .env. The only install-time decision
-    # is whether to start the local vLLM server, and only for a new .env.
+    # Which models run is chosen on the Models page (the Model Registry), never in .env.
     if ($fresh) {
-        if (Test-NvidiaGpu) {
-            Set-EnvValue "COMPOSE_PROFILES" "gpu"
-            Info "NVIDIA GPU detected: starting the local vLLM model server"
-        } else {
-            Warn "No NVIDIA GPU: after sign-in, open Models and point generation at your model server"
-            Warn "(Ollama, LM Studio, OpenAI, ...) - see docs/models.md."
-        }
+        Info "After sign-in, open Models and connect a model server (Ollama, LM Studio, a hosted API, ...)"
+        Info "by its address - see docs/models.md."
     }
     New-Item -ItemType Directory -Force (Join-Path $Root "data\files") | Out-Null
 }
@@ -158,7 +104,6 @@ function Invoke-Init {
 function Invoke-Up {
     Assert-Docker
     if (-not (Test-Path $EnvFile)) { Invoke-Init }
-    Set-GpuFraction
     $version = $env:OPENCORTYX_VERSION
     $apiUrl = Get-EnvValue "PUBLIC_API_URL"
     $build = ($env:OPENCORTYX_BUILD -eq "1") -or ($env:OPENCORTYX_DEV -eq "1") -or ($version -like "*dev*") -or ($apiUrl -and $apiUrl -ne "http://localhost:8000")
@@ -200,7 +145,6 @@ function Invoke-Doctor {
         }
         if (-not $failed) { Write-Host "  ok .env secrets set" }
     } else { Write-Host "  x .env missing (run bin\opencortyx init)"; $failed = $true }
-    if (Test-NvidiaGpu) { Write-Host "  ok NVIDIA GPU available" } else { Write-Host "  -  no NVIDIA GPU" }
     Write-Host "Services" -ForegroundColor White
     Invoke-Compose ps --format "  {{.Service}}: {{.Status}}"
     Write-Host "Runtime" -ForegroundColor White
@@ -367,7 +311,7 @@ OpenCortyx
 
 Usage: bin\opencortyx <command> [args]
 
-  init                    Create .env, generate secrets, pick the LLM backend
+  init                    Create .env and generate its secrets
   up [--build]            Start the stack (release images, or build from source), wait until healthy
   dev                     Start with live source mounts and the Next.js dev server
   down                    Stop the stack (data is kept)
