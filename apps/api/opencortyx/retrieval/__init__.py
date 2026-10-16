@@ -19,7 +19,4 @@ alone.
     memory.py          conversation-scoped working memory and scratchpad
     structured.py      the structured-data domain and its retriever
     temporal.py        recency and time-anchor parsing
-
-`HANDOFF-2026-08-27.md` and `BUILD-LOG-2026-08-22.md` are dated records of how this was built and
-what was measured; they are history, not current documentation.
 """

@@ -3,6 +3,7 @@ name = "opencortyx-api"
 version = "0.1.0-beta.1"
 description = "OpenCortyx API: the knowledge layer for AI"
 authors = ["OpenCortyx Team"]
+license = "MIT"
 homepage = "https://www.opencortyx.com"
 repository = "https://github.com/opencortyx/OpenCortyx"
 documentation = "https://github.com/opencortyx/OpenCortyx/tree/main/docs"
@@ -72,7 +73,7 @@ pymysql = "^1.1.0"                    # MySQL / MariaDB connector driver (intros
 pymssql = "^2.3.0"                    # SQL Server connector driver (no system ODBC driver needed)
 # ── Extra connector dialects (lightweight, no system deps). Heavy cloud drivers
 #    (snowflake-sqlalchemy, sqlalchemy-bigquery, databricks-sql, pyathena) stay opt-in — install
-#    them in the image if you use those sources. See docs/CONTEXT-OS-ROADMAP.md §27. ──
+#    them in the image if you use those sources. ──
 "duckdb-engine" = "^0.17.0"           # DuckDB → Parquet / CSV / Iceberg / Delta files (table formats)
 # Avro has no pyarrow reader; fastavro streams it into Arrow so .avro joins the other
 # columnar formats on the structured path instead of falling through to the CSV sniffer.

@@ -73,7 +73,7 @@ export default function SetupPage() {
                 {mode === "person" ? "Your name" : "Team or organization name"}
               </label>
               <input id="ws-name" type="text" maxLength={120} value={name}
-                placeholder={mode === "person" ? "e.g. Vivek" : "e.g. Acme Analytics"}
+                placeholder={mode === "person" ? "e.g. Ada Lovelace" : "e.g. Acme Analytics"}
                 onChange={(e) => setName(e.target.value)} className={inputCls} />
               <p className="text-xs text-muted-foreground">The top of your graph. You can change it in Settings.</p>
             </div>

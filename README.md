@@ -23,7 +23,7 @@ never leaves your machine.
 [![CI](https://github.com/opencortyx/OpenCortyx/actions/workflows/ci.yml/badge.svg)](https://github.com/opencortyx/OpenCortyx/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/opencortyx/OpenCortyx?include_prereleases&color=0d9488)](https://github.com/opencortyx/OpenCortyx/releases)
 [![Status: Beta](https://img.shields.io/badge/status-beta-f59e0b.svg)](#status)
-[![License: Source-Available](https://img.shields.io/badge/license-source--available-0d9488.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-0d9488.svg)](LICENSE)
 [![Website](https://img.shields.io/badge/web-opencortyx.com-0d9488.svg)](https://www.opencortyx.com)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2.svg?logo=discord&logoColor=white)](https://discord.gg/bGs5jnvxK)
 
@@ -53,8 +53,7 @@ Memory tools such as Mem0, Supermemory and Graphiti remember what your users and
 OpenCortyx answers from what your data *says*: tables, records and documents together, with
 citations and human review. The two work well side by side.
 
-> **License:** source-available. Free for individuals, education, research, non-commercial use
-> and commercial teams of up to 5 people. [Details](#license)
+> **License:** MIT. Free for any use, including commercial. [Details](#license)
 
 ## What it does
 
@@ -318,7 +317,7 @@ compose.yaml    the stack (compose.dev.yaml adds live reload for development)
 OpenCortyx is in beta. The core loop (ingest, extract, retrieve, answer, MCP) works end to end.
 Extraction quality depends on the model you run; small local models produce fewer structured
 entities than larger ones. Not built yet: PII masking, SSO/SCIM, text-to-SQL, change-data-capture,
-and image or audio ingestion. See the [roadmap](docs/CONTEXT-OS-ROADMAP.md).
+and image or audio ingestion. Plans and requests are tracked in [GitHub issues](https://github.com/opencortyx/OpenCortyx/issues).
 
 ## Community and contributing
 
@@ -329,6 +328,5 @@ and image or audio ingestion. See the [roadmap](docs/CONTEXT-OS-ROADMAP.md).
 
 ## License
 
-OpenCortyx is source-available under the [OpenCortyx Community License](LICENSE): free for
-individuals, education, research, non-commercial use, and commercial teams of up to 5 people. Larger
-commercial use requires a commercial license. The LICENSE file is the governing text.
+OpenCortyx is released under the [MIT License](LICENSE). Third-party components keep their own
+licenses.

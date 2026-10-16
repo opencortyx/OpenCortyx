@@ -136,7 +136,7 @@ SAMPLE_INPUTS = {
     "null_rate": 0.42,
     "parent_table_id": "44444444-4444-4444-4444-444444444444",
     "subject": "Sarah",
-    "speaker": "Vivek",
+    "speaker": "Ada",
     "created_date": "2023-04-25",
 }
 

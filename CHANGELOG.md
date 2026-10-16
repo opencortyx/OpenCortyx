@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Changed
+- License: MIT, replacing the OpenCortyx Community License (source-available).
+
+### Removed
+- Internal engineering notes from `docs/` (dated build log, handoff, an implementation report and the
+  internal roadmap).
+
 ## 0.1.0-beta.1 - 2026-10-15
 
 First public beta.

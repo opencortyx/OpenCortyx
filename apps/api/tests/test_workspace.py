@@ -13,7 +13,7 @@ from opencortyx.knowledge import workspace as ws
 
 def test_the_central_type_follows_the_mode():
     org = uuid.uuid4()
-    assert ws.Profile(org, "Vivek", "person").central_type == "Person"
+    assert ws.Profile(org, "Ada", "person").central_type == "Person"
     assert ws.Profile(org, "Acme", "team").central_type == "Organization"
 
 
@@ -22,11 +22,11 @@ def test_a_blank_name_shows_a_stable_made_up_one():
     p = ws.Profile(org, "", "person")
     assert p.display_name == ws.made_up_name(org) == ws.Profile(org, "", "team").display_name
     assert " " in p.display_name
-    assert ws.Profile(org, "Vivek", "person").display_name == "Vivek"
+    assert ws.Profile(org, "Ada", "person").display_name == "Ada"
 
 
 def test_names_and_modes_are_checked():
-    assert ws.clean_name("  Vivek   Alex ") == "Vivek Alex"
+    assert ws.clean_name("  Ada   Lovelace ") == "Ada Lovelace"
     assert ws.clean_name(None) == ""
     with pytest.raises(ws.InvalidWorkspace):
         ws.clean_name("x" * (ws.NAME_MAX + 1))
@@ -39,8 +39,8 @@ def test_names_and_modes_are_checked():
 async def test_the_central_node_is_renamed_and_retyped_in_place(live_org):
     from opencortyx.core.substrate import NodeRepo
     repo = NodeRepo()
-    node = await ws.ensure_central_node(live_org, ws.Profile(live_org, "Vivek", "person"))
-    assert node.id == live_org and node.type == "Person" and node.label == "Vivek"
+    node = await ws.ensure_central_node(live_org, ws.Profile(live_org, "Ada", "person"))
+    assert node.id == live_org and node.type == "Person" and node.label == "Ada"
     assert ws.is_central(node) and (node.properties or {}).get(ws.CENTRAL_KEY)
 
     other = await repo.upsert_node(workspace_id=live_org, type="Document", label="notes", date_link=False)

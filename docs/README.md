@@ -32,6 +32,5 @@
 - [Architecture reference](architecture.md)
 - [Database migrations](MIGRATIONS.md)
 - [Architecture decisions](adr/)
-- [Roadmap](CONTEXT-OS-ROADMAP.md)
 
 Contributing: [CONTRIBUTING.md](../CONTRIBUTING.md). Security: [SECURITY.md](../SECURITY.md).

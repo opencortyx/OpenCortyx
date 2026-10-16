@@ -86,8 +86,6 @@ Schema: `bootstrap.init_v2_schema()` creates every ORM table; `alembic upgrade h
 the ORM does not declare. `alembic/versions/0001_baseline.py` squashes the original 22 migrations
 (revision id kept, so existing installs are already at head); new schema changes go in new files.
 
-Dated build logs and handoffs live in `docs/history/`.
-
 ## API (`/api/v2`)
 `POST /auth/token` (dev login) · `POST /sources/upload` (documents) ·
 `POST /structured/ingest-sql` + `/structured/enrich-native` (SQL catalogue) ·
