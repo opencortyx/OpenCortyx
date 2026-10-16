@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.0-beta.2 - 2026-10-16
+
+First release under the MIT license.
+
 ### Changed
 - License: MIT, replacing the OpenCortyx Community License (source-available). The README notes
   the one copyleft dependency, PyMuPDF (AGPL v3), and what it means for redistributors.
