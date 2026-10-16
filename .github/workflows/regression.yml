@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Configure and start the stack
         run: |
@@ -43,7 +43,7 @@ jobs:
           curl -fsSL https://www.w3.org/XML/Test/xmlts20130923.tar.gz | tar -xz -C "$RUNNER_TEMP/corpus/xml-w3c-tests"
           echo "OPENCORTYX_CORPUS=$RUNNER_TEMP/corpus" >> "$GITHUB_ENV"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: npm
@@ -62,7 +62,7 @@ jobs:
 
       - name: Publish test results
         if: always()
-        uses: mikepenz/action-junit-report@v4
+        uses: mikepenz/action-junit-report@v6
         with:
           report_paths: apps/api/test-results/ci/junit.xml
           check_name: Regression
@@ -75,7 +75,7 @@ jobs:
         if: always()
         run: docker compose -f compose.yaml logs --no-color > stack.log 2>&1 || true
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: regression-report
