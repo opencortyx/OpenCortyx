@@ -109,7 +109,7 @@ def downloaded() -> list[dict]:
     import json
 
     from huggingface_hub import scan_cache_dir
-    out = []
+    out: list[dict] = []
     try:
         repos = scan_cache_dir().repos
     except Exception:                                   # noqa: BLE001 — no cache yet

@@ -221,3 +221,92 @@ def _import_raising(prefix, fn):
         return real(name, *args, **kwargs)
     return _imp
 
+
+
+# ── Page furniture and heading levels ────────────────────────────────────────────────────────────
+
+class _Label:
+    def __init__(self, value):
+        self.value = value
+
+
+class _Item:
+    def __init__(self, label, text="", level=None):
+        self.label, self.text, self.level = _Label(label), text, level
+
+
+def test_pdf_heading_levels_come_from_section_numbers():
+    """A PDF's layout model calls every heading level 1; the section number says how deep it is."""
+    title, one, one_one, two, plain = (_Item("section_header", "Employee Handbook", 1),
+                                      _Item("section_header", "1. Onboarding", 1),
+                                      _Item("section_header", "1.1 First week", 1),
+                                      _Item("section_header", "2 Benefits", 1),
+                                      _Item("section_header", "Appendix", 1))
+    levels = docling_engine._heading_levels([title, _Item("text", "intro"), one, one_one, two, plain])
+    assert levels[id(title)] == 0                       # opens a numbered document: the title
+    assert (levels[id(one)], levels[id(one_one)], levels[id(two)]) == (1, 2, 1)
+    assert id(plain) not in levels                      # unnumbered later heading: as Docling gave it
+
+
+def test_a_recorded_heading_level_or_title_is_kept():
+    real = _Item("section_header", "1.1.1 Deep", 2)     # Word gave a level: it wins
+    levels = docling_engine._heading_levels([_Item("title", "Handbook"), _Item("section_header", "Intro", 1), real])
+    assert id(real) not in levels and not any(v == 0 for v in levels.values())
+
+
+def _handbook_pdf() -> bytes:
+    doc = fitz.open()
+    for n, blocks in enumerate([[("Employee Handbook", 22), ("This handbook explains onboarding.", 10.5),
+                                 ("1. Onboarding", 15), ("New hires complete IT setup on day one.", 10.5),
+                                 ("1.1 First week", 12.5), ("Collect your laptop from the front desk.", 10.5)],
+                                [("2. Leave", 15), ("Employees accrue 1.5 days of leave per month.", 10.5)]], 1):
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((50, 35), "ACME Corp - Employee Handbook", fontsize=8)
+        page.insert_text((50, 812), f"Confidential - Page {n}", fontsize=8)
+        y = 90
+        for text, size in blocks:
+            page.insert_text((50, y), text, fontsize=size, fontname="hebo" if size > 11 else "helv")
+            y += size * 2.2
+    return doc.tobytes()
+
+
+def test_a_pdf_keeps_its_page_headers_footers_and_section_tree():
+    """Running headers and footers are read (they live in Docling's furniture layer) and belong to
+    the document; numbered sections nest under the title and under each other."""
+    a = DoclingEngine.convert(_handbook_pdf(), filename="handbook.pdf")
+    if a.engine != "docling":
+        import pytest
+        pytest.skip(f"Docling unavailable here: {a.fallback_reason}")
+    rows = {r["text"]: r for r in a.to_dict_list()}
+    assert [r["label"] for r in a.to_dict_list()].count("page_header") == 2
+    assert [r["label"] for r in a.to_dict_list()].count("page_footer") == 2
+    for r in a.to_dict_list():
+        if r["label"] in ("page_header", "page_footer"):
+            assert r["parent_id"] == a.doc_id
+    title = rows["Employee Handbook"]
+    assert title["label"] == "title" and title["level"] == 0
+    assert rows["1. Onboarding"]["parent_id"] == title["id"]
+    assert rows["1.1 First week"]["parent_id"] == rows["1. Onboarding"]["id"]
+    assert rows["Collect your laptop from the front desk."]["parent_id"] == rows["1.1 First week"]["id"]
+
+
+def test_a_word_documents_header_and_footer_are_read():
+    import io
+
+    import docx
+
+    d = docx.Document()
+    d.sections[0].header.paragraphs[0].text = "ACME Corp - Employee Handbook"
+    d.sections[0].footer.paragraphs[0].text = "Confidential"
+    d.add_heading("Employee Handbook", level=0)
+    d.add_heading("1. Onboarding", level=1)
+    d.add_paragraph("New hires complete IT setup on day one.")
+    buf = io.BytesIO()
+    d.save(buf)
+    a = DoclingEngine.convert(buf.getvalue(), filename="handbook.docx")
+    if a.engine != "docling":
+        import pytest
+        pytest.skip(f"Docling unavailable here: {a.fallback_reason}")
+    labels = {r["text"]: r["label"] for r in a.to_dict_list()}
+    assert labels["ACME Corp - Employee Handbook"] == "page_header"
+    assert labels["Confidential"] == "page_footer"

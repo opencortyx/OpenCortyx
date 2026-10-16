@@ -444,6 +444,16 @@ export interface DiscoveredModel {
 }
 export interface ModelDiscovery { items: DiscoveredModel[]; source: string; provider: string; note?: string | null; }
 
+// One element of a document as Docling reads it (POST /authoring/layout).
+export interface LayoutElement {
+  id: string; label: string; type: string; text: string;
+  level: number | null; page: number; parent_id: string | null;
+}
+export interface LayoutReading {
+  filename: string; engine: string; fallback_reason: string | null; doc_id: string;
+  pages_read: number; elements: LayoutElement[];
+}
+
 // A Hugging Face model, before it is downloaded (POST /models/hf/info).
 export interface HFModelInfo {
   repo: string; task: string | null; bytes: number; gguf: boolean; gated: boolean;
@@ -1340,6 +1350,14 @@ export const contextV2Api = {
       "/api/v2/authoring/drafters").then((r) => r.data),
 
   /** Draft from a file. Reads and samples it — never ingests, so it is safe to call on every pick. */
+  // How Docling reads a document (PDF, Word, ...): every element in reading order. Saves nothing.
+  readLayout: (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return apiClient.post<LayoutReading>("/api/v2/authoring/layout", fd, {
+      headers: { "Content-Type": "multipart/form-data" },
+    }).then((r) => r.data);
+  },
   draftFromFile: (file: File, kind: DraftKind,
                   opts?: { goal?: string; drafter?: string; useModel?: boolean;
                            context?: Record<string, any> }) => {

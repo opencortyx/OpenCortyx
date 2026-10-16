@@ -139,7 +139,7 @@ class _FastembedCrossEncoder:
         from fastembed.rerank.cross_encoder import TextCrossEncoder
 
         from opencortyx.core.inference.fastembed_models import cache_dir
-        kwargs = {"cache_dir": cache_dir()} if cache_dir() else {}
+        kwargs: dict = {"cache_dir": cache_dir()} if cache_dir() else {}
         if settings.FASTEMBED_THREADS:
             kwargs["threads"] = settings.FASTEMBED_THREADS
         self.model = TextCrossEncoder(model_name=model_id, **kwargs)

@@ -30,7 +30,7 @@ import {
 } from "lucide-react";
 import {
   ChunkCfg, EdgeRule, EditorModel, KeyRow, Paradigm,
-  chunkText, collectPaths, docFromText, normalizeChunk, parseCSV, proposeFromTables, proposeRules, walk,
+  chunkText, collectPaths, docFromLayout, docFromText, normalizeChunk, parseCSV, proposeFromTables, proposeRules, walk,
   type SqlTable,
 } from "@/components/mapper/model";
 import {
@@ -252,6 +252,23 @@ export default function MapperBuilderPage() {
   /* ──────────────────────────────────────────────────── upload + propose */
 
   const onFile = (f: File) => {
+    // A PDF, Word file and the like is read by Docling on the server, the way ingestion reads it:
+    // the preview then shows its real title, sections, lists, tables and page headers/footers.
+    if (paradigm === "unstructured" && !/\.(md|markdown|txt)$/i.test(f.name)) {
+      setUploadMsg(`reading ${f.name}…`);
+      contextV2Api.readLayout(f).then((r) => {
+        setSample(docFromLayout(f.name, r.elements));
+        setChunkSample(r.elements.map((e) => e.text).join("\n\n").slice(0, 6000));
+        setDocs((d) => [...d.filter((x) => x.id !== f.name), { id: f.name, name: f.name }]);
+        setPick(f.name);
+        setDirty(true);
+        const furniture = r.elements.filter((e) => e.label === "page_header" || e.label === "page_footer").length;
+        setUploadMsg(r.engine === "docling"
+          ? `read ${f.name}: ${r.elements.length} elements, ${furniture} page header/footer(s)`
+          : `read ${f.name} without Docling (${r.fallback_reason || "unavailable"}): structure may be missing`);
+      }).catch((e: any) => setUploadMsg(`could not read that file — ${e?.response?.data?.detail || e?.message || "unsupported"}`));
+      return;
+    }
     const rd = new FileReader();
     rd.onload = () => {
       try {

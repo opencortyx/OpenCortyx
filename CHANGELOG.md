@@ -2,12 +2,30 @@
 
 ## Unreleased
 
+## 0.1.0-beta.3 - 2026-10-17
+
+Models are chosen only on the Models page, and can be downloaded there for every role. The bundled
+vLLM server is gone.
+
+### Upgrading from 0.1.0-beta.2
+- Run `opencortyx update` (or `bin/opencortyx up` from a clone). Migration `0030` converts your
+  model rows; nothing to do by hand.
+- Rows that pointed at the bundled vLLM server are deleted, so a workspace that used it has no
+  generation model afterwards: open **Models** and add one (a server you run, Hugging Face, a
+  hosted API, or a model downloaded into OpenCortyx).
+- Model settings in `.env` (`LLM_PROVIDER`, `LLM_MODEL`, `EMBED_MODEL`, ...) are ignored. You can
+  delete them.
+- The vLLM image is no longer used: `docker image rm vllm/vllm-openai:v0.11.0` frees its disk.
+
 ### Added
 - Download a model while adding it on the Models page, for every role. A text model: Ollama pulls
   a GGUF model from Hugging Face to run on your GPU, or OpenCortyx downloads a small model and runs
   it on the CPU with no other install (the new **Hugging Face model in OpenCortyx** provider). An
   embedder or reranker: any model fastembed supports, downloaded before its first use.
 - fastembed rerankers (ONNX, CPU), so reranking no longer needs `INSTALL_RERANK=1`.
+- The Mapper previews PDF, Word, PowerPoint and HTML files, read the way ingestion reads them:
+  title, nested sections, paragraphs, lists, tables, and page headers and footers. It accepted only
+  Markdown and text before.
 
 ### Changed
 - Models are chosen on the **Models** page and nowhere else. `.env` no longer selects a model
@@ -37,6 +55,14 @@
 - The "New semi-structured mapping" button on the empty Mapper page.
 
 ### Fixed
+- Running page headers and footers were never read from documents: Docling keeps them apart from
+  the body, and only the body was read. They are now `PageHeader` and `PageFooter` nodes on the
+  document, for PDF and Word alike.
+- A PDF's headings were all one level, so "1.1" sat beside "1" instead of inside it and the title
+  was one more section. Levels now come from the section numbers, and the opening unnumbered
+  heading of a numbered document is its title.
+- A new document mapping showed, and then saved, sliding-window chunking, although documents are
+  read by layout when a mapping says nothing. It now starts on Layout, like ingestion.
 - `bin/opencortyx up --build` failed with `image ... already exists`: five services built the same
   API image at once. Only `api` builds it now; the others use it.
 - Retrieval never used the reranker chosen on the Models page. It now uses the workspace's default

@@ -111,9 +111,15 @@ class DoclingEngine:
                    else converter.convert(temp_path))
             doc = res.document
 
-            # Docling provides iterate_items() in reading order
-            for item, _depth in doc.iterate_items():
-                label = getattr(item.label, "value", str(item.label)).lower()
+            # Docling provides iterate_items() in reading order. Page headers and footers are in its
+            # FURNITURE layer, which iterate_items() leaves out unless asked: without it a running
+            # header or a "Confidential" footer was simply never read.
+            from docling_core.types.doc import ContentLayer
+            items = [item for item, _depth in doc.iterate_items(
+                included_content_layers={ContentLayer.BODY, ContentLayer.FURNITURE})]
+            levels = _heading_levels(items)
+            for item in items:
+                label = _furniture_label(item, doc, getattr(item.label, "value", str(item.label)).lower())
                 text = getattr(item, "text", "") or ""
 
                 # Provenance: page number and bounding box
@@ -138,7 +144,9 @@ class DoclingEngine:
                 if label == "title":
                     level = 0
                 elif label == "section_header":
-                    level = int(getattr(item, "level", None) or 1)
+                    level = levels.get(id(item), int(getattr(item, "level", None) or 1))
+                    if level == 0:
+                        label = "title"
 
                 # 2D Grid matrix for tables
                 grid = None
@@ -347,3 +355,60 @@ def _readable_text(content: bytes | str, filename: str) -> str:
 
 def _grid_text(grid: list[list[str]]) -> str:
     return "\n".join(" | ".join(str(c) for c in row) for row in grid if row)
+
+
+#: A section number at the start of a heading: "2", "2.", "2.3", "2.3.1 ".
+_SECTION_NUMBER = re.compile(r"^\s*(\d+(?:\.\d+)*)\.?\s+\S")
+
+
+def _furniture_label(item: Any, doc: Any, label: str) -> str:
+    """`page_header` / `page_footer` for a running header or footer, whatever the format calls it.
+
+    A PDF's layout model labels them itself. Word documents put them in the furniture layer as plain
+    text inside a group named "page header" or "page footer".
+    """
+    if label in ("page_header", "page_footer"):
+        return label
+    if getattr(getattr(item, "content_layer", None), "value", None) != "furniture":
+        return label
+    try:
+        name = (getattr(item.parent.resolve(doc), "name", "") or "").lower()
+    except Exception:                                   # noqa: BLE001 — no parent group
+        name = ""
+    if "footer" in name:
+        return "page_footer"
+    if "header" in name:
+        return "page_header"
+    return label
+
+
+def _heading_levels(items: list) -> dict:
+    """Heading levels for formats that do not record them, keyed by id(item).
+
+    Word and HTML carry real levels. A PDF does not: Docling's layout model calls every heading a
+    level-1 `section_header`, so "1.1 First week" came out beside "1. Onboarding" rather than inside
+    it, and the document's title was one more section. Where Docling gave only that flat level 1:
+
+      - a numbered heading takes its depth from the number ("2" is 1, "2.3" is 2, "2.3.1" is 3);
+      - an unnumbered heading that opens a document whose sections are numbered, with no title of
+        its own, is the title (level 0).
+
+    Anything else keeps the level Docling gave.
+    """
+    heads = [it for it in items if getattr(getattr(it, "label", None), "value", "") == "section_header"]
+    if any(getattr(getattr(it, "label", None), "value", "") == "title" for it in items):
+        title_seen = True
+    else:
+        title_seen = False
+    out: dict = {}
+    numbered = [it for it in heads if _SECTION_NUMBER.match(getattr(it, "text", "") or "")]
+    for i, it in enumerate(heads):
+        given = int(getattr(it, "level", None) or 1)
+        if given != 1:
+            continue                                    # the format recorded a real level
+        m = _SECTION_NUMBER.match(getattr(it, "text", "") or "")
+        if m:
+            out[id(it)] = len(m.group(1).split("."))
+        elif i == 0 and not title_seen and numbered and heads.index(numbered[0]) > 0:
+            out[id(it)] = 0
+    return out

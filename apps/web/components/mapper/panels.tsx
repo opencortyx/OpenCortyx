@@ -194,8 +194,11 @@ export function TableSource({ tables }: { tables: Record<string, any[]> }) {
 
 const EKIND_TONE: Record<string, string> = {
   heading: "text-teal-700 bg-teal-50", paragraph: "text-stone-600 bg-stone-100",
-  table: "text-lime-700 bg-lime-50", figure: "text-primary bg-primary/10",
+  table: "text-lime-700 bg-lime-50", figure: "text-primary bg-primary/10", picture: "text-primary bg-primary/10",
+  list_item: "text-sky-700 bg-sky-50", caption: "text-amber-700 bg-amber-50", footnote: "text-amber-700 bg-amber-50",
+  page_header: "text-violet-700 bg-violet-50", page_footer: "text-violet-700 bg-violet-50",
 };
+const headingTag = (level?: number) => (level === 0 ? "title" : level ? `heading ${level}` : "heading");
 
 export function DocSource({ doc, elementOn }: { doc: any; elementOn: (kind: string) => boolean }) {
   const d = doc?.document || {};
@@ -206,9 +209,10 @@ export function DocSource({ doc, elementOn }: { doc: any; elementOn: (kind: stri
         {d.doc_id} · {d.pages} page{d.pages === 1 ? "" : "s"}{d.revised ? ` · revised ${d.revised}` : ""}
       </div>
       {(d.sections || []).map((s: any, i: number) => (
-        <div key={i} className="border-l-2 border-stone-200 pl-3 mb-3">
+        <div key={i} className="border-l-2 border-stone-200 pl-3 mb-3"
+             style={{ marginLeft: `${Math.max(0, (s.level ?? 1) - 1) * 14}px` }}>
           <h4 className="text-[12.5px] font-semibold text-stone-800 mb-1.5">
-            <span className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded mr-2 ${EKIND_TONE.heading}`}>heading</span>
+            <span className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded mr-2 ${EKIND_TONE.heading}`}>{headingTag(s.level)}</span>
             {s.heading}
           </h4>
           {(s.blocks || []).map((b: any, j: number) => (
@@ -221,6 +225,19 @@ export function DocSource({ doc, elementOn }: { doc: any; elementOn: (kind: stri
           ))}
         </div>
       ))}
+      {!!(d.page_furniture || []).length && (
+        <>
+          <Label>Page headers &amp; footers</Label>
+          {d.page_furniture.map((b: any, j: number) => (
+            <div key={j} className="flex gap-2 items-start mb-1.5 text-[11.5px] text-stone-600">
+              <span className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded whitespace-nowrap mt-px ${EKIND_TONE[b.kind]}`}>
+                {b.kind === "page_header" ? "header" : "footer"} · p{b.page}
+              </span>
+              <span>{b.text}</span>
+            </div>
+          ))}
+        </>
+      )}
       {!!(doc?.mentions || []).length && (
         <>
           <Label>Extracted mentions</Label>
@@ -841,10 +858,10 @@ export function UploadBar({ paradigm, docs, pick, onPick, onFile, msg, onPropose
   onPropose: () => void;
 }) {
   const accept = paradigm === "structured" ? ".csv,text/csv"
-    : paradigm === "unstructured" ? ".md,.txt,.markdown,text/plain"
+    : paradigm === "unstructured" ? ".pdf,.docx,.pptx,.html,.htm,.md,.txt,.markdown,text/plain"
     : ".json,application/json";
   const what = paradigm === "structured" ? "a CSV table"
-    : paradigm === "unstructured" ? "a document (.md / .txt)" : "a JSON payload";
+    : paradigm === "unstructured" ? "a document (PDF, Word, PowerPoint, HTML, Markdown or text)" : "a JSON payload";
   return (
     <div className="flex flex-wrap gap-2 items-center px-3.5 py-3 bg-stone-50/70 border-t border-stone-200">
       <p className="basis-full text-[11.5px] text-stone-500 m-0">

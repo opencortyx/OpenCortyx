@@ -34,13 +34,22 @@ def org():
 
 @pytest.fixture(autouse=True)
 def stores(monkeypatch):
-    """Fresh in-memory stores; no keyword model, no embedding queue, no tree-rebuild task."""
+    """Fresh in-memory stores; no keyword model, no embedding model, no embedding queue, no
+    tree-rebuild task. A workspace's embedder is a Model Registry row, and these tests have no
+    registry: the vectors are a fixed stand-in, which is all a capture test needs of them."""
+    from opencortyx.core.inference import embedding
+
     g, v = MemoryGraphStore(), MemoryVectorStore()
     set_graph_store(g)
     set_vector_store(v)
 
     async def _no_sparse(texts):
         return [None for _ in texts]
+
+    async def _vectors(texts, model_spec=None):
+        return [[1.0] + [0.0] * 767 for _ in texts]
+
+    monkeypatch.setattr(embedding, "embed_batch", _vectors)
 
     monkeypatch.setattr(repo_mod, "sparse_embed", _no_sparse)
     monkeypatch.setattr(repo_mod, "_change_listeners", [])

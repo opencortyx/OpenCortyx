@@ -142,7 +142,11 @@ fields are kept as attributes. One editor covers JSON, tables and documents.
    status.
 2. Press **Semi-structured**, **Structured** or **Unstructured** to start a new mapping, or click
    an existing one to edit it. A mapping saved from Add data is already here.
-3. Load a sample of your data. It appears under **Source sample**.
+3. Load a sample of your data. It appears under **Source sample** (for a document, **Parsed
+   document**). For documents you can upload a PDF, Word, PowerPoint or HTML file as well as
+   Markdown or text: it is read the way ingestion reads it, so the preview shows its title, its
+   sections nested by level, each paragraph, list item and table under its section, and the running
+   page headers and footers of every page.
 4. Under **Rules**, each node rule turns one path of the sample into one node type. Click a rule to
    edit it on the right:
    - **Node label** is the type it creates, such as `Project`.
@@ -162,6 +166,9 @@ fields are kept as attributes. One editor covers JSON, tables and documents.
   the defaults while **Accept newly detected shapes** is on, and skipped while it is off.
 - For JSON, ids are ordinary attributes. Tables keep their primary key, which identifies a row
   within its own table.
+- A document preview reads the first 5 pages. See
+  [How a document is read](../how-it-works.md#how-a-document-is-read) for the node types it
+  produces.
 - **Conformance** checks that what an asset produced matches its mapping. **Usage** shows which
   pipelines and ingestions use a mapping before you change it.
 

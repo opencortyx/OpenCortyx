@@ -79,6 +79,10 @@ class DynamicDoclingAssembler:
 
             parent_id = self.heading_stack[-1][1] if self.heading_stack else root_id
             self.heading_stack.append((actual_level, node_id))
+        elif norm_label in ("page_header", "page_footer"):
+            # A running header or footer belongs to the document, not to whichever section happens
+            # to be open on that page.
+            parent_id = root_id
         else:
             # Non-heading elements inherit the closest active heading
             parent_id = self.heading_stack[-1][1] if self.heading_stack else root_id

@@ -101,8 +101,11 @@ export interface EditorModel {
 export function normalizeChunk(raw: any): ChunkCfg {
   const r = raw || {};
   const s = String(r.strategy || "").toLowerCase();
+  // No strategy saved means layout, as it does to ingestion (`step1.get("strategy") or "layout"`):
+  // showing windows here, and then saving them, quietly turned a new mapping's documents into
+  // fixed-size chunks with no titles, sections, lists or tables.
   const strategy: ChunkCfg["strategy"] =
-    s.startsWith("layout") || s.includes("docling") ? "layout" : "sliding";
+    !s || s.startsWith("layout") || s.includes("docling") ? "layout" : "sliding";
   const size = Number(r.size ?? r.chunk_size ?? r.target_size ?? 1200);
   const overlap = Number(r.overlap ?? 150);
   return {
@@ -695,6 +698,49 @@ export function parseCSV(text: string): Record<string, any>[] {
     });
     return row;
   });
+}
+
+/**
+ * A parsed document from Docling's reading of a file (PDF, Word, ...), in the same shape as
+ * `docFromText`: one section per heading, holding the elements under it with their own kind
+ * (text, list_item, table, ...). Running page headers and footers are kept apart, in
+ * `page_furniture`, because they belong to the document rather than to any section.
+ */
+export function docFromLayout(name: string, elements: { id: string; label: string; text: string; level: number | null; page: number; parent_id: string | null }[]) {
+  const BEFORE = "(before the first heading)";
+  const sections: { heading: string; level: number; page: number; blocks: { ord: number; kind: string; text: string }[] }[] = [];
+  const byId: Record<string, (typeof sections)[number]> = {};
+  const furniture: { ord: number; kind: string; page: number; text: string }[] = [];
+  elements.forEach((e, i) => {
+    const ord = i + 1;
+    if (e.label === "page_header" || e.label === "page_footer") {
+      furniture.push({ ord, kind: e.label, page: e.page, text: e.text });
+      return;
+    }
+    if (e.label === "title" || e.label === "section_header") {
+      const s = { heading: e.text, level: e.level ?? 1, page: e.page, blocks: [] };
+      sections.push(s);
+      byId[e.id] = s;
+      return;
+    }
+    let s = (e.parent_id && byId[e.parent_id]) || sections[sections.length - 1];
+    if (!s) {
+      s = { heading: BEFORE, level: 0, page: e.page, blocks: [] };
+      sections.push(s);
+    }
+    s.blocks.push({ ord, kind: e.label, text: e.text });
+  });
+  const title = sections.find((s) => s.level === 0 && s.heading !== BEFORE);
+  return {
+    document: {
+      doc_id: name.replace(/\.[^.]+$/, "").slice(0, 32),
+      title: title?.heading || name,
+      pages: Math.max(1, ...elements.map((e) => e.page || 1)),
+      sections,
+      page_furniture: furniture,
+    },
+    mentions: [] as any[],
+  };
 }
 
 /** A parsed document from raw text, in the shape the unstructured preview walks. */

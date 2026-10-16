@@ -47,7 +47,9 @@ flowchart LR
 | `embedding-worker` | Computes embeddings for search. |
 | `maintenance-worker` | Background upkeep of graph statistics. |
 | `setup` | Runs once at start-up: prepares the graph and vector stores, then creates and upgrades the database schema. |
-| `postgres` | The only datastore: graph, vectors, full-text index and control plane. |
+| `nebulagraph`, `nebula-metad`, `nebula-storaged` | The graph: nodes and edges. |
+| `qdrant` | Vectors and keyword (BM25) documents for search. |
+| `postgres` | The control plane: workspaces, users, models, mappings, pipelines, runs, ontology. |
 | `redis` | Task queues between the API and workers. |
 
 ## Data model
@@ -93,7 +95,7 @@ erDiagram
 ```mermaid
 flowchart TD
     S[Upload, local folder or connector] --> R{What is it?}
-    R -->|PDF, Markdown, text, HTML| D[Document pipeline<br/>parse · chunk]
+    R -->|PDF, Word, PowerPoint, HTML, Markdown, text| D[Document pipeline<br/>read layout · sections]
     R -->|JSON, JSONL, XML, YAML| J[Semi-structured pipeline<br/>walk records by schema mapping]
     R -->|CSV, Parquet, Excel, SQL tables| T[Structured pipeline<br/>rows · keys · foreign keys]
     D --> G[(Nodes and edges)]
@@ -116,6 +118,27 @@ flowchart TD
    default: a pipeline names the extractors it runs, built-in or
    [your own](features/integration.md#custom-extractors).
 5. **Embedding.** Nodes and their attributes get vectors for semantic search.
+
+### How a document is read
+
+Documents are read by [Docling](https://github.com/docling-project/docling), which looks at the file
+itself (its layout, not just its text), and each element it finds becomes a node of its own type:
+
+| Element | Node type | Sits under |
+|---|---|---|
+| Document title | `Title` | the document |
+| Heading | `SectionHeader`, with its `level` | the title or the heading above it |
+| Paragraph | `Text` | its section |
+| List item | `ListItem` | its section |
+| Table | `TableEntity`, with the cells as a grid | its section |
+| Figure | `Figure` | its section |
+| Caption, footnote, formula, code | `Caption`, `Footnote`, `Formula`, `Code` | its section |
+| Running page header and footer | `PageHeader`, `PageFooter`, with the page number | the document |
+
+`CONTAINS` edges make this a tree and `NEXT` edges keep the reading order. A PDF does not record
+heading levels, so they are taken from the section numbers ("2.1" sits under "2"), and an
+unnumbered heading that opens a numbered document is its title. Word files carry their own levels.
+To see how a file reads before ingesting it, upload it in the [Mapper](features/integration.md#mapper).
 6. **Accounting.** Every intended write is counted; anything that fails lands in quarantine instead of
    disappearing. Progress is visible under **Runs**.
 
