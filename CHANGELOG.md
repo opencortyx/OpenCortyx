@@ -3,7 +3,8 @@
 ## Unreleased
 
 ### Changed
-- License: MIT, replacing the OpenCortyx Community License (source-available).
+- License: MIT, replacing the OpenCortyx Community License (source-available). The README notes
+  the one copyleft dependency, PyMuPDF (AGPL v3), and what it means for redistributors.
 
 ### Removed
 - Internal engineering notes from `docs/` (dated build log, handoff, an implementation report and the

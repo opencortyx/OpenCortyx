@@ -330,3 +330,10 @@ and image or audio ingestion. Plans and requests are tracked in [GitHub issues](
 
 OpenCortyx is released under the [MIT License](LICENSE). Third-party components keep their own
 licenses.
+
+One of them is copyleft: the API image includes [PyMuPDF](https://github.com/pymupdf/PyMuPDF) and
+`pymupdf4llm`, licensed under the [GNU AGPL v3](https://www.gnu.org/licenses/agpl-3.0.html) (or a
+commercial license from Artifex). OpenCortyx uses them to turn PDFs into Markdown. Running or
+self-hosting OpenCortyx is unaffected. If you distribute a modified OpenCortyx, or offer one as a
+network service, without sharing its source code, the AGPL applies to that combined work: share the
+source, obtain a commercial PyMuPDF license, or remove the two packages.
