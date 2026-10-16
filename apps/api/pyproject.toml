@@ -99,7 +99,7 @@ pydantic-settings = "^2.3.0"
 python-dotenv = "^1.0.1"
 structlog = "^24.2.0"
 prometheus-client = "^0.20.0"        # /metrics exposition — the only metrics dependency
-psutil = "^5.9.0"                    # process RSS/CPU gauges, so an OOM is visible BEFORE the kill
+psutil = ">=5.9,<8.0"                    # process RSS/CPU gauges, so an OOM is visible BEFORE the kill
 python-dateutil = "*"
 dateparser = "^1.2"                   # temporal extraction: normalize natural-language dates (builtin:extract_temporal_pattern)
 parsedatetime = "^2.6"                # temporal extraction: parse fuzzy/relative date phrases (builtin:extract_temporal_pattern)
