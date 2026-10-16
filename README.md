@@ -18,14 +18,14 @@ never leaves your machine.
 [Documentation](docs/README.md) ·
 [Install](docs/installation/README.md) ·
 [How it works](docs/how-it-works.md) ·
-[Discord](https://discord.gg/bGs5jnvxK)
+[Discord](https://discord.gg/W3zwMZdJu)
 
 [![CI](https://github.com/opencortyx/OpenCortyx/actions/workflows/ci.yml/badge.svg)](https://github.com/opencortyx/OpenCortyx/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/opencortyx/OpenCortyx?include_prereleases&color=0d9488)](https://github.com/opencortyx/OpenCortyx/releases)
 [![Status: Beta](https://img.shields.io/badge/status-beta-f59e0b.svg)](#status)
 [![License: MIT](https://img.shields.io/badge/license-MIT-0d9488.svg)](LICENSE)
 [![Website](https://img.shields.io/badge/web-opencortyx.com-0d9488.svg)](https://www.opencortyx.com)
-[![Discord](https://img.shields.io/badge/Discord-join-5865F2.svg?logo=discord&logoColor=white)](https://discord.gg/bGs5jnvxK)
+[![Discord](https://img.shields.io/badge/Discord-join-5865F2.svg?logo=discord&logoColor=white)](https://discord.gg/W3zwMZdJu)
 
 <a href="docs/assets/demo/opencortyx-demo.mp4">
   <img src="docs/assets/demo/opencortyx-demo.gif" alt="OpenCortyx demo: a JSON file is added, read by the Mapper, ingested, explored in the knowledge graph and questioned in the AI Assistant, which answers with cited sources" width="900" />
@@ -321,7 +321,7 @@ and image or audio ingestion. Plans and requests are tracked in [GitHub issues](
 
 ## Community and contributing
 
-- Questions and ideas: [Discord](https://discord.gg/bGs5jnvxK)
+- Questions and ideas: [Discord](https://discord.gg/W3zwMZdJu)
 - Bugs and feature requests: [GitHub issues](https://github.com/opencortyx/OpenCortyx/issues)
 - Development setup, tests and conventions: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Security issues: [SECURITY.md](SECURITY.md)
