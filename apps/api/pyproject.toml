@@ -83,7 +83,7 @@ fastavro = "^1.9.0"
 # one of the following". cramjam over python-snappy: no C toolchain, no libsnappy system package.
 cramjam = "^2.8.0"
 pyarrow = "*"                         # tabular row-batch reader for CSV/Parquet ingest (ingest/structured/tabular.py iter_row_batches)
-oracledb = "^4.0.0"                   # Oracle (thin mode, no Oracle client needed)
+oracledb = ">=4,<27"                   # Oracle (thin mode, no Oracle client needed)
 trino = "^0.337.0"                    # Trino / Presto (lakehouse query engine)
 "clickhouse-sqlalchemy" = "^0.3.2"    # ClickHouse
 "sqlalchemy-cockroachdb" = "^2.0.4"   # CockroachDB
