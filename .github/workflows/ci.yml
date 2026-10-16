@@ -163,3 +163,55 @@ jobs:
       - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The shell scripts on macOS: /bin/bash 3.2 and BSD tools, where Linux-only syntax and options
+  # break. GitHub's Mac runners have no Docker, so this covers the scripts, not a running stack.
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Tools
+        run: /bin/bash --version | head -1; sw_vers -productVersion
+      - name: Syntax
+        run: /bin/bash -n bin/opencortyx && /bin/bash -n install.sh
+      - name: version
+        run: test "$(/bin/bash bin/opencortyx version)" = "$(tr -d ' \r\n' < VERSION)"
+      - name: init writes secrets once and keeps them
+        run: |
+          OPENCORTYX_CHANNEL=beta /bin/bash bin/opencortyx init
+          for key in POSTGRES_PASSWORD JWT_SECRET NEXTAUTH_SECRET; do grep -qE "^$key=.+" .env; done
+          grep -q '^OPENCORTYX_CHANNEL=beta$' .env
+          before="$(grep -E '^(POSTGRES_PASSWORD|JWT_SECRET|NEXTAUTH_SECRET)=' .env)"
+          /bin/bash bin/opencortyx init
+          [ "$before" = "$(grep -E '^(POSTGRES_PASSWORD|JWT_SECRET|NEXTAUTH_SECRET)=' .env)" ]
+      - name: Release picking (installer's sort, CLI's git sort)
+        run: |
+          awk '/^newest_tag\(\) \{/,/^}/' install.sh > /tmp/installer.sh
+          awk '/^newest_tag\(\) \{/,/^}/; /^release_tag\(\) \{/,/^}/' bin/opencortyx > /tmp/cli.sh
+          /bin/bash -euo pipefail -c '
+            source /tmp/installer.sh
+            stable="^v[0-9]+\.[0-9]+\.[0-9]+$"; beta="^v[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$"
+            check() { [ "$2" = "$3" ] && echo "ok   $1: $2" || { echo "FAIL $1: got \"$2\", want \"$3\""; exit 1; }; }
+            tags="v0.1.0-beta.1 v0.1.0-beta.2 v0.1.0-beta.10"
+            check "installer, betas only, stable" "$(printf "%s\n" $tags | newest_tag "$stable")" ""
+            check "installer, betas only, beta"   "$(printf "%s\n" $tags | newest_tag "$beta")" "v0.1.0-beta.10"
+            check "installer, stable beats its betas" "$(printf "%s\n" $tags v0.1.0 | newest_tag "$beta")" "v0.1.0"
+            check "installer, next beta beats stable" "$(printf "%s\n" $tags v0.1.0 v0.2.0-beta.1 | newest_tag "$beta")" "v0.2.0-beta.1"
+            git init -q /tmp/tags && cd /tmp/tags
+            git -c user.name=t -c user.email=t@t commit -q --allow-empty -m x
+            for t in v0.1.0-beta.1 v0.1.0-beta.2 v0.1.0-beta.10 v0.1.0 v0.2.0-beta.1; do git tag "$t"; done
+            source /tmp/cli.sh
+            check "cli, stable channel" "$(release_tag stable)" "v0.1.0"
+            check "cli, beta channel"   "$(release_tag beta)" "v0.2.0-beta.1"
+            check "cli, newer of stable and next beta" "$(newest_tag v0.1.0 v0.2.0-beta.1)" "v0.2.0-beta.1"
+            check "cli, stable newer than its beta" "$(newest_tag v0.1.0 v0.1.0-beta.2)" "v0.1.0"
+          '
+      - name: Installer explains a missing Docker
+        run: |
+          # A copy in an empty folder, with Docker off PATH: it must stop at its first check and never
+          # install, even on a machine that has Docker.
+          dir="$(mktemp -d)"; cp install.sh "$dir/"; cd "$dir"
+          if out="$(PATH=/usr/bin:/bin /bin/bash ./install.sh 2>&1)"; then echo "$out"; exit 1; fi
+          echo "$out"; echo "$out" | grep -q "Install Docker first"

@@ -42,6 +42,7 @@ jobs:
           [ -n "$tag" ] || { echo "No release tag found" >&2; exit 1; }
           echo "TAG=$tag" >> "$GITHUB_ENV"
           echo "VERSION=${tag#v}" >> "$GITHUB_ENV"
+          echo "STARTED=$(date -u +%s)" >> "$GITHUB_ENV"
           echo "Testing $tag ($MATRIX_METHOD)"
           df -BM --output=used / | tail -1 | tr -d 'M ' > /tmp/disk-before
         env:
@@ -71,10 +72,14 @@ jobs:
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           for s in api web mcp; do
             image="ghcr.io/$owner/opencortyx-$s:$VERSION"
-            # A pulled image records the registry digest it came from; a local build has none.
-            digests="$(docker image inspect -f '{{len .RepoDigests}}' "$image" 2>/dev/null || echo missing)"
-            echo "$image: $digests registry digest(s)"
-            [ "$digests" != missing ] && [ "$digests" -gt 0 ] || { echo "::error::$image was built locally or is missing"; exit 1; }
+            # A pulled image was created by the Release workflow, before this job started; a local
+            # build is created during it. (RepoDigests is no signal: Docker's containerd image store
+            # leaves it empty for pulled images too.)
+            created="$(docker image inspect -f '{{.Created}}' "$image" 2>/dev/null)" \
+              || { echo "::error::$image is missing"; exit 1; }
+            echo "$image: created $created"
+            [ "$(date -u -d "$created" +%s)" -lt "$STARTED" ] \
+              || { echo "::error::$image was built during the install instead of downloaded"; exit 1; }
           done
 
       - name: Services answer
