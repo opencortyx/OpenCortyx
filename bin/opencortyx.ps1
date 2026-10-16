@@ -19,6 +19,17 @@ function Info($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 function Warn($msg) { Write-Host "!  $msg" -ForegroundColor Yellow }
 function Die($msg) { Write-Host "x  $msg" -ForegroundColor Red; exit 1 }
 
+# Runs a native command whose stderr is noise or an expected failure (an image not pulled yet, no GPU,
+# Docker stopped) and returns its stdout; callers read $LASTEXITCODE. Windows PowerShell 5.1 turns
+# redirected native stderr into a terminating error under $ErrorActionPreference = "Stop", so a plain
+# `& docker image inspect <not-yet-pulled> *> $null` aborted a first install.
+function Invoke-Quiet {
+    $ErrorActionPreference = "Continue"
+    $exe = $args[0]
+    $rest = @($args | Select-Object -Skip 1)
+    & $exe @rest 2>$null
+}
+
 function Invoke-Compose {
     $files = @("-f", "compose.yaml")
     if ($env:OPENCORTYX_DEV -eq "1") { $files += @("-f", "compose.dev.yaml") }
@@ -51,17 +62,17 @@ function New-Secret {
 
 function Assert-Docker {
     if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { Die "Docker is not installed: https://docs.docker.com/desktop/setup/install/windows-install/" }
-    & docker info *> $null
+    Invoke-Quiet docker info | Out-Null
     if ($LASTEXITCODE -ne 0) { Die "Docker is not running. Start Docker Desktop and try again." }
-    & docker compose version *> $null
+    Invoke-Quiet docker compose version | Out-Null
     if ($LASTEXITCODE -ne 0) { Die "Docker Compose v2 is required." }
 }
 
 function Test-NvidiaGpu {
-    $runtimes = & docker info --format "{{json .Runtimes}}" 2>$null
+    $runtimes = Invoke-Quiet docker info --format "{{json .Runtimes}}"
     if ($runtimes -match "nvidia") { return $true }
     if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
-        & nvidia-smi -L *> $null
+        Invoke-Quiet nvidia-smi -L | Out-Null
         return ($LASTEXITCODE -eq 0)
     }
     return $false
@@ -74,16 +85,18 @@ function Get-GpuFraction {
     $margin = 768
     $tag = Get-EnvValue "VLLM_IMAGE_TAG"; if (-not $tag) { $tag = "v0.11.0" }
     $image = "vllm/vllm-openai:$tag"
-    & docker image inspect $image *> $null
+    Invoke-Quiet docker image inspect $image | Out-Null
     if ($LASTEXITCODE -eq 0) {
         $probe = 'import torch; f, t = torch.cuda.mem_get_info(); print(f"{t // 2**20}, {f // 2**20}")'
-        $line = & docker run --rm --gpus all --entrypoint python3 $image -c $probe 2>$null | Select-Object -Last 1
+        $line = Invoke-Quiet docker run --rm --gpus all --entrypoint python3 $image -c $probe | Select-Object -Last 1
         if ($line -match '^\s*\d+,\s*\d+\s*$') { $margin = 256 } else { $line = $null }
     }
     if (-not $line -and (Get-Command nvidia-smi -ErrorAction SilentlyContinue)) {
-        $line = & nvidia-smi --query-gpu=memory.total,memory.free --format=csv,noheader,nounits 2>$null | Select-Object -First 1
+        # Quoted: unquoted, PowerShell reads the commas as a list and nvidia-smi gets the query split apart.
+        $line = Invoke-Quiet nvidia-smi "--query-gpu=memory.total,memory.free" "--format=csv,noheader,nounits" | Select-Object -First 1
     }
-    if (-not $line) { return $null }
+    # Two numbers or nothing: an error message here would otherwise crash the install on the cast below.
+    if (-not ($line -match '^\s*\d+(\.\d+)?,\s*\d+(\.\d+)?\s*$')) { return $null }
     $parts = $line -split ","
     $total = [double]$parts[0].Trim()
     $free = [double]$parts[1].Trim()
@@ -95,7 +108,7 @@ function Get-GpuFraction {
 function Set-GpuFraction {
     if (("," + (Get-EnvValue "COMPOSE_PROFILES") + ",") -notmatch ",gpu,") { return }
     if ((Get-EnvValue "OPENCORTYX_GPU_FRACTION_FIXED") -eq "1") { return }
-    $running = & docker compose --project-directory $Root -f compose.yaml ps --status running -q vllm 2>$null
+    $running = Invoke-Quiet docker compose --project-directory $Root -f compose.yaml ps --status running -q vllm
     if ($running) { return }
     $frac = Get-GpuFraction
     if (-not $frac) { return }
@@ -154,7 +167,7 @@ function Invoke-Up {
         Invoke-Compose up -d --build
     } else {
         Info "Starting OpenCortyx $version (pulling release images; building any that are unavailable)"
-        & docker compose --project-directory $Root -f compose.yaml pull --ignore-pull-failures --quiet *> $null
+        Invoke-Quiet docker compose --project-directory $Root -f compose.yaml pull --ignore-pull-failures --quiet | Out-Null
         Invoke-Compose up -d
     }
     $api = "http://localhost:$(Port 'OPENCORTYX_API_PORT' '8000')"
@@ -174,7 +187,7 @@ function Invoke-Up {
 function Invoke-Doctor {
     $failed = $false
     Write-Host "Host" -ForegroundColor White
-    & docker info *> $null
+    Invoke-Quiet docker info | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Host "  x docker is not running"; exit 1 }
     Write-Host "  ok docker $(& docker version --format '{{.Server.Version}}')"
     Write-Host "  ok $(& docker compose version | Select-Object -First 1)"
@@ -315,7 +328,7 @@ function Invoke-Update($argv) {
     if ($channel -notin @("stable", "beta")) { Die "Unknown channel '$channel': use stable or beta" }
     & git fetch --tags --quiet
     if ($LASTEXITCODE -ne 0) { Die "git fetch failed" }
-    & git symbolic-ref -q HEAD *> $null
+    Invoke-Quiet git symbolic-ref -q HEAD | Out-Null
     if ($LASTEXITCODE -eq 0) {
         # A branch checkout (a clone of main) follows its branch, not a release channel.
         & git pull --ff-only

@@ -11,15 +11,24 @@ $Dir = if ($env:OPENCORTYX_HOME) { $env:OPENCORTYX_HOME } else { Join-Path $HOME
 
 function Info($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 function Die($msg) { Write-Host "x  $msg" -ForegroundColor Red; exit 1 }
+# A native command whose stderr is noise or an expected failure; callers read $LASTEXITCODE.
+# Windows PowerShell 5.1 turns redirected native stderr into a terminating error under
+# $ErrorActionPreference = "Stop", so a stopped Docker threw instead of getting the message below.
+function Invoke-Quiet {
+    $ErrorActionPreference = "Continue"
+    $exe = $args[0]
+    $rest = @($args | Select-Object -Skip 1)
+    & $exe @rest 2>$null
+}
 function Invoke-Cli($dir, $command) {
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dir "bin\opencortyx.ps1") $command
     if ($LASTEXITCODE -ne 0) { Die "opencortyx $command failed" }
 }
 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { Die "Install Docker Desktop first: https://docs.docker.com/desktop/setup/install/windows-install/" }
-& docker info *> $null
+Invoke-Quiet docker info | Out-Null
 if ($LASTEXITCODE -ne 0) { Die "Docker is not running. Start Docker Desktop and re-run the installer." }
-& docker compose version *> $null
+Invoke-Quiet docker compose version | Out-Null
 if ($LASTEXITCODE -ne 0) { Die "Docker Compose v2 is required." }
 if ($Channel -notin @("stable", "beta")) { Die "OPENCORTYX_CHANNEL must be stable or beta, not '$Channel'." }
 
@@ -36,7 +45,7 @@ if ($here -and (Test-Path (Join-Path $here "compose.yaml")) -and (Test-Path (Joi
 } else {
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Die "git is required: https://git-scm.com/download/win" }
     if (-not $Branch) {
-        $tags = & git ls-remote --tags --refs $Repo "v*" 2>$null | ForEach-Object { ($_ -split "/")[-1] }
+        $tags = Invoke-Quiet git ls-remote --tags --refs $Repo "v*" | ForEach-Object { ($_ -split "/")[-1] }
         # Newest first; a release sorts above its own betas (v1.0.0 > v1.0.0-beta.2).
         function Get-NewestTag($pattern) {
             $tags | Where-Object { $_ -match $pattern } |
