@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed
+- An installer error closed the PowerShell window it was run in (`irm ... | iex`), taking the
+  message with it. The error is now shown and the window stays open.
+- A failed download left a half-written folder that the next installer run then tried to update.
+  The installer removes a folder it created when the download fails.
+
 ### Security
 - Managing models is admin-only. Editors could add or change models and pull or download them,
   and any signed-in user could have the server list a model server's models, which let them make

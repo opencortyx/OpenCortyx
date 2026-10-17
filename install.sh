@@ -68,7 +68,13 @@ else
   fi
   export OPENCORTYX_CHANNEL="$CHANNEL"
   info "Downloading OpenCortyx $BRANCH to $DIR"
-  git clone --depth 1 --branch "$BRANCH" "$REPO" "$DIR"
+  existed=""; [ -e "$DIR" ] && existed=1
+  # A half-written checkout would send the next run down the "Updating" path. Removed only when this
+  # run created the folder, never a folder that was already there.
+  git clone --depth 1 --branch "$BRANCH" "$REPO" "$DIR" || {
+    [ -n "$existed" ] || rm -rf "$DIR"
+    die "Downloading OpenCortyx failed (see the git message above)."
+  }
   chmod +x "$DIR/bin/opencortyx"
   install_command
   "$DIR/bin/opencortyx" init

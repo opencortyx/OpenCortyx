@@ -10,7 +10,10 @@ $Channel = if ($env:OPENCORTYX_CHANNEL) { $env:OPENCORTYX_CHANNEL } else { "stab
 $Dir = if ($env:OPENCORTYX_HOME) { $env:OPENCORTYX_HOME } else { Join-Path $HOME "opencortyx" }
 
 function Info($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
-function Die($msg) { Write-Host "x  $msg" -ForegroundColor Red; exit 1 }
+# `throw`, not `exit`: run as `irm ... | iex` this script is part of the user's own PowerShell session,
+# and `exit` closed their window along with the message saying what went wrong. Run with -File, an
+# uncaught throw still ends the script with exit code 1.
+function Die($msg) { Write-Host "x  $msg" -ForegroundColor Red; throw "OpenCortyx installer: $msg" }
 # A native command whose stderr is noise or an expected failure; callers read $LASTEXITCODE.
 # Windows PowerShell 5.1 turns redirected native stderr into a terminating error under
 # $ErrorActionPreference = "Stop", so a stopped Docker threw instead of getting the message below.
@@ -86,8 +89,15 @@ if ($here -and (Test-Path (Join-Path $here "compose.yaml")) -and (Test-Path (Joi
     }
     $env:OPENCORTYX_CHANNEL = $Channel
     Info "Downloading OpenCortyx $Branch to $Dir"
+    $existed = Test-Path $Dir
     & git clone --depth 1 --branch $Branch $Repo $Dir
-    if ($LASTEXITCODE -ne 0) { Die "git clone failed" }
+    if ($LASTEXITCODE -ne 0) {
+        # A half-written checkout would send the next run down the "Updating" path. Removed only when
+        # this run created the folder, never a folder that was already there.
+        if (-not $existed -and (Test-Path $Dir)) { Remove-Item -Recurse -Force $Dir -ErrorAction SilentlyContinue }
+        Die ("Downloading OpenCortyx failed (see the git message above). If it says 'Permission denied', " +
+             "security software blocked a file: allow the OpenCortyx folder, then run the installer again.")
+    }
     Add-CommandToPath $Dir
     Invoke-Cli $Dir "init"
     Invoke-Cli $Dir "up"
