@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed
+- Release images are built natively on Intel and ARM machines, then joined into one
+  multi-architecture image. The ARM build used to run emulated, and the web image's emulated build
+  hung until GitHub's 6-hour limit in two releases.
+
 ## 0.1.0-beta.5 - 2026-10-17
 
 Security fixes from an audit, and a sturdier Windows installer.
