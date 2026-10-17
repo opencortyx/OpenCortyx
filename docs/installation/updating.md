@@ -8,10 +8,43 @@ opencortyx update
 ```
 
 `update` moves an installation that follows releases to the newest release tag (or pulls `main` for
-a branch checkout), then starts the stack. Database migrations run automatically in the `setup`
-service before the API starts. Check the result with `opencortyx doctor`.
+a branch checkout), then starts the stack with the new version's own command. Database migrations
+run automatically in the `setup` service before the API starts. Check the result with
+`opencortyx doctor`.
 
 Read the [changelog](../../CHANGELOG.md) before upgrading across several versions.
+
+### From 0.1.0-beta.2
+
+The `update` command of 0.1.0-beta.2 switches to the new version but then starts it with its own,
+older code, which still tries to start the GPU model server that later versions removed. Upgrade
+from 0.1.0-beta.2 by hand instead; your data is kept.
+
+macOS and Linux:
+
+```bash
+cd ~/opencortyx
+git fetch --tags
+git checkout v0.1.0-beta.3
+bin/opencortyx up
+```
+
+Windows (PowerShell):
+
+```powershell
+cd $HOME\opencortyx
+git fetch --tags
+git checkout v0.1.0-beta.3
+.\bin\opencortyx.ps1 up
+```
+
+If `git checkout` reports local changes to a file under `bin/`, that copy was edited by hand
+(usually to work around an install problem fixed since); `git checkout -- bin` discards the edits.
+Then open **Models** and add a generation model: the bundled one is gone (see the
+[changelog](../../CHANGELOG.md)).
+
+Later versions do not need this: from the next release on, `update` hands over to the new
+version's command.
 
 ## Stop and start
 

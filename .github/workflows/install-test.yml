@@ -1,7 +1,9 @@
 name: Install test
 
 # A FIRST install on a clean machine, the way the README tells users to do it, against the newest
-# published release: the one-line installer, and a clone + `bin/opencortyx up`. It checks that the
+# published release: the one-line installer, and a clone + `bin/opencortyx up`; and an UPGRADE, the
+# previous release installed and then `opencortyx update`d, with an admin created before the update
+# that must still be there after it. It checks that the
 # release images are DOWNLOADED (a local build means they are missing or private), that the stack
 # comes up healthy at the released version, that first-run setup works, and reports the disk the
 # install takes. Linux only: GitHub's Windows and macOS runners cannot run these Linux containers,
@@ -24,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        method: [installer, clone]
+        method: [installer, clone, upgrade]
     env:
       REPO: https://github.com/${{ github.repository }}.git
       RAW: https://raw.githubusercontent.com/${{ github.repository }}/main
@@ -40,6 +42,11 @@ jobs:
           tag="$(pick '^v[0-9]+\.[0-9]+\.[0-9]+$')"
           [ -n "$tag" ] || tag="$(pick '^v[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$')"
           [ -n "$tag" ] || { echo "No release tag found" >&2; exit 1; }
+          # The release before it, for the upgrade: every release tag in version order, one back.
+          prev="$(printf '%s\n' "$tags" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$' \
+                  | sed 's/-/~/' | sort -V | sed 's/~/-/' | grep -B1 -x "$tag" | head -1)"
+          [ "$prev" != "$tag" ] || prev=""
+          echo "PREV=$prev" >> "$GITHUB_ENV"
           echo "TAG=$tag" >> "$GITHUB_ENV"
           echo "VERSION=${tag#v}" >> "$GITHUB_ENV"
           echo "STARTED=$(date -u +%s)" >> "$GITHUB_ENV"
@@ -59,6 +66,22 @@ jobs:
         run: |
           git clone --depth 1 --branch "$TAG" "$REPO" "$DIR"
           "$DIR/bin/opencortyx" up
+
+      - name: Install the previous release, then update
+        if: matrix.method == 'upgrade'
+        working-directory: /home/runner
+        run: |
+          [ -n "$PREV" ] || { echo "No earlier release to upgrade from; nothing to test"; exit 0; }
+          echo "Upgrading $PREV -> $TAG"
+          git clone --depth 1 --branch "$PREV" "$REPO" "$DIR"
+          "$DIR/bin/opencortyx" up
+          # Data made before the update must survive it: an admin, checked after the update.
+          password="$(openssl rand -hex 16)"
+          echo "::add-mask::$password"
+          curl -fsS -X POST http://localhost:8000/api/v2/auth/setup -H 'Content-Type: application/json' \
+            -d "{\"email\": \"admin@example.com\", \"password\": \"$password\", \"adopt_demo\": false}" > /dev/null
+          channel=stable; case "$TAG" in *-beta.*) channel=beta ;; esac
+          "$DIR/bin/opencortyx" update --channel "$channel"
 
       - name: Installed the newest release
         working-directory: ${{ env.DIR }}
@@ -95,6 +118,12 @@ jobs:
       - name: First-run setup creates the admin
         run: |
           api=http://localhost:8000/api/v2
+          if [ "$MATRIX_METHOD" = upgrade ] && [ -n "$PREV" ]; then
+            # The admin made before the update is still there: the data survived it.
+            curl -fsS "$api/auth/needs-setup" | grep -q '"needs_setup": *false'
+            echo "The admin created on $PREV survived the update."
+            exit 0
+          fi
           curl -fsS "$api/auth/needs-setup" | grep -q '"needs_setup": *true'
           password="$(openssl rand -hex 16)"
           echo "::add-mask::$password"
@@ -102,6 +131,8 @@ jobs:
             -d "{\"email\": \"admin@example.com\", \"password\": \"$password\", \"adopt_demo\": false}" > /dev/null
           curl -fsS "$api/auth/needs-setup" | grep -q '"needs_setup": *false'
           echo "Admin created; setup is closed."
+        env:
+          MATRIX_METHOD: ${{ matrix.method }}
 
       - name: Doctor
         if: always()

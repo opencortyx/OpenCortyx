@@ -291,8 +291,17 @@ function Invoke-Update($argv) {
         }
     }
     if (Test-Path $EnvFile) { Set-EnvValue "OPENCORTYX_CHANNEL" $channel }
-    $env:OPENCORTYX_VERSION = Read-Version
-    Invoke-Up
+    # Start the new version with ITS OWN script. This process is still running the code of the release
+    # it was started from, so calling Invoke-Up here ran the old release's `up` against the new files:
+    # 0.1.0-beta.2's started a GPU model server that 0.1.0-beta.3 no longer has. `init` first adds any
+    # setting the new version introduced; it never changes one that is already set.
+    Remove-Item Env:OPENCORTYX_VERSION -ErrorAction SilentlyContinue
+    $shell = (Get-Process -Id $PID).Path            # powershell.exe or pwsh.exe, whichever runs this
+    $script = Join-Path $Root "bin\opencortyx.ps1"
+    & $shell -NoProfile -ExecutionPolicy Bypass -File $script init
+    if ($LASTEXITCODE -ne 0) { Die "opencortyx init failed" }
+    & $shell -NoProfile -ExecutionPolicy Bypass -File $script up
+    exit $LASTEXITCODE
 }
 
 function Invoke-Reset {

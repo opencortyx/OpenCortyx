@@ -4,7 +4,12 @@
 
 ### Fixed
 - The installers put the `opencortyx` command on PATH only after the stack had started, so a
-  first start that failed left the command missing when it was needed to retry. It is added first.
+  first start that failed left the command missing when it was needed to retry. It is added first,
+  on macOS, Linux and Windows.
+- `opencortyx update` switched to the new version but started it with the old version's code. It
+  now starts the new version with its own command. Upgrading from 0.1.0-beta.2 still runs that
+  version's `update`, so upgrade from it by hand: see
+  [Updating](docs/installation/updating.md#from-010-beta2).
 
 ## 0.1.0-beta.3 - 2026-10-17
 
@@ -12,8 +17,9 @@ Models are chosen only on the Models page, and can be downloaded there for every
 vLLM server is gone.
 
 ### Upgrading from 0.1.0-beta.2
-- Run `opencortyx update` (or `bin/opencortyx up` from a clone). Migration `0030` converts your
-  model rows; nothing to do by hand.
+- Do not use `opencortyx update` from 0.1.0-beta.2: switch to the tag and start it by hand, as in
+  [Updating](docs/installation/updating.md#from-010-beta2). Migration `0030` converts your model
+  rows; nothing to do by hand.
 - Rows that pointed at the bundled vLLM server are deleted, so a workspace that used it has no
   generation model afterwards: open **Models** and add one (a server you run, Hugging Face, a
   hosted API, or a model downloaded into OpenCortyx).
