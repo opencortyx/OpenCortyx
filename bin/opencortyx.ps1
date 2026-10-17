@@ -329,6 +329,7 @@ Usage: bin\opencortyx <command> [args]
   logs [service]          Follow logs
   doctor                  Check host, services, database, LLM and embeddings
   connect <client> <key>  Connect an MCP client (claude, cursor, vscode, json)
+  reset-password <email>  Set a new password for an account (asks for it; for a locked-out admin)
   update [--channel stable|beta]
                           Move to the newest release on the channel (default stable, remembered) and restart
   backup [dir]            Back up the database, the graph and the vectors (stops the stack briefly)
@@ -350,6 +351,7 @@ switch ($Command) {
     "doctor" { Invoke-Doctor }
     "connect" { Invoke-Connect ($Rest | Select-Object -First 1) ($Rest | Select-Object -Skip 1 -First 1) }
     "update" { Invoke-Update $Rest }
+    "reset-password" { Assert-Docker; Invoke-Compose exec api python -m opencortyx.reset_password @Rest }
     "backup" { Invoke-Backup ($Rest | Select-Object -First 1) }
     "restore" { Invoke-Restore ($Rest | Select-Object -First 1) }
     "reset" { Invoke-Reset }

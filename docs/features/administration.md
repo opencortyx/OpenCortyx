@@ -34,6 +34,9 @@ Decide who can use the workspace and what they can do, and create keys for agent
 ### Good to know
 
 - The first visit to a new installation creates the admin account. There is no default password.
+- Forgot the admin password? On the machine running OpenCortyx, run
+  `opencortyx reset-password <email>` (Windows: `bin\opencortyx.ps1 reset-password <email>`). It asks
+  for the new password twice, hidden, and also re-enables the account if it was disabled.
 - Revoke a key you no longer use. Anything using it stops working at once.
 
 ## Models

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Added
+- `opencortyx reset-password <email>`: set a new password for an account from the machine running
+  OpenCortyx. A forgotten admin password used to mean starting over, since there is no default
+  credential and no email recovery.
+
 ### Fixed
 - The installers put the `opencortyx` command on PATH only after the stack had started, so a
   first start that failed left the command missing when it was needed to retry. It is added first,

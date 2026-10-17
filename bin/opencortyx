@@ -346,6 +346,7 @@ Usage: bin/opencortyx <command> [args]
   logs [service]       Follow logs
   doctor               Check host, services, database, LLM and embeddings
   connect <client> <key>  Connect an MCP client (claude, cursor, vscode, json)
+  reset-password <email>  Set a new password for an account (asks for it; for a locked-out admin)
   update [--channel stable|beta]
                        Move to the newest release on the channel (default stable, remembered) and restart
   backup [dir]         Back up the database, the graph and the vectors (stops the stack briefly)
@@ -370,6 +371,7 @@ main() {
     logs) require_docker; compose logs -f --tail=200 "$@" ;;
     doctor) cmd_doctor ;;
     connect) cmd_connect "$@" ;;
+    reset-password) require_docker; compose exec api python -m opencortyx.reset_password "$@" ;;
     update) cmd_update "$@" ;;
     backup) cmd_backup "$@" ;;
     restore) cmd_restore "$@" ;;

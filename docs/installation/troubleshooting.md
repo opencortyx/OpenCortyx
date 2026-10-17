@@ -16,6 +16,7 @@ opencortyx logs <service>     # api, worker, extraction-worker, web, mcp, postgr
 | `docker: command not found` while Docker Desktop is running (macOS) | The CLI is not on `PATH`. See [macos.md](macos.md#docker-command-line) |
 | `Docker Compose v2 is required` although Docker Desktop is installed (macOS) | The plugin links in `~/.docker/cli-plugins` point to the installer disk image. Relink them as shown in [macos.md](macos.md#docker-command-line) |
 | `POSTGRES_PASSWORD is not set` | Run `opencortyx init` in the installation directory |
+| Cannot sign in: invalid email or password, and nobody remembers the admin password | `opencortyx reset-password <email>` sets a new one (it asks for it). The account emails are listed if the one you give does not exist |
 | Port 3000, 8000 or 8001 already in use | Set `OPENCORTYX_WEB_PORT`, `OPENCORTYX_API_PORT` or `OPENCORTYX_MCP_PORT` in `.env`, then `opencortyx up` |
 | Build fails with `ERESOLVE` during `npm ci` | You changed web dependencies with a newer npm; reinstall them with Node 20 (`apps/web/.nvmrc`) |
 
