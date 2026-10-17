@@ -2,21 +2,22 @@
 
 ## Unreleased
 
-### Changed
-- Release images are built natively on Intel and ARM machines, then joined into one
-  multi-architecture image. The ARM build used to run emulated, and the web image's emulated build
-  hung until GitHub's 6-hour limit in two releases.
+## 0.1.0-beta.6 - 2026-10-17
 
-## 0.1.0-beta.5 - 2026-10-17
-
-Security fixes from an audit, and a sturdier Windows installer.
+Security fixes from an audit, and a sturdier Windows installer. (0.1.0-beta.5 was not published: its
+web image failed to build, and its tag was withdrawn.)
 
 ### Upgrading
 - From 0.1.0-beta.3 or 0.1.0-beta.4: `opencortyx update`.
 - From 0.1.0-beta.2: by hand, as in [Updating](docs/installation/updating.md#from-010-beta2), with
-  `v0.1.0-beta.5` as the tag.
+  `v0.1.0-beta.6` as the tag.
 - Editors can no longer add, change or download models; an admin does that now.
 - No database migration and no new settings in this release.
+
+### Changed
+- Release images are built natively on Intel and ARM machines, then joined into one
+  multi-architecture image. The ARM build ran emulated, and the web image's emulated build hung or
+  failed in two releases. CI now also builds the web image on ARM before anything is tagged.
 
 ### Fixed
 - An installer error closed the PowerShell window it was run in (`irm ... | iex`), taking the
