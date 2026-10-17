@@ -25,7 +25,7 @@ macOS and Linux:
 ```bash
 cd ~/opencortyx
 git fetch --tags
-git checkout v0.1.0-beta.3
+git checkout v0.1.0-beta.4
 bin/opencortyx up
 ```
 
@@ -34,7 +34,7 @@ Windows (PowerShell):
 ```powershell
 cd $HOME\opencortyx
 git fetch --tags
-git checkout v0.1.0-beta.3
+git checkout v0.1.0-beta.4
 .\bin\opencortyx.ps1 up
 ```
 
@@ -43,8 +43,9 @@ If `git checkout` reports local changes to a file under `bin/`, that copy was ed
 Then open **Models** and add a generation model: the bundled one is gone (see the
 [changelog](../../CHANGELOG.md)).
 
-Later versions do not need this: from the next release on, `update` hands over to the new
-version's command.
+Use the newest release tag (the [releases page](https://github.com/opencortyx/OpenCortyx/releases)
+lists them). From 0.1.0-beta.3 on, `opencortyx update` works; from 0.1.0-beta.4 on, it also starts
+the new version with that version's own command.
 
 ## Stop and start
 

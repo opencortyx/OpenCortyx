@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.1.0-beta.4 - 2026-10-17
+
+Installing, updating and getting back into an installation, made dependable.
+
+### Upgrading
+- From 0.1.0-beta.3: `opencortyx update`.
+- From 0.1.0-beta.2: not with `opencortyx update`; switch to the tag and start it by hand, as in
+  [Updating](docs/installation/updating.md#from-010-beta2) (with `v0.1.0-beta.4` as the tag).
+- No database migration and no new settings in this release.
+
 ### Added
 - `opencortyx reset-password <email>`: set a new password for an account from the machine running
   OpenCortyx. A forgotten admin password used to mean starting over, since there is no default
