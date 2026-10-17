@@ -20,6 +20,19 @@ function Invoke-Quiet {
     $rest = @($args | Select-Object -Skip 1)
     & $exe @rest 2>$null
 }
+# The command goes on PATH BEFORE the stack is started: a first start that fails (Docker short of
+# memory, an image that will not pull) is exactly when `opencortyx up` / `doctor` is needed next,
+# and adding it last left it missing then.
+function Add-CommandToPath($dir) {
+    $binDir = Join-Path $dir "bin"
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if (-not ($userPath -split ";" | Where-Object { $_ -eq $binDir })) {
+        [Environment]::SetEnvironmentVariable("Path", "$userPath;$binDir", "User")
+        Info "Added $binDir to your PATH (open a new terminal to use 'opencortyx')"
+    }
+    # This session too, so the commands printed below work without a new terminal.
+    if (-not ($env:Path -split ";" | Where-Object { $_ -eq $binDir })) { $env:Path = "$env:Path;$binDir" }
+}
 function Invoke-Cli($dir, $command) {
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dir "bin\opencortyx.ps1") $command
     if ($LASTEXITCODE -ne 0) { Die "opencortyx $command failed" }
@@ -36,10 +49,12 @@ $here = $PSScriptRoot
 if ($here -and (Test-Path (Join-Path $here "compose.yaml")) -and (Test-Path (Join-Path $here "bin\opencortyx.ps1"))) {
     $Dir = $here
     Info "Using checkout at $Dir"
+    Add-CommandToPath $Dir
     Invoke-Cli $Dir "init"
     Invoke-Cli $Dir "up"
 } elseif (Test-Path (Join-Path $Dir ".git")) {
     Info "Updating $Dir"
+    Add-CommandToPath $Dir
     Invoke-Cli $Dir "init"
     Invoke-Cli $Dir "update"
 } else {
@@ -70,13 +85,8 @@ if ($here -and (Test-Path (Join-Path $here "compose.yaml")) -and (Test-Path (Joi
     Info "Downloading OpenCortyx $Branch to $Dir"
     & git clone --depth 1 --branch $Branch $Repo $Dir
     if ($LASTEXITCODE -ne 0) { Die "git clone failed" }
+    Add-CommandToPath $Dir
     Invoke-Cli $Dir "init"
     Invoke-Cli $Dir "up"
 }
 
-$binDir = Join-Path $Dir "bin"
-$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if (-not ($userPath -split ";" | Where-Object { $_ -eq $binDir })) {
-    [Environment]::SetEnvironmentVariable("Path", "$userPath;$binDir", "User")
-    Info "Added $binDir to your PATH (open a new terminal to use 'opencortyx')"
-}

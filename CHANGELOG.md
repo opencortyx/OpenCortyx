@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+- The installers put the `opencortyx` command on PATH only after the stack had started, so a
+  first start that failed left the command missing when it was needed to retry. It is added first.
+
 ## 0.1.0-beta.3 - 2026-10-17
 
 Models are chosen only on the Models page, and can be downloaded there for every role. The bundled

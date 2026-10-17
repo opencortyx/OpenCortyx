@@ -25,14 +25,29 @@ newest_tag() {
   { grep -E "$1" || true; } | sed 's/-/~/' | sort -V | sed 's/~/-/' | tail -1
 }
 
+# The command goes on PATH BEFORE the stack is started: a first start that fails (Docker short of
+# memory, an image that will not pull) is exactly when `opencortyx up` / `doctor` is needed next,
+# and installing the command last left it missing then.
+install_command() {
+  bin_dir="$HOME/.local/bin"
+  mkdir -p "$bin_dir"
+  ln -sf "$DIR/bin/opencortyx" "$bin_dir/opencortyx"
+  case ":$PATH:" in
+    *":$bin_dir:"*) info "Installed the 'opencortyx' command" ;;
+    *) info "Installed 'opencortyx' to $bin_dir (add it to your PATH)" ;;
+  esac
+}
+
 here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
 if [ -n "$here" ] && [ -f "$here/compose.yaml" ] && [ -x "$here/bin/opencortyx" ]; then
   DIR="$here"
   info "Using checkout at $DIR"
+  install_command
   "$DIR/bin/opencortyx" init
   "$DIR/bin/opencortyx" up
 elif [ -d "$DIR/.git" ]; then
   info "Updating $DIR"
+  install_command
   "$DIR/bin/opencortyx" init
   "$DIR/bin/opencortyx" update
 else
@@ -55,14 +70,8 @@ else
   info "Downloading OpenCortyx $BRANCH to $DIR"
   git clone --depth 1 --branch "$BRANCH" "$REPO" "$DIR"
   chmod +x "$DIR/bin/opencortyx"
+  install_command
   "$DIR/bin/opencortyx" init
   "$DIR/bin/opencortyx" up
 fi
 
-bin_dir="$HOME/.local/bin"
-mkdir -p "$bin_dir"
-ln -sf "$DIR/bin/opencortyx" "$bin_dir/opencortyx"
-case ":$PATH:" in
-  *":$bin_dir:"*) info "Installed the 'opencortyx' command" ;;
-  *) info "Installed 'opencortyx' to $bin_dir (add it to your PATH)" ;;
-esac
