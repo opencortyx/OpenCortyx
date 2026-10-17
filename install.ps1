@@ -33,8 +33,11 @@ function Add-CommandToPath($dir) {
     # This session too, so the commands printed below work without a new terminal.
     if (-not ($env:Path -split ";" | Where-Object { $_ -eq $binDir })) { $env:Path = "$env:Path;$binDir" }
 }
+# RemoteSigned, not Bypass: it runs the CLI just cloned (a git clone carries no internet mark) and still
+# refuses unsigned scripts downloaded from the web. Starting PowerShell with Bypass is a pattern
+# behaviour-based antivirus flags (Avast reported the CLI as IDP.Generic).
 function Invoke-Cli($dir, $command) {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dir "bin\opencortyx.ps1") $command
+    & powershell -NoProfile -ExecutionPolicy RemoteSigned -File (Join-Path $dir "bin\opencortyx.ps1") $command
     if ($LASTEXITCODE -ne 0) { Die "opencortyx $command failed" }
 }
 

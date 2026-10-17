@@ -30,11 +30,15 @@ In PowerShell:
 irm https://raw.githubusercontent.com/opencortyx/OpenCortyx/main/install.ps1 | iex
 ```
 
-If script execution is blocked, download the script and run it with a one-time bypass:
+If script execution is blocked, download `install.ps1`, read it, then mark it as trusted and run it:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
+Unblock-File .\install.ps1
+powershell -NoProfile -ExecutionPolicy RemoteSigned -File .\install.ps1
 ```
+
+OpenCortyx's scripts never turn PowerShell's script checks off (`-ExecutionPolicy Bypass`): they run
+with `RemoteSigned`, which allows local scripts and refuses unsigned ones from the internet.
 
 The first start downloads images and models and can take 10-20 minutes. When it finishes, open
 http://localhost:3000.

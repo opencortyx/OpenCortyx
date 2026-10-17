@@ -18,6 +18,10 @@ Installing, updating and getting back into an installation, made dependable.
   credential and no email recovery.
 
 ### Fixed
+- Avast flagged `opencortyx.ps1` as a threat (IDP.Generic) on Windows. The Windows tooling started
+  PowerShell with `-ExecutionPolicy Bypass` and then polled the API with web requests in a loop,
+  which is what behaviour-based antivirus looks for. It now runs with `RemoteSigned` (local scripts
+  run; unsigned scripts from the internet are refused) and waits on Docker's own health checks.
 - The installers put the `opencortyx` command on PATH only after the stack had started, so a
   first start that failed left the command missing when it was needed to retry. It is added first,
   on macOS, Linux and Windows.

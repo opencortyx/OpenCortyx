@@ -68,18 +68,19 @@ function Assert-Docker {
     if ($LASTEXITCODE -ne 0) { Die "Docker Compose v2 is required." }
 }
 
-function Wait-Http($url, $name, $tries) {
+# Waits on the service's own Docker health check rather than polling its port: a script making web
+# requests in a loop is what behaviour-based antivirus flags (Avast reported this CLI as IDP.Generic
+# while it polled the API), and the health check already asks the right question from inside.
+function Wait-Healthy($service, $name, $tries) {
     for ($i = 0; $i -lt $tries; $i++) {
-        try {
-            $r = Invoke-WebRequest -Uri $url -TimeoutSec 5 -UseBasicParsing -MaximumRedirection 0 -ErrorAction Stop
-            if ($r.StatusCode -lt 400) { return $true }
-        } catch {
-            $resp = $_.Exception.Response
-            if ($resp -and [int]$resp.StatusCode -lt 400) { return $true }
+        $id = Invoke-Compose ps -q $service | Select-Object -First 1
+        if ($id) {
+            $state = Invoke-Quiet docker inspect -f "{{.State.Health.Status}}" $id
+            if ($state -eq "healthy") { return $true }
         }
         Start-Sleep -Seconds 5
     }
-    Warn "$name did not become ready at $url"
+    Warn "$name did not become healthy"
     return $false
 }
 
@@ -118,9 +119,9 @@ function Invoke-Up {
     $api = "http://localhost:$(Port 'OPENCORTYX_API_PORT' '8000')"
     $web = Get-EnvValue "PUBLIC_WEB_URL"; if (-not $web) { $web = "http://localhost:3000" }
     Info "Waiting for the API"
-    if (-not (Wait-Http "$api/health" "API" 180)) { Invoke-Compose ps; Die "API is not healthy. See: bin\opencortyx logs api" }
+    if (-not (Wait-Healthy "api" "API" 180)) { Invoke-Compose ps; Die "API is not healthy. See: bin\opencortyx logs api" }
     Info "Waiting for the dashboard"
-    Wait-Http "$web/auth/login" "Dashboard" 60 | Out-Null
+    Wait-Healthy "web" "Dashboard" 60 | Out-Null
     Write-Host ""
     Write-Host "OpenCortyx is running" -ForegroundColor Green
     Write-Host "  Dashboard  $web"
@@ -298,9 +299,9 @@ function Invoke-Update($argv) {
     Remove-Item Env:OPENCORTYX_VERSION -ErrorAction SilentlyContinue
     $shell = (Get-Process -Id $PID).Path            # powershell.exe or pwsh.exe, whichever runs this
     $script = Join-Path $Root "bin\opencortyx.ps1"
-    & $shell -NoProfile -ExecutionPolicy Bypass -File $script init
+    & $shell -NoProfile -ExecutionPolicy RemoteSigned -File $script init
     if ($LASTEXITCODE -ne 0) { Die "opencortyx init failed" }
-    & $shell -NoProfile -ExecutionPolicy Bypass -File $script up
+    & $shell -NoProfile -ExecutionPolicy RemoteSigned -File $script up
     exit $LASTEXITCODE
 }
 
