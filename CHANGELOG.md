@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.1.0-beta.5 - 2026-10-17
+
+Security fixes from an audit, and a sturdier Windows installer.
+
+### Upgrading
+- From 0.1.0-beta.3 or 0.1.0-beta.4: `opencortyx update`.
+- From 0.1.0-beta.2: by hand, as in [Updating](docs/installation/updating.md#from-010-beta2), with
+  `v0.1.0-beta.5` as the tag.
+- Editors can no longer add, change or download models; an admin does that now.
+- No database migration and no new settings in this release.
+
 ### Fixed
 - An installer error closed the PowerShell window it was run in (`irm ... | iex`), taking the
   message with it. The error is now shown and the window stays open.
