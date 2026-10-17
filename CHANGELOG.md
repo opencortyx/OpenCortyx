@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Security
+- Managing models is admin-only. Editors could add or change models and pull or download them,
+  and any signed-in user could have the server list a model server's models, which let them make
+  the API contact any address (server-side request forgery) or point the generation model at
+  their own server and receive the prompts sent to it. Viewing the model list stays open.
+- A model run inside OpenCortyx loads safetensors weights only, never a pickled checkpoint, which
+  can run code when loaded.
+- `sharp` 0.35.5 (a vulnerability in its SVG library) and `next` 15.5.28.
+
 ## 0.1.0-beta.4 - 2026-10-17
 
 Installing, updating and getting back into an installation, made dependable.

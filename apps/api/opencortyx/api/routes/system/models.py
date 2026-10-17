@@ -14,13 +14,19 @@ from opencortyx.api.services.system.models import (
     model_view,
     provider_default_base,
 )
-from opencortyx.core.security.auth import CurrentUser, require_auth, require_write
+from opencortyx.core.security.auth import CurrentUser, require_admin, require_auth
 from opencortyx.core.db import V2Session
 from opencortyx.domain.control import Model
 from opencortyx.core.inference.registry import MODEL_ROLES, resolve_model
 from opencortyx.core.security.secrets import encrypt_secret
 
 router = APIRouter()
+
+# Managing models is the admin's: it is where API keys are stored, and these endpoints make the
+# server contact an address the caller chooses (a model server, Ollama, Hugging Face). Open to any
+# signed-in user, a viewer could have the API probe the internal network (server-side request
+# forgery), or an editor could point the generation model at their own server and receive every
+# prompt and document sent to it. Reading which models exist stays open: other pages need it.
 
 
 @router.get("/models")
@@ -64,7 +70,7 @@ async def active_models(user: CurrentUser = Depends(require_auth)):
 
 
 @router.get("/models/runtime")
-async def model_runtime(user: CurrentUser = Depends(require_auth)):
+async def model_runtime(user: CurrentUser = Depends(require_admin)):
     """What each connected model server is ACTUALLY serving, and whether this workspace agrees.
 
     The question that matters is "is the server up, and is it serving the name my rows ask for?" — a
@@ -152,7 +158,7 @@ def _check_dimensions(spec: ModelSpec) -> None:
 
 
 @router.post("/models")
-async def create_model(spec: ModelSpec, user: CurrentUser = Depends(require_write)):
+async def create_model(spec: ModelSpec, user: CurrentUser = Depends(require_admin)):
     if not spec.name.strip() or not spec.model_id.strip():
         raise HTTPException(status_code=400, detail="name and model_id are required")
     _check_role(spec.role)
@@ -172,7 +178,7 @@ async def create_model(spec: ModelSpec, user: CurrentUser = Depends(require_writ
 
 
 @router.put("/models/{model_id}")
-async def update_model(model_id: str, spec: ModelSpec, user: CurrentUser = Depends(require_write)):
+async def update_model(model_id: str, spec: ModelSpec, user: CurrentUser = Depends(require_admin)):
     _check_role(spec.role)
     _check_dimensions(spec)
     async with V2Session() as db:
@@ -195,7 +201,7 @@ async def update_model(model_id: str, spec: ModelSpec, user: CurrentUser = Depen
 
 
 @router.delete("/models/{model_id}")
-async def delete_model(model_id: str, user: CurrentUser = Depends(require_write)):
+async def delete_model(model_id: str, user: CurrentUser = Depends(require_admin)):
     async with V2Session() as db:
         res = await db.execute(delete(Model).where(
             Model.id == uuid.UUID(model_id), Model.workspace_id == user.workspace_id))
@@ -205,7 +211,7 @@ async def delete_model(model_id: str, user: CurrentUser = Depends(require_write)
 
 
 @router.post("/models/{model_id}/test")
-async def test_model(model_id: str, user: CurrentUser = Depends(require_auth)):
+async def test_model(model_id: str, user: CurrentUser = Depends(require_admin)):
     """Probe a registered model (a tiny generation or embedding call) → clear ok/error for the UI."""
     from opencortyx.core.inference.registry import resolve_model
     spec = await resolve_model(user.workspace_id, "generation", model_id)   # role read from the row itself
@@ -286,7 +292,7 @@ async def _probe(m, spec) -> dict:
 
 
 @router.post("/models/discover")
-async def discover_models(body: ModelDiscover, user: CurrentUser = Depends(require_auth)):
+async def discover_models(body: ModelDiscover, user: CurrentUser = Depends(require_admin)):
     """List the models a provider serves RIGHT NOW, from `GET /v1/models` — a server you run (Ollama,
     LM Studio, vLLM, ...) or a hosted endpoint's catalogue (OpenAI, Groq, Together, Azure).
 
@@ -372,7 +378,7 @@ def _hf_error(e: Exception) -> HTTPException:
 
 
 @router.post("/models/hf/info")
-async def hf_model_info(body: HFDownload, user: CurrentUser = Depends(require_write)):
+async def hf_model_info(body: HFDownload, user: CurrentUser = Depends(require_admin)):
     """Size, type and whether `repo` can run in OpenCortyx, before anything is downloaded."""
     import anyio
 
@@ -384,7 +390,7 @@ async def hf_model_info(body: HFDownload, user: CurrentUser = Depends(require_wr
 
 
 @router.post("/models/hf/download")
-async def hf_download(body: HFDownload, user: CurrentUser = Depends(require_write)):
+async def hf_download(body: HFDownload, user: CurrentUser = Depends(require_admin)):
     """Start downloading a model into the model cache; poll GET /models/hf/download for progress."""
     import anyio
 
@@ -396,7 +402,7 @@ async def hf_download(body: HFDownload, user: CurrentUser = Depends(require_writ
 
 
 @router.get("/models/hf/download")
-async def hf_download_status(repo: str, user: CurrentUser = Depends(require_auth)):
+async def hf_download_status(repo: str, user: CurrentUser = Depends(require_admin)):
     import anyio
 
     from opencortyx.core.inference import hf_hub
@@ -404,7 +410,7 @@ async def hf_download_status(repo: str, user: CurrentUser = Depends(require_auth
 
 
 @router.get("/models/hf/local")
-async def hf_local_models(user: CurrentUser = Depends(require_auth)):
+async def hf_local_models(user: CurrentUser = Depends(require_admin)):
     """The text-generation models downloaded into the model cache."""
     import anyio
 
@@ -413,7 +419,7 @@ async def hf_local_models(user: CurrentUser = Depends(require_auth)):
 
 
 @router.delete("/models/hf/local")
-async def hf_delete_local(repo: str, user: CurrentUser = Depends(require_write)):
+async def hf_delete_local(repo: str, user: CurrentUser = Depends(require_admin)):
     """Free the disk a downloaded model uses. A registry row that names it stops working."""
     import anyio
 
@@ -424,7 +430,7 @@ async def hf_delete_local(repo: str, user: CurrentUser = Depends(require_write))
 
 
 @router.post("/models/fastembed/download")
-async def fastembed_download(body: FastembedDownload, user: CurrentUser = Depends(require_write)):
+async def fastembed_download(body: FastembedDownload, user: CurrentUser = Depends(require_admin)):
     """Download a fastembed embedder or reranker now, rather than on its first use."""
     import anyio
 
@@ -437,7 +443,7 @@ async def fastembed_download(body: FastembedDownload, user: CurrentUser = Depend
 
 @router.get("/models/fastembed/download")
 async def fastembed_download_status(model: str, role: str = "embedding",
-                                    user: CurrentUser = Depends(require_auth)):
+                                    user: CurrentUser = Depends(require_admin)):
     import anyio
 
     from opencortyx.core.inference import fastembed_models
@@ -456,7 +462,7 @@ def _ollama_name(model: str) -> str:
 
 
 @router.post("/models/ollama/pull")
-async def ollama_pull(body: OllamaPull, user: CurrentUser = Depends(require_write)):
+async def ollama_pull(body: OllamaPull, user: CurrentUser = Depends(require_admin)):
     """Have an Ollama server download a model, streaming its progress as NDJSON lines.
 
     Ollama pulls GGUF repositories from Hugging Face itself (`hf.co/<repo>`), so the weights go

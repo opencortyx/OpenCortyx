@@ -195,3 +195,19 @@ def test_retrieval_uses_the_registry_reranker_when_it_can_run(monkeypatch, provi
     got = asyncio.run(orch._registry_reranker(uuid.uuid4()))
     assert got == (("some/reranker", provider) if used else (None, None))
     assert asyncio.run(orch._registry_reranker(None)) == (None, None)
+
+
+def test_only_an_admin_manages_models_or_makes_the_server_call_out():
+    """Model management stores API keys and makes the server contact addresses the caller chooses
+    (model servers, Ollama, Hugging Face): admin only. Reading which models exist stays open."""
+    from opencortyx.api.routes.system.models import router
+    from opencortyx.core.security.auth import require_admin, require_auth
+
+    def guard(route):
+        deps = {d.call for d in route.dependant.dependencies}
+        return "admin" if require_admin in deps else "auth" if require_auth in deps else "other"
+
+    routes = {(m, r.path): guard(r) for r in router.routes for m in r.methods}
+    open_to_all = {("GET", "/models"), ("GET", "/models/active")}
+    for key, g in routes.items():
+        assert g == ("auth" if key in open_to_all else "admin"), f"{key} is guarded by {g}"

@@ -38,7 +38,10 @@ def _load(model_id: str):
         from transformers import AutoModelForCausalLM, AutoTokenizer
         try:
             tok = AutoTokenizer.from_pretrained(model_id, local_files_only=True)
-            model = AutoModelForCausalLM.from_pretrained(model_id, local_files_only=True, dtype="auto")
+            # safetensors only: a pickled checkpoint (.bin/.pt) can run code when it is loaded. Remote code
+            # (`trust_remote_code`) stays off, its default.
+            model = AutoModelForCausalLM.from_pretrained(model_id, local_files_only=True, dtype="auto",
+                                                         use_safetensors=True)
         except OSError as e:
             raise _not_downloaded(model_id) from e
         model.eval()
