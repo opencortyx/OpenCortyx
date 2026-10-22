@@ -52,6 +52,17 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 ENV DOCLING_ARTIFACTS_PATH=/opt/docling-models
 RUN docling-tools models download layout tableformer -o /opt/docling-models
 
+# The search models a new workspace uses (core/config/env.py: BUILTIN_EMBED_MODEL, SPARSE_MODEL,
+# BUILTIN_RERANK_MODEL), baked in for the same reason. They go to /cache, where the `model_cache`
+# volume is mounted: Docker fills a new, empty named volume with what the image has at that path, so
+# a fresh installation starts with them and never downloads them. tests/test_baked_models.py keeps
+# these names in step with the config.
+RUN python -c "from fastembed import TextEmbedding, SparseTextEmbedding; \
+from fastembed.rerank.cross_encoder import TextCrossEncoder; \
+TextEmbedding('nomic-ai/nomic-embed-text-v1.5', cache_dir='/cache', lazy_load=True); \
+SparseTextEmbedding('Qdrant/bm25', cache_dir='/cache', lazy_load=True); \
+TextCrossEncoder('Xenova/ms-marco-MiniLM-L-12-v2', cache_dir='/cache', lazy_load=True)"
+
 RUN --mount=type=cache,target=/root/.cache/pip \
     if [ "$INSTALL_RERANK" = "1" ]; then \
       export PIP_DEFAULT_TIMEOUT=200 && \

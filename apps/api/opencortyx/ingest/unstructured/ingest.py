@@ -718,6 +718,14 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
         # by element, a summary stage "summarised" three-word headings and the model invented their
         # content (a travel policy's lodging limits from its title alone).
         units: list = []                                  # [node_id, [texts]] in reading order
+        # Written as ONE batch after the loop: node by node it was ~17 graph statements per element
+        # (the node, its date link, its CONTAINS and NEXT edges, a degree update per endpoint), which
+        # made a 150-element document 2,500 sequential round trips and most of its ingest time. Ids
+        # are deterministic, so nothing in the loop needs the write's result.
+        node_specs: list = []
+        edge_specs_out: list = []
+        from opencortyx.core.config import runtime as _rc
+        unit_cap = _rc.reading_unit_max_chars()           # Settings > Chunking
         for i, ast_node in enumerate(ast_nodes):
             nid = uuid.uuid5(source_id, ast_node.id)
             props = {
@@ -743,35 +751,38 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
             # and was listed among the workspace's assets.
             kind = _LAYOUT_ELEMENT_KINDS.get(ast_node.label)
             ntype = table_type if kind == "table" else image_type if kind == "image" else ast_node.type
-            node = await _repo.upsert_node(
-                node_id=nid,
-                workspace_id=workspace_id,
-                type=ntype,
-                label=_element_label(ast_node.text) or f"{ntype} #{i}",
-                properties=props,
-                source_ref=source_id,
-                collection_id=collection_id,
-                level=0,
-            )
-            created_nodes[ast_node.id] = node.id
+            node_specs.append({"node_id": nid, "type": ntype,
+                               "label": _element_label(ast_node.text) or f"{ntype} #{i}",
+                               "properties": props, "source_ref": source_id,
+                               "collection_id": collection_id, "level": 0})
+            created_nodes[ast_node.id] = nid
 
             # Hierarchical edge: parent -> node
             # A top-level element's parent is the document root, whose AST id is the Source id as
             # a string — not a key in `created_nodes`. Looking it up returned None and every
             # top-level heading was written with no CONTAINS edge from its Source at all.
             parent_nid = created_nodes.get(ast_node.parent_id) or source_id
-            await _repo.add_edge(workspace_id=workspace_id, source_id=parent_nid, target_id=node.id, type="CONTAINS")
+            edge_specs_out.append({"source_id": parent_nid, "target_id": nid, "type": "CONTAINS"})
 
             # Sequential NEXT edge in reading order
             if prev:
-                await _repo.add_edge(workspace_id=workspace_id, source_id=prev, target_id=node.id, type="NEXT")
-            prev = node.id
+                edge_specs_out.append({"source_id": prev, "target_id": nid, "type": "NEXT"})
+            prev = nid
 
             if ast_node.text:
-                if ast_node.level is not None or not units:   # a heading (or the lead-in) opens a unit
-                    units.append([node.id, [ast_node.text]])
+                # A heading (or the lead-in) opens a unit, and so does a unit grown past the cap: a
+                # plain-text RFC has no headings a reader recognises, and 227 KB became one unit.
+                if ast_node.level is not None or not units \
+                        or sum(len(t) for t in units[-1][1]) >= unit_cap:
+                    units.append([nid, [ast_node.text]])
                 else:
                     units[-1][1].append(ast_node.text)
+        # Nodes first, so every edge's endpoints exist when the edges are written.
+        await _repo.upsert_many(workspace_id, node_specs)
+        # The elements are this upload's own: nothing else writes them while it runs, so their degrees
+        # go in bulk. The Source is not in the list; other writers link to it.
+        await _repo.add_edges(workspace_id=workspace_id, edges=edge_specs_out,
+                              owned=[s["node_id"] for s in node_specs])
         pairs.extend((uid, "\n\n".join(texts)) for uid, texts in units)
     else:
         for i, rec in enumerate(chunk_recs):

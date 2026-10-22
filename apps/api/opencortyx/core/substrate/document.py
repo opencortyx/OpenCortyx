@@ -73,6 +73,44 @@ _INTERNAL_EXACT = {"id", "source", "created_date", "modified_date", "superseded"
 #: Shorter than this carries no query match; longer is a document, not an attribute.
 ATTR_MIN_CHARS = 2
 ATTR_MAX_CHARS = 2000
+#: The text of a passage (a paragraph, a code block, a table) longer than ATTR_MAX_CHARS is embedded
+#: in windows of that size overlapping by this much, one point each, at most TEXT_MAX_WINDOWS of them.
+#: Before, such a passage had no embedding at all: a 3,300-character RFC paragraph was findable by
+#: keyword only.
+TEXT_WINDOW_OVERLAP = 200
+TEXT_MAX_WINDOWS = 24
+
+
+def text_windows(text: str, size: int = ATTR_MAX_CHARS, overlap: int = TEXT_WINDOW_OVERLAP) -> list[str]:
+    """`text` cut into windows of at most `size` characters, at sentence ends where there are any
+    (else at spaces, else anywhere), each repeating the last ~`overlap` characters of the one before
+    so a sentence across a cut is whole in one of them."""
+    import re
+    text = text.strip()
+    if len(text) <= size:
+        return [text] if text else []
+    pieces = [p for p in re.split(r"(?<=[.!?:;])\s+|\n{2,}", text) if p.strip()]
+    out: list[str] = []
+    current = ""
+    for piece in pieces:
+        while len(piece) > size:                      # one sentence longer than a window
+            cut = piece.rfind(" ", 0, size)
+            cut = cut if cut > size // 2 else size
+            pieces_head, piece = piece[:cut], piece[cut:].lstrip()
+            if current:
+                out.append(current)
+                current = ""
+            out.append(pieces_head)
+        if current and len(current) + 1 + len(piece) > size:
+            out.append(current)
+            tail = current[-overlap:]
+            tail = tail[tail.find(" ") + 1:] if " " in tail else tail
+            current = f"{tail} {piece}" if len(tail) + 1 + len(piece) <= size else piece
+        else:
+            current = f"{current} {piece}" if current else piece
+    if current:
+        out.append(current)
+    return out
 
 
 def is_indexable_attr(key: str, value) -> bool:

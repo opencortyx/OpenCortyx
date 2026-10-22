@@ -1,5 +1,4 @@
 """Routes: structured sources: SQL databases and table files."""
-import base64
 import uuid
 from typing import Optional
 
@@ -151,20 +150,22 @@ async def ingest_file_ep(
 ):
     """Ingest a tabular file (CSV / TSV / Parquet / Excel) through the STRUCTURED pipeline via DuckDB.
     The pipeline's Step-1 config decides catalog vs one-node-per-row. `overrides` (JSON) carries manual
-    parse settings; None → auto-detect. Async — content rides to the worker (api/worker don't share FS)."""
+    parse settings; None → auto-detect. Async — the worker reads the stored file (core/uploads.py)."""
     from opencortyx.ingest.formats.structured import tabular as T
     if not T.is_tabular(file.filename or ""):
         return {"status": "unsupported", "detail": "Not a CSV / TSV / Parquet / Excel file."}
     content = await file.read()
     guard_upload_size(content, file.filename)
-    content_b64 = base64.b64encode(content).decode("ascii")
-    from opencortyx.ingest.runs.progress import create_run, record_device_upload
+    from opencortyx.core import uploads
+    from opencortyx.ingest.runs.progress import create_run, dispatch, record_device_upload
     from opencortyx.tasks.ingest import v2_ingest_tabular
-    run_id = await create_run(user.workspace_id, "structured", file.filename or "tabular file")
+    run_id = await create_run(user.workspace_id, "structured", file.filename or "tabular file",
+                              batch_id=batch_id)
     await record_device_upload(user.workspace_id, "structured", file.filename or "tabular file",
                                run_id, batch_id, pipeline_id or None)
-    task = v2_ingest_tabular.delay(
-        str(user.workspace_id), content_b64, file.filename or "upload",
+    task = await dispatch(
+        run_id, v2_ingest_tabular,
+        str(user.workspace_id), uploads.put(content), file.filename or "upload",
         pipeline_id or None, overrides or None, collection_id or None,
         str(run_id) if run_id else None)
     return {"task_id": task.id, "status": "dispatched", "filename": file.filename,

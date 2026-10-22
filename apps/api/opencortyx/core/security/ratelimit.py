@@ -1,7 +1,7 @@
 """Lightweight rate limiting + request-size guard (no external dependency).
 
-Why this exists: the LLM/embedding endpoints (/answer, /context, /sources/upload) each cost real
-compute. With no limit, a single misbehaving client (or a runaway agent loop) can rack up unbounded
+Why this exists: the question endpoints (/answer, /context) each cost real compute, and uploads
+fill the disk and the queue. With no limit, a single misbehaving client (or a runaway agent loop) can rack up unbounded
 cost and starve everyone else — a cost-and-DoS hole. This middleware applies a per-client sliding
 window and rejects oversized bodies with a clear 413/429.
 
@@ -16,15 +16,22 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from opencortyx.core.config import settings
 
-# Per-client request budgets (requests / window seconds). "heavy" = LLM/embedding/upload paths.
+# Per-client request budgets (requests / window seconds), one bucket per class of path.
 _WINDOW = settings.RATELIMIT_WINDOW_SECONDS
-_HEAVY_MAX = settings.RATELIMIT_HEAVY_PER_MIN
 _DEFAULT_MAX = settings.RATELIMIT_DEFAULT_PER_MIN
 _MAX_BODY = settings.MAX_REQUEST_BYTES   # 50 MB default
 _ENABLED = settings.RATELIMIT_ENABLED
 
-# Paths whose work is expensive (substring match on the request path).
-_HEAVY = ("/answer", "/context", "/sources/upload", "/eval/run", "/nl-sql", "/intelligence")
+# (class, path substrings, budget, what the 429 calls them), first match wins. Questions are expensive
+# per request. An upload is cheap here (the file is stored and queued; the worker does the work at its
+# own pace), so uploads have their own, larger budget: sharing the questions' 30 a minute failed every
+# file after the 30th of a folder dropped on Add data.
+_CLASSES = (
+    ("upload", ("/sources/upload", "/json/ingest", "/structured/ingest-file"),
+     settings.RATELIMIT_UPLOAD_PER_MIN, "upload"),
+    ("heavy", ("/answer", "/context", "/eval/run", "/nl-sql", "/intelligence"),
+     settings.RATELIMIT_HEAVY_PER_MIN, "LLM"),
+)
 
 _hits: dict[str, deque] = defaultdict(deque)
 
@@ -43,8 +50,11 @@ def _client_id(request) -> str:
     return f"ip:{ip}"
 
 
-def _is_heavy(path: str) -> bool:
-    return any(h in path for h in _HEAVY)
+def _class_of(path: str) -> tuple[str, int, str]:
+    for name, paths, limit, label in _CLASSES:
+        if any(p in path for p in paths):
+            return name, limit, label
+    return "default", _DEFAULT_MAX, "general"
 
 
 #: A JSON-escaped or raw NUL. No store accepts it (PostgreSQL text rejects 0x00), so a body holding one
@@ -82,9 +92,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # 2 — sliding-window rate limit per client + path class
         path = request.url.path
         if path.startswith("/api"):
-            heavy = _is_heavy(path)
-            limit = _HEAVY_MAX if heavy else _DEFAULT_MAX
-            bucket = f"{_client_id(request)}|{'heavy' if heavy else 'default'}"
+            cls, limit, label = _class_of(path)
+            bucket = f"{_client_id(request)}|{cls}"
             now = time.monotonic()
             dq = _hits[bucket]
             cutoff = now - _WINDOW
@@ -96,7 +105,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     status_code=429,
                     headers={"Retry-After": str(retry)},
                     content={"detail": f"Rate limit exceeded ({limit} requests / {int(_WINDOW)}s for "
-                                       f"{'LLM/upload' if heavy else 'general'} endpoints). Retry in {retry}s."})
+                                       f"{label} endpoints). Retry in {retry}s."})
             dq.append(now)
 
         return await call_next(request)

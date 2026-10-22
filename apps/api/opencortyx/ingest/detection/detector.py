@@ -127,6 +127,13 @@ class FileTypeDetector:
         # says precisely what is wrong if the file does not parse.
         generic_content = bool(content_s and (content_s.format or "").upper() == "TEXT"
                                and ext_s and ext_s.classification != Classification.UNSTRUCTURED)
+        # A document extension (.txt, .md, .rst, .html ...) names prose, and only a binary signature
+        # (a .txt that is really a PDF) outranks it. The text-structure guesses below are lenient by
+        # design, so they can find a structure in prose: an RFC .txt was read as JSON Lines, and
+        # source code as JSON, because a few lines happened to parse.
+        if ext_s and content_s and ext_s.classification == Classification.UNSTRUCTURED \
+                and not (content_s.metadata or {}).get("magic_matched"):
+            generic_content = True
         if ext_s and content_s and not generic_content \
                 and ext_s.classification != Classification.UNKNOWN and content_s.classification != Classification.UNKNOWN:
             if ext_s.format != content_s.format:

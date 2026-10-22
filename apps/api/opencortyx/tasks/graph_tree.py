@@ -21,7 +21,11 @@ def schedule_tree_index(workspace_id: str, *, now: bool = False) -> bool:
         import redis as _redis
         r = _redis.Redis.from_url(settings.CELERY_BROKER_URL)
         r.set(f"v2:tree_dirty:{workspace_id}", b"1", ex=24 * 3600)
-        if not now and not r.set(f"v2:tree:{workspace_id}", b"1", nx=True, ex=max(delay, 1)):
+        # The booking holds until the booked pass STARTS (it clears it), not just for the debounce
+        # window: behind a long ingest queue the pass waits far longer than the window, and a booking
+        # that lapsed with it queued one more pass per window (52 behind a single PDF). The hour is
+        # only a backstop for a pass that was lost.
+        if not now and not r.set(f"v2:tree:{workspace_id}", b"1", nx=True, ex=3600):
             return False
         v2_index_graph_tree.apply_async(args=[str(workspace_id)], countdown=delay)
         return True
@@ -41,6 +45,7 @@ def v2_index_graph_tree(self, workspace_id: str):
     try:
         import redis as _redis
         r = _redis.Redis.from_url(settings.CELERY_BROKER_URL)
+        r.delete(f"v2:tree:{workspace_id}")           # this pass is running: changes book the next
         if not r.set(lock, b"1", nx=True, ex=3600):
             r.set(dirty, b"1", ex=24 * 3600)
             return {"status": "deferred", "reason": "an index pass is already running"}

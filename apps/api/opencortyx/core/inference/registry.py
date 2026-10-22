@@ -16,7 +16,8 @@ path doesn't hit the DB per call.
 import uuid
 
 from opencortyx.core.config import (
-    BUILTIN_EMBED_MODEL, BUILTIN_EMBED_PROVIDER, CROSS_ENCODER_MODEL, LOCAL_LLM_PROVIDERS,
+    BUILTIN_EMBED_MODEL, BUILTIN_EMBED_PROVIDER, BUILTIN_RERANK_MODEL, BUILTIN_RERANK_PROVIDER,
+    LOCAL_LLM_PROVIDERS,
     OPENAI_COMPATIBLE_PROVIDERS,
 )
 from opencortyx.core.cache import TTLCache
@@ -69,8 +70,8 @@ def _builtin_rows() -> list[dict]:
         {"role": "embedding", "name": BUILTIN_EMBED_MODEL.split("/")[-1],
          "provider": BUILTIN_EMBED_PROVIDER, "model_id": BUILTIN_EMBED_MODEL,
          "base_url": None, "params": {}},
-        {"role": "rerank", "name": CROSS_ENCODER_MODEL.split("/")[-1],
-         "provider": "sentence-transformers", "model_id": CROSS_ENCODER_MODEL,
+        {"role": "rerank", "name": BUILTIN_RERANK_MODEL.split("/")[-1],
+         "provider": BUILTIN_RERANK_PROVIDER, "model_id": BUILTIN_RERANK_MODEL,
          "base_url": None, "params": {}},
     ]
 

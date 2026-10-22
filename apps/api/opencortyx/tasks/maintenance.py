@@ -47,6 +47,43 @@ def v2_audit_integrity(self, workspace_id: str = None):
     return async_to_sync(_run)()
 
 
+#: The queues ingest jobs wait on (compose.yaml).
+_INGEST_QUEUES = ("graphrag", "extraction", "embedding", "resolution")
+
+
+def _broker_idle() -> bool:
+    """True when the broker holds no ingest job: none waiting and none handed to a worker. Only then
+    can a run still `queued` have lost its job. Any doubt (broker unreachable) answers False."""
+    try:
+        import redis
+        r = redis.Redis.from_url(settings.CELERY_BROKER_URL, socket_timeout=5)
+        return not any(r.llen(q) for q in _INGEST_QUEUES) and not r.zcard("unacked_index")
+    except Exception:                                   # noqa: BLE001
+        return False
+
+
+@celery_app.task(bind=True, queue="maintenance", name="opencortyx.sweep_uploads")
+def v2_sweep_uploads(self):
+    """Remove stored uploads (core/uploads.py) past their retention that no unfinished run needs."""
+    async def _run():
+        from sqlalchemy import text
+
+        from opencortyx.core import uploads
+        async with V2Session() as db:
+            payloads = (await db.execute(text(
+                f"SELECT retry_payload FROM {V2_SCHEMA}.ingest_run "
+                f"WHERE status IN ('queued', 'running') AND retry_payload IS NOT NULL"))).scalars().all()
+        keep: set[str] = set()
+        for p in payloads:
+            keep |= uploads.digests_in(p)
+        out = uploads.sweep(keep)
+        if out["removed"]:
+            log.info("uploads.swept", **out)
+        return out
+
+    return async_to_sync(_run)()
+
+
 @celery_app.task(bind=True, queue="maintenance", name="opencortyx.reap_stale_runs")
 def v2_reap_stale_runs(self):
     """Fail ingest runs whose worker died, so a half-finished asset cannot pass for a finished one.
@@ -63,12 +100,17 @@ def v2_reap_stale_runs(self):
     (TASK_TIME_LIMIT, 35 min), past which Celery has already killed the process: a run quiet for longer
     than that is not slow, it is gone. Marked `failed` with an explicit reason, which puts it in front
     of the user and makes it re-runnable; re-ingestion is idempotent (deterministic ids), so replaying
-    it converges rather than duplicating."""
+    it converges rather than duplicating.
+
+    A `queued` run is different: it is waiting its turn, and behind a 1000-file drop that is hours.
+    It is only lost when the broker holds no job at all (nothing waiting, nothing handed to a worker)
+    and it still has not started; then it is sent again from the dispatch recorded on it."""
     async def _run():
         from sqlalchemy import text
 
         grace = int(getattr(settings, "TASK_TIME_LIMIT", 2100)) + 600     # hard limit + 10 min
         max_attempts = int(getattr(settings, "RUN_MAX_ATTEMPTS", 3) or 3)
+        lost_queued = "OR status = 'queued'" if _broker_idle() else ""
 
         # Claim the dead runs first, in one statement, so two reapers cannot resume the same asset.
         async with V2Session() as db:
@@ -78,7 +120,7 @@ def v2_reap_stale_runs(self):
                     error = COALESCE(NULLIF(error, ''), '') ||
                             'Worker stopped before this run finished (no progress for over '
                             || CAST(:mins AS text) || ' minutes). '
-                WHERE status IN ('running', 'queued')
+                WHERE (status = 'running' {lost_queued})
                   AND updated_at < now() - make_interval(secs => CAST(:grace AS int))
                 RETURNING id, asset, attempt, retry_payload"""),
                 {"grace": int(grace), "mins": str(grace // 60)})).all()

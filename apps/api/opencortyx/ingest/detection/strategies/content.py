@@ -83,17 +83,19 @@ class ContentDetector(DetectorStrategy):
                     metadata={"syntax": "json_prefix"}
                 )
 
-        # Check for NDJSON / JSONL: multiple lines starting with { or [
+        # Check for NDJSON / JSONL: one object or array per line, every sampled line. Counting any line
+        # `json.loads` accepts called a Python file JSONL: a bare number, "string", true or null is
+        # valid JSON, and two of them in a source file's first lines are common.
         lines = [ln.strip() for ln in sample.split(b"\n") if ln.strip()]
         if len(lines) >= 2:
             valid_json_lines = 0
             for ln in lines[:4]:
                 try:
-                    json.loads(ln)
-                    valid_json_lines += 1
+                    if isinstance(json.loads(ln), (dict, list)):
+                        valid_json_lines += 1
                 except Exception:
                     pass
-            if valid_json_lines >= 2:
+            if valid_json_lines >= 2 and valid_json_lines == len(lines[:4]):
                 return DetectionSignal(
                     detector=self.name,
                     format="JSONL",
@@ -137,7 +139,10 @@ class ContentDetector(DetectorStrategy):
         try:
             from opencortyx.ingest.formats import semistructured as _parsers
             res = _parsers.parse(sample)
-            if res and res.parser in ("yaml", "toml", "ini", "xml", "json", "jsonl"):
+            # Only the formats no check above covers. JSON, JSON Lines and XML were decided above by
+            # strict rules; the parsers here are lenient (the JSON Lines reader skips lines it cannot
+            # read), so two numbers in a source file's first lines were enough to call it JSON Lines.
+            if res and res.parser in ("yaml", "toml", "ini"):
                 return DetectionSignal(
                     detector=self.name,
                     format=res.parser.upper(),

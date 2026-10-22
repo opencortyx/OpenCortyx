@@ -81,7 +81,7 @@ class MemoryGraphStore(GraphStore):
             self._degree.pop(i, None)
         return len(gone)
 
-    async def upsert_edges(self, edges: Sequence[Edge]) -> EdgeWrite:
+    async def upsert_edges(self, edges: Sequence[Edge], owned=None) -> EdgeWrite:
         result = EdgeWrite()
         for e in {str(e.id): e for e in edges}.values():
             src, dst = self._nodes.get(str(e.source_id)), self._nodes.get(str(e.target_id))

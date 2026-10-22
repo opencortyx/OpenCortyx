@@ -1,5 +1,4 @@
 """Routes: file and JSON uploads, supported formats and ingestion integrity."""
-import base64
 import json
 from typing import Optional
 
@@ -10,7 +9,8 @@ from opencortyx.api.schemas.ingestion.ingest import JsonInlineSpec, JsonStreamSp
 from opencortyx.api.services.ingestion.ingest import parse_anchor_form
 from opencortyx.core.security.auth import CurrentUser, require_auth, require_write
 from opencortyx.core.db import V2Session
-from opencortyx.ingest.runs.progress import create_run, record_device_upload
+from opencortyx.core import uploads
+from opencortyx.ingest.runs.progress import batch_status, create_run, dispatch, record_device_upload
 from opencortyx.tasks.ingest import v2_ingest_document_flow, v2_ingest_json
 
 router = APIRouter()
@@ -48,8 +48,8 @@ async def upload_source(
     JSONL of 100k rows was chunked as if it were an essay and scheduled hundreds of thousands of
     per-chunk LLM calls. Pass `route` to override the decision.
 
-    The file CONTENT is passed to the worker (base64) — API and worker are separate containers and
-    don't share a filesystem. Async. `collection_id` scopes everything extracted from the file to
+    The file is stored once (core/uploads.py) and the job carries a reference to it, so a queued job
+    stays small however large its file. Async. `collection_id` scopes everything extracted from the file to
     one collection, so retrieval can be scoped to it alone.
 
     `anchors` attaches the file to nodes that already exist and/or states what it IS
@@ -60,9 +60,9 @@ async def upload_source(
     from opencortyx.ingest.formats import catalog as formats
     content = await file.read()
     guard_upload_size(content, file.filename)
-    content_b64 = base64.b64encode(content).decode("ascii")
     fname = file.filename or "upload"
     decision = guard_readable(content, fname, route)
+    ref = uploads.put(content)
     chosen = decision["route"]
     if pipeline_ids:
         from opencortyx.ingest.sources import sync
@@ -76,7 +76,7 @@ async def upload_source(
     _anchor_extras = parse_anchor_form(anchors, asset_path)
 
     if chosen == formats.SEMISTRUCTURED:
-        run_id = await create_run(user.workspace_id, "semistructured", fname)
+        run_id = await create_run(user.workspace_id, "semistructured", fname, batch_id=batch_id)
         await record_device_upload(user.workspace_id, "semistructured", fname, run_id, batch_id,
                                    pipeline_id or None)
         opts = {k: v for k, v in {"collection_id": collection_id,
@@ -84,12 +84,11 @@ async def upload_source(
         opts.update(_anchor_extras)
         if replace:
             opts["replace"] = True
-        task = v2_ingest_json.delay(str(user.workspace_id), content_b64, fname,
-                                    json.dumps(opts) if opts else None,
-                                    str(run_id) if run_id else None)
+        task = await dispatch(run_id, v2_ingest_json, str(user.workspace_id), ref, fname,
+                              json.dumps(opts) if opts else None, str(run_id) if run_id else None)
     elif chosen == formats.STRUCTURED:
         from opencortyx.tasks.ingest import v2_ingest_tabular
-        run_id = await create_run(user.workspace_id, "structured", fname)
+        run_id = await create_run(user.workspace_id, "structured", fname, batch_id=batch_id)
         await record_device_upload(user.workspace_id, "structured", fname, run_id, batch_id,
                                    pipeline_id or None)
         # `max_rows` rides on the overrides blob (the established channel for extras) and is
@@ -98,11 +97,10 @@ async def upload_source(
         if max_rows is not None:
             _ovd["max_rows"] = max_rows
         _ov = json.dumps(_ovd) if _ovd else None
-        task = v2_ingest_tabular.delay(str(user.workspace_id), content_b64, fname,
-                                       pipeline_id or None, _ov, collection_id,
-                                       str(run_id) if run_id else None)
+        task = await dispatch(run_id, v2_ingest_tabular, str(user.workspace_id), ref, fname,
+                              pipeline_id or None, _ov, collection_id, str(run_id) if run_id else None)
     else:
-        run_id = await create_run(user.workspace_id, "document", fname)
+        run_id = await create_run(user.workspace_id, "document", fname, batch_id=batch_id)
         await record_device_upload(user.workspace_id, "unstructured", fname, run_id, batch_id,
                                    pipeline_id or None)
         if pipeline_id:
@@ -112,15 +110,17 @@ async def upload_source(
             if pl is None:
                 raise HTTPException(status_code=404,
                                     detail=f"pipeline {pipeline_id} not found for this workspace")
-            task = v2_ingest_document_flow.delay(
-                str(user.workspace_id), content_b64, fname, file.content_type or "text/plain",
+            task = await dispatch(
+                run_id, v2_ingest_document_flow,
+                str(user.workspace_id), ref, fname, file.content_type or "text/plain",
                 json.dumps({"pipeline": pl.stages or [], **_anchor_extras,
                             **({"replace": True} if replace else {})}), collection_id,
                 str(run_id) if run_id else None)
         else:
             from opencortyx.tasks.ingest import v2_ingest_document
-            task = v2_ingest_document.delay(
-                str(user.workspace_id), content_b64, fname, file.content_type or "text/plain",
+            task = await dispatch(
+                run_id, v2_ingest_document,
+                str(user.workspace_id), ref, fname, file.content_type or "text/plain",
                 collection_id, features, str(run_id) if run_id else None,
                 None, _anchor_extras.get("anchors"),
                 _anchor_extras.get("asset_path") or fname, replace=bool(replace))
@@ -146,9 +146,8 @@ async def ingest_json_source(
     ids deterministic, *_id values → REFERENCES). `options` is an optional JSON string of knobs."""
     content = await file.read()
     guard_upload_size(content, file.filename)
-    content_b64 = base64.b64encode(content).decode("ascii")
     fname = file.filename or "payload.json"
-    run_id = await create_run(user.workspace_id, "semistructured", fname)
+    run_id = await create_run(user.workspace_id, "semistructured", fname, batch_id=batch_id)
     pipe = None
     try:                                     # the semi-structured pipeline rides in `options`
         import json as _j
@@ -156,9 +155,8 @@ async def ingest_json_source(
     except Exception:
         pipe = None
     await record_device_upload(user.workspace_id, "semistructured", fname, run_id, batch_id, pipe)
-    task = v2_ingest_json.delay(
-        str(user.workspace_id), content_b64, fname, options or None,
-        str(run_id) if run_id else None)
+    task = await dispatch(run_id, v2_ingest_json, str(user.workspace_id), uploads.put(content), fname,
+                          options or None, str(run_id) if run_id else None)
     await _remember_tags(user.workspace_id, run_id, tags)
     return {"task_id": task.id, "status": "dispatched", "filename": fname,
             "run_id": str(run_id) if run_id else None}
@@ -192,13 +190,13 @@ async def ingest_json_inline(spec: JsonInlineSpec, user: CurrentUser = Depends(r
     import json as _json
     raw = _json.dumps(spec.data).encode("utf-8")
     guard_upload_size(raw, spec.source_label)            # clear 413 if the slice is still too big
-    content_b64 = base64.b64encode(raw).decode("ascii")
-    run_id = await create_run(user.workspace_id, "semistructured", spec.source_label)
+    run_id = await create_run(user.workspace_id, "semistructured", spec.source_label,
+                              batch_id=spec.batch_id)
     await record_device_upload(user.workspace_id, "semistructured", spec.source_label, run_id,
                                spec.batch_id, (spec.options or {}).get("pipeline_id"))
-    task = v2_ingest_json.delay(
-        str(user.workspace_id), content_b64, spec.source_label, _json.dumps(spec.options or {}),
-        str(run_id) if run_id else None)
+    task = await dispatch(run_id, v2_ingest_json, str(user.workspace_id), uploads.put(raw),
+                          spec.source_label, _json.dumps(spec.options or {}),
+                          str(run_id) if run_id else None)
     return {"task_id": task.id, "status": "dispatched", "filename": spec.source_label,
             "run_id": str(run_id) if run_id else None}
 
@@ -215,16 +213,22 @@ async def upload_source_flow(
     flow configuration JSON. The worker will execute the DAG described in pipeline_config."""
     content = await file.read()
     guard_upload_size(content, file.filename)
-    content_b64 = base64.b64encode(content).decode("ascii")
     fname = file.filename or "upload"
-    run_id = await create_run(user.workspace_id, "document", fname)
+    run_id = await create_run(user.workspace_id, "document", fname, batch_id=batch_id)
     await record_device_upload(user.workspace_id, "unstructured", fname, run_id, batch_id)
-    task = v2_ingest_document_flow.delay(
-        str(user.workspace_id), content_b64, fname, file.content_type or "text/plain", pipeline_config,
-        None, str(run_id) if run_id else None)
+    task = await dispatch(run_id, v2_ingest_document_flow, str(user.workspace_id), uploads.put(content),
+                          fname, file.content_type or "text/plain", pipeline_config,
+                          None, str(run_id) if run_id else None)
     await _remember_tags(user.workspace_id, run_id, tags)
     return {"task_id": task.id, "status": "dispatched", "filename": file.filename, "flow": True,
             "run_id": str(run_id) if run_id else None}
+
+
+@router.get("/uploads/batches/{batch_id}")
+async def upload_batch_status(batch_id: str, user: CurrentUser = Depends(require_auth)):
+    """A batch of uploads at a glance: runs per state and the ones that failed, with why. What Add data
+    polls for a multi-file drop, instead of asking about every file in it."""
+    return await batch_status(user.workspace_id, batch_id[:80])
 
 
 @router.post("/ingest/integrity/rebaseline")

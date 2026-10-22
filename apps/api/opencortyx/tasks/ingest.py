@@ -3,6 +3,7 @@ import json
 import uuid
 from opencortyx.core.worker.celery_app import celery_app
 from opencortyx.core.worker.utils import async_to_sync
+from opencortyx.core import uploads
 from opencortyx.core.observability import get_logger
 from opencortyx.bootstrap import init_v2_schema
 from opencortyx.capabilities.modules.contradiction import sweep
@@ -27,17 +28,17 @@ def v2_ingest_document(self, workspace_id: str, content_b64: str, filename: str,
                        run_id: str = None, defer_extraction: bool = None,
                        anchors: list = None, asset_path: str = None, replace: bool = False):
     """Native document ingestion: parse + chunk a file → Source/Chunk nodes → extract + enrich.
-    `features` (csv from the upload modal) selects which stages run. File content arrives
-    base64-encoded (API and worker don't share a filesystem). `run_id` drives the Progress tab.
+    `features` (csv from the upload modal) selects which stages run. `content_b64` is the stored
+    file's reference (core/uploads.py; base64 from older versions still reads). `run_id` drives the
+    Progress tab.
 
     `defer_extraction` (None → the `defer_extraction` runtime setting) commits the chunks and
     embeddings here, then hands the LLM extraction to the `extraction` queue. The document is
     searchable as soon as this task returns; the graph fills in behind it. This is what stops one
     large file from holding every worker slot while small uploads wait."""
     async def _run():
-        import base64
         await init_v2_schema()
-        content = base64.b64decode(content_b64)
+        content = uploads.load(content_b64)
         coll = uuid.UUID(collection_id) if collection_id else None
         rep = _reporter(run_id)
         try:
@@ -203,13 +204,12 @@ def v2_ingest_json(self, workspace_id: str, content_b64: str, filename: str,
         stages over them (ingest.semistructured.run_semistructured).
     `opts_json` carries root_type / max_depth / max_array / embed_nodes / pipeline_id / collection_id."""
     async def _run():
-        import base64
         import json
         from opencortyx.ingest.formats.semistructured import ParseError
         await init_v2_schema()
         rep = _reporter(run_id)
         try:
-            raw = base64.b64decode(content_b64)
+            raw = uploads.load(content_b64)
             opts = json.loads(opts_json) if opts_json else {}
             coll = uuid.UUID(opts["collection_id"]) if opts.get("collection_id") else None
             _rules, _apath = _anchor_opts(opts, filename)
@@ -373,12 +373,11 @@ def v2_ingest_document_flow(self, workspace_id: str, content_b64: str, filename:
     chain on top of each other (chunks → summary → roll-up, keywords over summaries, …).
     `run_id` drives the Progress tab."""
     async def _run():
-        import base64
         import json
         await init_v2_schema()
         async with V2Session() as db:
             await seed_builtin_templates(db, uuid.UUID(workspace_id))
-        content = base64.b64decode(content_b64)
+        content = uploads.load(content_b64)
         coll = uuid.UUID(collection_id) if collection_id else None
         try:
             cfg = json.loads(pipeline_config) if pipeline_config else {}
@@ -428,14 +427,12 @@ def v2_ingest_tabular(self, workspace_id: str, content_b64: str, filename: str,
                       collection_id: str = None, run_id: str = None):
     """Native TABULAR-FILE ingestion (CSV / TSV / Parquet / Excel) via DuckDB → the structured graph.
 
-    The file bytes ride to the worker (base64; api + worker don't share a filesystem), get written to
-    a temp file DuckDB reads. The structured pipeline's Step-1 config (`base_schema` stage) drives the
+    The worker reads the stored file (core/uploads.py) and writes it to a temp file DuckDB reads. The structured pipeline's Step-1 config (`base_schema` stage) drives the
     shape — catalog (Table/Attribute) or one-node-per-row entities. `overrides_json` carries any manual
     parse overrides (delimiter/encoding/sheet…) from the Ingestion Hub; None → DuckDB auto-detects."""
     async def _run():
-        import base64
         await init_v2_schema()
-        content = base64.b64decode(content_b64)
+        content = uploads.load(content_b64)
         coll = uuid.UUID(collection_id) if collection_id else None
         overrides = json.loads(overrides_json) if overrides_json else None
         # resolve the pipeline's Step-1 (base_schema) config → reading mode / node type / column roles

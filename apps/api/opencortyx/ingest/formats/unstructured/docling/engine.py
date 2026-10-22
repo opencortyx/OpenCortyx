@@ -17,10 +17,30 @@ from .assembler import DynamicDoclingAssembler
 log = get_logger(__name__)
 
 
+def _page_windows(content: bytes | str, suffix: str) -> list:
+    """The page ranges to convert a document in: [None] (all at once) unless it is a PDF longer than
+    LAYOUT_PDF_PAGE_WINDOW, then consecutive (first, last) windows. Docling keeps the original page
+    numbers, and the assembler builds one tree across windows because elements arrive in order.
+    The window is `pdf_page_window` (Settings > Chunking), from LAYOUT_PDF_PAGE_WINDOW by default."""
+    from opencortyx.core.config import runtime
+    window = runtime.pdf_page_window()                   # Settings > Chunking
+    if suffix.lower() != ".pdf" or window <= 0 or not isinstance(content, bytes):
+        return [None]
+    try:
+        import pypdfium2
+        pages = len(pypdfium2.PdfDocument(content))
+    except Exception:                                   # noqa: BLE001 — Docling reports the real error
+        return [None]
+    if pages <= window:
+        return [None]
+    return [(first, min(first + window - 1, pages)) for first in range(1, pages + 1, window)]
+
+
 class DoclingEngine:
     """Interface to IBM Docling layout conversion."""
 
     _converter_instance = None
+    _converter_mode: Optional[str] = None             # the table mode the cached converter was built for
     #: Why Docling is unavailable in this process, once found to be. Cached so a worker does not
     #: pay a failing model load on every document, and exposed so a run can say which engine read
     #: it instead of silently producing a differently-shaped graph.
@@ -35,10 +55,14 @@ class DoclingEngine:
         OpenCV raises ImportError('libGL.so.1') only on the first PDF. Catching one type let the
         other escape `convert()` and fail the whole ingest instead of reaching the fallback.
         """
+        from opencortyx.core.config import runtime
+        mode = runtime.pdf_table_mode()                  # Settings > Chunking; a change rebuilds it
+        if cls._converter_instance is not None and cls._converter_mode != mode:
+            cls._converter_instance = None
         if cls._converter_instance is None and cls.unavailable_reason is None:
             try:
                 from docling.datamodel.base_models import InputFormat
-                from docling.datamodel.pipeline_options import PdfPipelineOptions
+                from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
                 from docling.document_converter import DocumentConverter, PdfFormatOption
 
                 from opencortyx.core.config import settings
@@ -46,8 +70,11 @@ class DoclingEngine:
                 pdf = PdfPipelineOptions()
                 pdf.do_ocr = bool(settings.LAYOUT_OCR)
                 pdf.do_table_structure = bool(settings.LAYOUT_TABLE_STRUCTURE)
+                pdf.table_structure_options.mode = (TableFormerMode.ACCURATE if mode == "accurate"
+                                                    else TableFormerMode.FAST)
                 cls._converter_instance = DocumentConverter(
                     format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pdf)})
+                cls._converter_mode = mode
             except Exception as e:                   # noqa: BLE001 — see docstring
                 cls.unavailable_reason = f"{type(e).__name__}: {e}"[:300]
                 log.warning("docling.unavailable", error=cls.unavailable_reason,
@@ -107,77 +134,84 @@ class DoclingEngine:
             with os.fdopen(fd, "wb") as f:
                 f.write(content if isinstance(content, bytes) else content.encode("utf-8"))
 
-            res = (converter.convert(temp_path, max_num_pages=max_pages) if max_pages
-                   else converter.convert(temp_path))
-            doc = res.document
-
-            # Docling provides iterate_items() in reading order. Page headers and footers are in its
-            # FURNITURE layer, which iterate_items() leaves out unless asked: without it a running
-            # header or a "Confidential" footer was simply never read.
-            from docling_core.types.doc import ContentLayer
-            items = [item for item, _depth in doc.iterate_items(
-                included_content_layers={ContentLayer.BODY, ContentLayer.FURNITURE})]
-            levels = _heading_levels(items)
-            for item in items:
-                label = _furniture_label(item, doc, getattr(item.label, "value", str(item.label)).lower())
-                text = getattr(item, "text", "") or ""
-
-                # Provenance: page number and bounding box
-                page_no = 1
-                bbox_dict = {"x_min": 0.0, "y_min": 0.0, "x_max": 0.0, "y_max": 0.0}
-                if hasattr(item, "prov") and item.prov:
-                    p0 = item.prov[0]
-                    page_no = getattr(p0, "page_no", 1)
-                    b = getattr(p0, "bbox", None)
-                    if b:
-                        bbox_dict = {
-                            "x_min": float(getattr(b, "l", getattr(b, "x_min", 0.0))),
-                            "y_min": float(getattr(b, "t", getattr(b, "y_min", 0.0))),
-                            "x_max": float(getattr(b, "r", getattr(b, "x_max", 0.0))),
-                            "y_max": float(getattr(b, "b", getattr(b, "y_max", 0.0))),
-                        }
-
-                # Heading level. Docling numbers section headers from 1 and gives the title no
-                # level; putting the title at 1 too made every top-level section its SIBLING, so the
-                # title contained only the text before the first section. The title is 0.
-                level = None
-                if label == "title":
-                    level = 0
-                elif label == "section_header":
-                    level = levels.get(id(item), int(getattr(item, "level", None) or 1))
-                    if level == 0:
-                        label = "title"
-
-                # 2D Grid matrix for tables
-                grid = None
-                if label == "table":
-                    grid = cls._extract_table_grid(item)
-                    if not text.strip() and grid:
-                        # Docling leaves TableItem.text empty. Without this a table is a node with
-                        # no text: never embedded, never matched, invisible to retrieval.
-                        text = _grid_text(grid)
-
-                # Image asset reference
-                asset_ref = None
-                if label in ("picture", "image"):
-                    asset_ref = cls._extract_image_asset(assembler.doc_id, item, doc)
-
-                assembler.add_element(
-                    raw_label=label,
-                    text=text,
-                    page_no=page_no,
-                    bbox=bbox_dict,
-                    level=level,
-                    grid=grid,
-                    asset_reference=asset_ref,
-                )
-
+            if max_pages:
+                cls._add_items(converter.convert(temp_path, max_num_pages=max_pages).document, assembler)
+                return assembler
+            for window in _page_windows(content, suffix):
+                res = (converter.convert(temp_path, page_range=window) if window
+                       else converter.convert(temp_path))
+                cls._add_items(res.document, assembler)
+                del res                               # this window's pages, before the next
             return assembler
         finally:
             try:
                 os.unlink(temp_path)
             except OSError:
                 pass
+
+    @classmethod
+    def _add_items(cls, doc: Any, assembler: DynamicDoclingAssembler) -> None:
+        """Add a converted document's elements, in reading order, to the assembler."""
+        # Docling provides iterate_items() in reading order. Page headers and footers are in its
+        # FURNITURE layer, which iterate_items() leaves out unless asked: without it a running
+        # header or a "Confidential" footer was simply never read.
+        from docling_core.types.doc import ContentLayer
+        items = [item for item, _depth in doc.iterate_items(
+            included_content_layers={ContentLayer.BODY, ContentLayer.FURNITURE})]
+        levels = _heading_levels(items)
+        for item in items:
+            label = _furniture_label(item, doc, getattr(item.label, "value", str(item.label)).lower())
+            text = getattr(item, "text", "") or ""
+
+            # Provenance: page number and bounding box
+            page_no = 1
+            bbox_dict = {"x_min": 0.0, "y_min": 0.0, "x_max": 0.0, "y_max": 0.0}
+            if hasattr(item, "prov") and item.prov:
+                p0 = item.prov[0]
+                page_no = getattr(p0, "page_no", 1)
+                b = getattr(p0, "bbox", None)
+                if b:
+                    bbox_dict = {
+                        "x_min": float(getattr(b, "l", getattr(b, "x_min", 0.0))),
+                        "y_min": float(getattr(b, "t", getattr(b, "y_min", 0.0))),
+                        "x_max": float(getattr(b, "r", getattr(b, "x_max", 0.0))),
+                        "y_max": float(getattr(b, "b", getattr(b, "y_max", 0.0))),
+                    }
+
+            # Heading level. Docling numbers section headers from 1 and gives the title no
+            # level; putting the title at 1 too made every top-level section its SIBLING, so the
+            # title contained only the text before the first section. The title is 0.
+            level = None
+            if label == "title":
+                level = 0
+            elif label == "section_header":
+                level = levels.get(id(item), int(getattr(item, "level", None) or 1))
+                if level == 0:
+                    label = "title"
+
+            # 2D Grid matrix for tables
+            grid = None
+            if label == "table":
+                grid = cls._extract_table_grid(item)
+                if not text.strip() and grid:
+                    # Docling leaves TableItem.text empty. Without this a table is a node with
+                    # no text: never embedded, never matched, invisible to retrieval.
+                    text = _grid_text(grid)
+
+            # Image asset reference
+            asset_ref = None
+            if label in ("picture", "image"):
+                asset_ref = cls._extract_image_asset(assembler.doc_id, item, doc)
+
+            assembler.add_element(
+                raw_label=label,
+                text=text,
+                page_no=page_no,
+                bbox=bbox_dict,
+                level=level,
+                grid=grid,
+                asset_reference=asset_ref,
+            )
 
     @classmethod
     def _extract_table_grid(cls, table_item: Any) -> list[list[str]]:

@@ -10,7 +10,9 @@ import GoalExtractor from "@/components/authoring/GoalExtractor";
 import IngestOutcomeCard from "@/components/authoring/IngestOutcomeCard";
 import {
   contextV2Api, type Draft, type DraftResponse, type IngestOutcome, type OutcomeStep, type Pipeline,
+  type UploadBatch,
 } from "@/lib/api/contextV2";
+import { uploadAll } from "@/lib/uploadQueue";
 
 /**
  * Add data — the result-first path, and the only screen a new user needs.
@@ -35,8 +37,10 @@ import {
  */
 
 const POLL_MS = 2_000;
-//: A run can sit queued behind other work; this bounds the polling rather than the run.
-const POLL_LIMIT = 150;
+//: After this many quick polls a run is waiting behind other work (a folder dropped earlier is read
+//: first), so it is asked about less often, never given up on: the view only says done when it is.
+const POLL_FAST_TICKS = 150;
+const POLL_SLOW_MS = 15_000;
 
 type Phase = "idle" | "reading" | "reviewing" | "ingesting" | "done" | "batch";
 
@@ -72,12 +76,12 @@ export default function AddDataPage() {
   const [tags, setTags] = useState<string[]>([]);
   const [pipelines, setPipelines] = useState<PipelineChoice>({ ...NO_CHOICE });
   const [batch, setBatch] = useState<File[]>([]);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+  useEffect(() => () => { if (pollRef.current) clearTimeout(pollRef.current); }, []);
 
   const reset = () => {
-    if (pollRef.current) clearInterval(pollRef.current);
+    if (pollRef.current) clearTimeout(pollRef.current);
     setFile(null); setPhase("idle"); setRead(null); setPipelineDraft(null);
     setOutcome(null); setSampleText(""); setShowExtractor(false); setError(""); setTags([]);
     setPipelines({ ...NO_CHOICE }); setBatch([]);
@@ -158,22 +162,19 @@ export default function AddDataPage() {
   const startPolling = (runId: string) => {
     let ticks = 0;
     const tick = async () => {
+      let finished = false;
       try {
         const next = await contextV2Api.getOutcome(runId);
         setOutcome(next);
         // `pending`: the file is in, its deferred extraction is not — keep watching it land.
-        const finished = !["queued", "running"].includes(next.status) && !next.pending;
-        if (finished || ++ticks > POLL_LIMIT) {
-          if (pollRef.current) clearInterval(pollRef.current);
-          setPhase("done");
-        }
+        finished = !["queued", "running"].includes(next.status) && !next.pending;
+        if (finished) setPhase("done");
       } catch {
         // A transient read failure must not end the poll — the run is still going.
-        if (++ticks > POLL_LIMIT && pollRef.current) clearInterval(pollRef.current);
       }
+      if (!finished) pollRef.current = setTimeout(tick, ++ticks < POLL_FAST_TICKS ? POLL_MS : POLL_SLOW_MS);
     };
     tick();
-    pollRef.current = setInterval(tick, POLL_MS);
   };
 
   /** Steps this page can answer without navigating away from the result they refer to. */
@@ -369,9 +370,19 @@ function PipelinePicker({ kinds, value, onChange }: {
   );
 }
 
-type BatchRow = { name: string; runId?: string; status: string; nodes?: number; error?: string };
+type Failure = { name: string; error: string };
 
-/** Several files at once: one batch, the pipeline per kind, then each file's run as it lands. */
+/** How often a batch's progress is read: one request for the whole batch, however many files. */
+const BATCH_POLL_MS = 4_000;
+
+/**
+ * Several files at once: one batch, the pipeline per kind.
+ *
+ * The files go up a few at a time with retries (lib/uploadQueue), and the batch's progress is one
+ * request for all of it. It used to send them one after another, count any error as a lost file, and
+ * then ask about every file separately every two seconds — a thousand requests a poll for a thousand
+ * files — and stop asking after five minutes, while reading them takes hours.
+ */
 function BatchAdd({ files, setFiles, pipelines, setPipelines, tags, setTags }: {
   files: File[];
   setFiles: (f: File[]) => void;
@@ -380,75 +391,114 @@ function BatchAdd({ files, setFiles, pipelines, setPipelines, tags, setTags }: {
   tags: string[];
   setTags: (t: string[]) => void;
 }) {
-  const [rows, setRows] = useState<BatchRow[] | null>(null);
+  const [sent, setSent] = useState<{ done: number; failed: Failure[] } | null>(null);
+  const [batch, setBatch] = useState<UploadBatch | null>(null);
   const [busy, setBusy] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+  const stopPolling = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+  useEffect(() => stopPolling, []);
 
-  const finished = (r: BatchRow) => !!r.error || (!!r.runId && !["queued", "running", "uploading"].includes(r.status));
+  // Closing the tab while files are still being sent stops the rest of them; the browser asks first.
+  // Once sent, the server has them: reading them goes on without this page.
+  useEffect(() => {
+    if (!busy) return;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [busy]);
+
+  const accepted = sent ? sent.done - sent.failed.length : 0;
+  useEffect(() => {
+    if (!busy && batch && sent && batch.total >= accepted && batch.done >= batch.total) stopPolling();
+  }, [busy, batch, sent, accepted]);
 
   const add = async () => {
     setBusy(true);
     const batchId = crypto.randomUUID();       // the files land as ONE ingestion
-    const out: BatchRow[] = files.map((f) => ({ name: f.name, status: "uploading" }));
-    setRows([...out]);
-    for (let i = 0; i < files.length; i++) {
-      try {
-        const res = await contextV2Api.addSource(files[i], { pipelineIds: pipelines, tags, batchId });
-        out[i] = res.run_id ? { ...out[i], runId: res.run_id, status: "queued" }
-                            : { ...out[i], status: "failed", error: "accepted, but no run was recorded" };
-      } catch (e: any) {
-        out[i] = { ...out[i], status: "failed", error: e?.response?.data?.detail || "upload failed" };
-      }
-      setRows([...out]);
-    }
-    setBusy(false);
-    let ticks = 0;
-    const tick = async () => {
-      await Promise.all(out.map(async (r, i) => {
-        if (!r.runId || finished(r)) return;
-        try {
-          const o = await contextV2Api.getOutcome(r.runId);
-          const status = o.pending ? "running" : o.status;
-          out[i] = { ...r, status, nodes: o.total_nodes, error: status === "failed" ? (o.error || "failed") : undefined };
-        } catch { /* a transient read failure must not end the poll */ }
-      }));
-      setRows([...out]);
-      if (out.every(finished) || ++ticks > POLL_LIMIT) {
-        if (pollRef.current) clearInterval(pollRef.current);
-      }
+    const failed: Failure[] = [];
+    setSent({ done: 0, failed });
+    const poll = async () => {
+      try { setBatch(await contextV2Api.getUploadBatch(batchId)); }
+      catch { /* a transient read failure must not end the poll */ }
     };
-    pollRef.current = setInterval(tick, POLL_MS);
-    tick();
+    pollRef.current = setInterval(poll, BATCH_POLL_MS);
+    await uploadAll(files.length, async (i) => {
+      const res = await contextV2Api.addSource(files[i], { pipelineIds: pipelines, tags, batchId });
+      return res.run_id as string | undefined;
+    }, {
+      concurrency: 3,
+      onSettled: (r, done) => {
+        if (!r.ok) failed.push({ name: files[r.index].name, error: r.error });
+        else if (!r.value) failed.push({ name: files[r.index].name, error: "accepted, but no run was recorded" });
+        setSent({ done, failed: [...failed] });
+      },
+    });
+    setBusy(false);
+    poll();
   };
 
-  if (rows) {
-    const done = rows.filter(finished).length;
-    const failed = rows.filter((r) => r.error).length;
+  if (sent) {
+    const counts = batch?.counts || {};
+    const read = batch?.done ?? 0;
+    const failures = [...sent.failed,
+      ...(batch?.failed || []).map((f) => ({ name: f.asset, error: f.error || "failed" }))];
+    const finished = !busy && !!batch && batch.total >= accepted && read >= batch.total;
+    const pct = (n: number) => `${Math.round((100 * n) / Math.max(1, files.length))}%`;
     return (
-      <div className="space-y-3">
-        <h2 className="text-lg font-semibold text-stone-900 dark:text-stone-100">
-          {done < rows.length ? `Adding ${rows.length} files…` : `Added ${rows.length - failed} of ${rows.length} files`}
+      <div className="space-y-4">
+        <h2 className="text-lg font-semibold text-stone-900 dark:text-stone-100 flex items-center gap-2">
+          {finished ? <CheckCircle2 size={18} className="text-emerald-500" />
+                    : <Loader2 size={18} className="animate-spin text-stone-400" />}
+          {busy ? `Sending ${sent.done} of ${files.length} files…`
+            : finished ? `Added ${files.length - failures.length} of ${files.length} files`
+            : `Reading ${read} of ${batch?.total ?? accepted} files…`}
         </h2>
-        <ul className="rounded-xl border border-stone-200 dark:border-stone-800 divide-y divide-stone-100 dark:divide-stone-800 bg-white dark:bg-stone-900">
-          {rows.map((r) => (
-            <li key={r.name} className="flex items-center gap-2 px-3 py-2 text-sm">
-              {r.error ? <XCircle size={15} className="text-red-500 shrink-0" />
-                : finished(r) ? <CheckCircle2 size={15} className="text-emerald-500 shrink-0" />
-                : <Loader2 size={15} className="animate-spin text-stone-400 shrink-0" />}
-              <span className="truncate text-stone-800 dark:text-stone-200">{r.name}</span>
-              <span className="ml-auto text-xs text-stone-500 dark:text-stone-400 shrink-0">
-                {r.error ? r.error : finished(r) ? `${r.status}${r.nodes ? ` · ${r.nodes} nodes` : ""}` : r.status}
+        <div className="space-y-2" aria-label="Progress">
+          {[["Sent", sent.done], ["Read", read]].map(([label, n]) => (
+            <div key={label as string} className="flex items-center gap-3 text-sm">
+              <span className="w-12 text-stone-500 dark:text-stone-400">{label}</span>
+              <div className="flex-1 h-2 rounded bg-stone-200 dark:bg-stone-800 overflow-hidden">
+                <div className="h-2 bg-primary transition-all" style={{ width: pct(n as number) }} />
+              </div>
+              <span className="w-24 text-right tabular-nums text-stone-600 dark:text-stone-300">
+                {n as number} / {files.length}
               </span>
-            </li>
+            </div>
           ))}
-        </ul>
-        {done === rows.length && (
-          <p className="text-sm text-stone-500 dark:text-stone-400">
-            See them in <Link href="/dashboard/catalogue" className="text-primary hover:underline">Assets</Link>,
-            or each run in <Link href="/dashboard/progress" className="text-primary hover:underline">Runs</Link>.
+        </div>
+        {batch && (
+          <p className="text-sm text-stone-600 dark:text-stone-300">
+            {[["waiting", counts.queued], ["reading", counts.running], ["added", counts.completed],
+              ["failed", counts.failed], ["canceled", counts.canceled]]
+              .filter(([, n]) => n).map(([k, n]) => `${n} ${k}`).join(" · ")}
           </p>
         )}
+        {!busy && !finished && (
+          <p className="text-sm text-stone-500 dark:text-stone-400">
+            The server has the files and reads them one after another; this goes on if you leave the
+            page. What is read already can be asked about now.
+          </p>
+        )}
+        {failures.length > 0 && (
+          <div>
+            <h3 className="text-sm font-medium text-red-700 dark:text-red-400 mb-1">
+              {failures.length} not added
+            </h3>
+            <ul className="rounded-xl border border-stone-200 dark:border-stone-800 divide-y divide-stone-100 dark:divide-stone-800 bg-white dark:bg-stone-900 max-h-80 overflow-auto">
+              {failures.slice(0, 300).map((f, i) => (
+                <li key={`${f.name}-${i}`} className="flex items-start gap-2 px-3 py-2 text-sm">
+                  <XCircle size={15} className="text-red-500 shrink-0 mt-0.5" />
+                  <span className="truncate text-stone-800 dark:text-stone-200 max-w-[40%]">{f.name}</span>
+                  <span className="ml-auto text-xs text-stone-500 dark:text-stone-400 text-right">{f.error}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <p className="text-sm text-stone-500 dark:text-stone-400">
+          See them in <Link href="/dashboard/catalogue" className="text-primary hover:underline">Assets</Link>,
+          or each run in <Link href="/dashboard/progress" className="text-primary hover:underline">Runs</Link>.
+        </p>
       </div>
     );
   }

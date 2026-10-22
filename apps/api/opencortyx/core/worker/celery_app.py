@@ -198,29 +198,23 @@ celery_app.conf.update(
         "opencortyx.run_document_pipeline": {"queue": "extraction"},   # a pipeline's deferred stages
         "opencortyx.*": {"queue": "graphrag"},
     },
-    beat_schedule={
-        "ingestion-sync-tick": {
-            "task": "opencortyx.sync_tick",
-            "schedule": float(settings.SYNC_TICK_SECONDS) if getattr(settings, "SYNC_TICK_SECONDS", None) else 30.0,
-        },
-        "quarantine-replay-tick": {
-            "task": "opencortyx.replay_quarantine",
-            "schedule": float(getattr(settings, "QUARANTINE_REPLAY_SECONDS", 60.0) or 60.0),
-        },
-        "stale-run-reap-tick": {
-            "task": "opencortyx.reap_stale_runs",
-            "schedule": 300.0,
-        },
-        "integrity-audit-tick": {
-            "task": "opencortyx.audit_integrity",
-            "schedule": float(getattr(settings, "INTEGRITY_AUDIT_SECONDS", 600.0) or 600.0),
-        },
+    # Every tick expires after its own interval: one that could not start in time is dropped, and
+    # the next tick does the same work. Without it, ticks queued behind a long ingest piled up (49
+    # sync ticks behind one large PDF) and then ran back to back for nothing.
+    beat_schedule={name: {"task": task, "schedule": every, "options": {"expires": every}}
+                   for name, task, every in (
+        ("ingestion-sync-tick", "opencortyx.sync_tick",
+         float(settings.SYNC_TICK_SECONDS) if getattr(settings, "SYNC_TICK_SECONDS", None) else 30.0),
+        ("quarantine-replay-tick", "opencortyx.replay_quarantine",
+         float(getattr(settings, "QUARANTINE_REPLAY_SECONDS", 60.0) or 60.0)),
+        ("stale-run-reap-tick", "opencortyx.reap_stale_runs", 300.0),
+        ("integrity-audit-tick", "opencortyx.audit_integrity",
+         float(getattr(settings, "INTEGRITY_AUDIT_SECONDS", 600.0) or 600.0)),
         # Embeds what a lost job left without vectors (tasks/graph.py, v2_sweep_unembedded).
-        "embedding-sweep-tick": {
-            "task": "opencortyx.sweep_unembedded",
-            "schedule": 600.0,
-        },
-    },
+        ("embedding-sweep-tick", "opencortyx.sweep_unembedded", 600.0),
+        # Removes stored uploads past their retention (core/uploads.py).
+        ("upload-sweep-tick", "opencortyx.sweep_uploads", 3600.0),
+    )},
     task_soft_time_limit=settings.TASK_SOFT_TIME_LIMIT,
     task_time_limit=settings.TASK_TIME_LIMIT,
     task_track_started=True,
@@ -361,32 +355,6 @@ def _sweep(d: dict) -> None:
     if len(d) > _TASK_STATE_MAX:
         for k in list(d)[: len(d) - _TASK_STATE_MAX // 2]:
             d.pop(k, None)
-
-
-@_signals.worker_ready.connect
-def _prefetch_models(sender=None, **_kw):
-    """The embedding worker downloads the models it will need as soon as it starts, in the background.
-
-    On a fresh install the first upload otherwise waited on a 520 MB download inside its embedding
-    job, the longest stretch in which a restart could cut the job off. Never fatal: without network
-    the models are fetched on first use, as before.
-    """
-    try:
-        queues = {q.name for q in sender.app.amqp.queues.consume_from.values()}
-    except Exception:                                         # noqa: BLE001
-        return
-    if "embedding" not in queues:
-        return
-    import threading
-
-    def run():
-        try:
-            from opencortyx.core.inference.prefetch import prefetch_models
-            prefetch_models()
-        except Exception as e:                                # noqa: BLE001
-            print(f"model prefetch skipped: {type(e).__name__}: {e}", flush=True)
-
-    threading.Thread(target=run, daemon=True, name="model-prefetch").start()
 
 
 @_signals.worker_init.connect

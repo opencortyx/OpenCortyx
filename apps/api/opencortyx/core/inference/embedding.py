@@ -11,7 +11,7 @@ re-index, as the Models page warns). Nothing else supplies one: with no row, emb
 """
 
 from opencortyx.core import http
-from opencortyx.core.config import settings, OPENAI_COMPATIBLE_PROVIDERS
+from opencortyx.core.config import SPARSE_MODEL, settings, OPENAI_COMPATIBLE_PROVIDERS
 from opencortyx.core.cache import TTLCache
 from opencortyx.core.observability import get_logger
 from opencortyx.stores.vector import SparseVector
@@ -75,7 +75,7 @@ def _get_fastembed_model(model_name: str | None = None):
     return _FASTEMBED_MODELS[name]
 
 
-_SPARSE_MODEL = "Qdrant/bm25"
+_SPARSE_MODEL = SPARSE_MODEL
 _sparse_models: dict = {}
 
 

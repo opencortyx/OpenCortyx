@@ -75,6 +75,14 @@ _NODE_COLUMNS = ", ".join(name for name, _ in _NODE_PROPS)
 _EDGE_COLUMNS = ", ".join(name for name, _ in _EDGE_PROPS)
 _BATCH = 200
 _IN_CHUNK = 500
+#: NebulaGraph refuses a write to a vertex or edge another request is writing at that moment ("More
+#: than one request trying to add/update/delete one edge/vertex at the same time"). That is optimistic
+#: concurrency, and the answer is to try again shortly: every ingest touches the same hub vertices (the
+#: day's Date node, the workspace node), so two workers writing at once failed whole files on it.
+_CONFLICT = "more than one request"
+_CONFLICT_RETRIES = 8
+#: Degree updates in flight at once; each vertex is its own statement (UPSERT takes one).
+_DEGREE_PARALLEL = 8
 
 
 def _lit(value: Any) -> str:
@@ -459,20 +467,28 @@ class NebulaGraphStore(GraphStore):
         return self._pool
 
     def _run(self, stmt: str):
-        for attempt in (1, 2):
+        import random
+        reconnected = conflicts = 0
+        while True:
             try:
                 rs = self._session_pool().execute(stmt)
             except Exception as e:                      # noqa: BLE001 - the client raises bare errors
-                if attempt == 2:
+                if reconnected:
                     raise GraphStoreConnectionError(f"NebulaGraph request failed: {e}",
                                                     provider=self.provider_name, original_error=e) from e
+                reconnected += 1
                 self._reset()
                 continue
             if rs.is_succeeded():
                 return rs
             message = rs.error_msg()
-            if attempt == 1 and "session" in message.lower():
+            if not reconnected and "session" in message.lower():
+                reconnected += 1
                 self._reset()
+                continue
+            if _CONFLICT in message.lower() and conflicts < _CONFLICT_RETRIES:
+                conflicts += 1                          # jittered backoff: 20 ms, 40 ms ... ~2.5 s
+                time.sleep(random.uniform(0.5, 1.0) * 0.02 * 2 ** conflicts)
                 continue
             raise GraphStoreOperationError(f"{message} in: {stmt[:300]}", provider=self.provider_name)
 
@@ -630,10 +646,23 @@ class NebulaGraphStore(GraphStore):
                                 "YIELD node.type AS t | GROUP BY $-.t YIELD $-.t AS t, count(*) AS n;")
         return {t: int(n) for t, n in rows}
 
-    async def add_to_degree(self, workspace_id, deltas: dict) -> None:
-        for nid, d in deltas.items():
-            if d:
+    async def add_to_degree(self, workspace_id, deltas: dict, current: dict | None = None) -> None:
+        """Apply degree changes. A vertex in `current` (its degree as just read, for vertices the
+        caller owns) is written with the rest in multi-row INSERTs; any other vertex gets an atomic
+        UPSERT increment, since another writer may be changing it (the day's Date node is shared by
+        every upload). UPSERT takes one vertex per statement: one per element of a document was
+        thousands of round trips, most of an upload's time once the nodes and edges were batched."""
+        current = current or {}
+        bulk = {nid: max(0, int(current[nid]) + int(d)) for nid, d in deltas.items() if d and nid in current}
+        for batch in _chunks(sorted(bulk), _BATCH):
+            await self._exec("INSERT VERTEX node_stats(degree) VALUES "
+                             + ", ".join(f"{_vid(nid)}:({bulk[nid]})" for nid in batch) + ";")
+        gate = asyncio.Semaphore(_DEGREE_PARALLEL)
+
+        async def one(nid, d):
+            async with gate:
                 await self._exec(f"UPSERT VERTEX ON node_stats {_vid(nid)} SET degree = degree + {int(d)};")
+        await asyncio.gather(*(one(nid, d) for nid, d in deltas.items() if d and nid not in bulk))
 
     async def delete_nodes(self, workspace_id, ids: Sequence) -> int:
         nodes = await self.get_nodes(workspace_id, ids)
@@ -655,8 +684,9 @@ class NebulaGraphStore(GraphStore):
 
     # edges
 
-    async def upsert_edges(self, edges: Sequence[Edge]) -> EdgeWrite:
+    async def upsert_edges(self, edges: Sequence[Edge], owned=None) -> EdgeWrite:
         result = EdgeWrite()
+        owned = {str(i) for i in (owned or ())}
         edges = list({str(e.id): e for e in edges}.values())
         if not edges:
             return result
@@ -665,7 +695,9 @@ class NebulaGraphStore(GraphStore):
             by_org.setdefault(str(e.workspace_id), []).append(e)
         for org, group in by_org.items():
             ends = {str(e.source_id) for e in group} | {str(e.target_id) for e in group}
-            present = {str(n.id) for n in await self.get_nodes(org, list(ends))}
+            found = await self.get_nodes(org, list(ends))
+            present = {str(n.id) for n in found}
+            degree_now = {str(n.id): int(n.degree or 0) for n in found if str(n.id) in owned}
             writable = []
             for e in group:
                 if str(e.source_id) in present and str(e.target_id) in present:
@@ -689,7 +721,7 @@ class NebulaGraphStore(GraphStore):
                         result.created.append(e)
                         for end in (str(e.source_id), str(e.target_id)):
                             deltas[end] = deltas.get(end, 0) + 1
-            await self.add_to_degree(org, deltas)
+            await self.add_to_degree(org, deltas, current=degree_now)
         return result
 
     async def _go(self, workspace_id, ids: Sequence, direction: str, types, limit: int | None) -> list[Neighbor]:

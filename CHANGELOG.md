@@ -2,12 +2,66 @@
 
 ## Unreleased
 
-An upload could stay unsearchable by meaning, with nothing saying so: updating restarted the
+A new installation handles a large first upload: a thousand files dropped on Add data at once are
+all accepted and read, and the models search needs are already there. Before, uploads after the
+30th were refused, a few hundred queued files could take the job queue down with them, and the
+first upload waited on a 600 MB model download.
+
+An upload could also stay unsearchable by meaning, with nothing saying so: updating restarted the
 embedding worker mid-job, and the job sat unacknowledged for 40 minutes. Questions then found only
 keyword matches. Workers now hand their jobs back when stopped, a sweep catches anything still
 missed, and `opencortyx doctor` shows it.
 
+### Upgrading
+- A database migration (`0031_ingest_run_batch`) runs on `opencortyx update`.
+- A new volume, `uploads`, holds uploaded files until their worker has read them.
+- New settings, all optional: `UPLOAD_RETENTION_HOURS` (168), `RATELIMIT_UPLOAD_PER_MIN` (600),
+  `REDIS_MAXMEMORY` (128mb), `EMBEDDING_WORKER_MAX_MEMORY_KB` (1500000) and the database ports below.
+
 ### Fixed
+- Reading a document wrote its graph one element at a time, about 17 round trips to the graph store
+  each, which was most of an upload's time. A document's elements and links are written in one
+  batch now, and the per-node link counts of its own elements in a few bulk writes instead of one
+  each: a 30 KB text document went from 26.5 s to 3.8 s, a 950-element HTML page from 16.5 s to 1.6 s.
+- A passage longer than 2,000 characters (a long paragraph, a code block, a table) had no embedding
+  at all and was findable by keyword only. It is embedded in overlapping chunks now, each its own
+  vector, cut at sentence ends.
+- A plain-text file with no headings (an RFC) was handed to extraction as one block; sections now
+  close at 4,000 characters.
+- The graph store refused queries once the whole Docker VM was 80% full ("Used memory hits the high
+  watermark"), failing uploads during a large one. It now judges memory against its own container
+  limit (`--containerized=true`).
+- A file's extension decides how a document is read: a `.txt`, `.md` or `.html` file was read as
+  JSON or XML when a few of its lines happened to parse as such (an RFC with a `[` line, Markdown with
+  HTML tags). Only a binary signature, such as a `.txt` that is really a PDF, overrides it.
+- Two workers updating the same node at once (every upload touches the day's Date node) failed a
+  file with "More than one request trying to add/update/delete one edge/vertex at the same time".
+  Such a conflict is retried with backoff now.
+- Long PDFs ran the reader out of memory: read whole, a 34-page PDF passed 4 GB and was killed on
+  every attempt. PDFs are read 4 pages at a time (`LAYOUT_PDF_PAGE_WINDOW`), peaking near 1.5 GB at
+  any length, in the same time.
+- Housekeeping jobs piled up behind a long upload (49 sync ticks and 52 browse-tree passes behind one
+  PDF). Scheduled ticks now expire when they could not start in time, and one browse-tree pass is
+  booked at a time.
+- A Python file whose first lines were plain JSON values was read as JSON Lines.
+- Uploads shared the 30-a-minute limit of questions, so Add data refused every file after the 30th
+  of a folder. Uploads have their own limit (600 a minute), and Add data sends three files at a time
+  and retries one the server could not take yet, honouring its Retry-After.
+- An uploaded file travelled to its worker inside the queue message, so a few hundred files dropped
+  at once filled Redis until it was killed, losing every queued job. The file is now stored once on
+  the `uploads` volume and the job carries a reference to it. Redis is configured as a queue: it
+  refuses new jobs when full instead of being killed (`noeviction`, `maxmemory`) and keeps its queue
+  across restarts (`appendonly`).
+- Runs waiting their turn were marked failed after 30 to 45 minutes ("interrupted"), although their
+  jobs were still queued: behind a large upload, hundreds of healthy files showed as failed. Only a
+  run that started and went quiet is failed now; a waiting run is sent again only when the queue
+  has lost it.
+- Add data asked about every file of a batch separately every two seconds, and gave up after five
+  minutes while reading took hours. It now reads the batch's progress in one request until done,
+  and lists each file that was not added with the reason.
+- Files uploaded in parallel into one batch could drop each other from its saved ingestion.
+- A new workspace's reranker was a model only an `INSTALL_RERANK=1` image can run, so every question
+  skipped reranking. New workspaces get `Xenova/ms-marco-MiniLM-L-12-v2`, which every image runs.
 - A stopped or updated worker hands its running jobs back to the queue at once (Celery soft
   shutdown), so another worker starts them in seconds. Before, Docker's stop signal went to `sh`,
   which did not pass it on, so Celery was killed mid-job every time.
@@ -18,15 +72,24 @@ missed, and `opencortyx doctor` shows it.
   warning now: uploads and search work without one; only the AI Assistant needs it.
 
 ### Added
+- **Settings > Chunking**: the chunk size and overlap for embedding, the section size handed to
+  extraction, how many PDF pages the layout model reads at once, and the PDF table detail.
+
+### Changed
+- PDF tables are read with the table model's fast mode by default: measured about 12% quicker per
+  page and up to 1 GB less memory, finding the same elements. **Settings > Chunking > PDF table
+  detail** switches back to accurate.
+- The models a new workspace uses for search (the embedder, the keyword model and the reranker) ship
+  in the image, so a fresh installation never downloads them.
+- `GET /api/v2/uploads/batches/{batch_id}`: a batch of uploads at a glance.
 - Every 10 minutes, a sweep embeds any node from the last 24 hours that is still without vectors.
-- The embedding worker downloads the search models (embedding and keyword) when it starts, so the
-  first upload on a new installation no longer waits on a 600 MB download inside its job.
 - `opencortyx doctor` checks:
   - that a worker listens on every queue;
   - jobs waiting and running, warning about one held over 40 minutes;
   - that the models in use are downloaded;
   - that recent uploads have vectors;
-  - which reranker each workspace uses.
+  - which reranker each workspace uses;
+  - the upload store and its free disk.
   See [Troubleshooting](docs/installation/troubleshooting.md#workers-and-search).
 - `OPENCORTYX_POSTGRES_PORT`, `OPENCORTYX_QDRANT_PORT` and `OPENCORTYX_NEBULA_PORT` change the
   database ports when another server already uses them.

@@ -401,7 +401,7 @@ class NodeRepo:
             did = await self.ensure_date_node(workspace_id=org)
             await self.add_edges(workspace_id=org, edges=[
                 {"source_id": n.id, "target_id": did, "type": "MODIFIED_ON" if n.id in stored else "CREATED_ON"}
-                for n in nodes if n.type != "Date"])
+                for n in nodes if n.type != "Date"], owned=[n.id for n in nodes if n.id not in stored])
         return nodes
 
     async def _index(self, changes: Sequence[tuple[Node | None, Node]]) -> None:
@@ -528,8 +528,10 @@ class NodeRepo:
             "properties": properties, "confidence": confidence}], asset=asset, _quarantine=_quarantine, by=by)
         return bool(result.created)
 
-    async def add_edges(self, *, workspace_id, edges: Sequence[dict], asset=None, _quarantine=True, by=None) -> EdgeWrite:
-        """Write many edges with the same rules as `add_edge`."""
+    async def add_edges(self, *, workspace_id, edges: Sequence[dict], asset=None, _quarantine=True, by=None,
+                        owned=None) -> EdgeWrite:
+        """Write many edges with the same rules as `add_edge`. `owned`: ids of nodes this write alone
+        is touching (see GraphStore.upsert_edges), whose degrees can be written in bulk."""
         org = as_uuid(workspace_id)
         result = EdgeWrite()
         valid: list[Edge] = []
@@ -559,7 +561,7 @@ class NodeRepo:
         if not valid:
             return result
         try:
-            written = await self.graph.upsert_edges(valid)
+            written = await self.graph.upsert_edges(valid, owned=owned)
             _changed(org)
         except BaseException:
             _acct.note(org, _acct.ESCAPED, len(valid))
@@ -592,8 +594,10 @@ class NodeRepo:
 
         Each attribute is its own surface, so a node is found by the one field that matches rather
         than by an average of all of them. Returns how many values were embedded per attribute."""
+        from opencortyx.core.config import runtime as _rc
         from opencortyx.core.substrate.document import (
-            ATTR_MAX_CHARS, ATTR_MIN_CHARS, attr_search_text, discover_attributes,
+            ATTR_MAX_CHARS, ATTR_MIN_CHARS, TEXT_MAX_WINDOWS, attr_search_text, discover_attributes,
+            text_windows,
         )
         org = as_uuid(workspace_id)
         counts: dict[str, int] = {}
@@ -604,18 +608,28 @@ class NodeRepo:
             surfaces = []
             for node in chunk:
                 attrs = discover_attributes(node.properties)
+                long_text = (node.properties or {}).get("text")
+                windowed = isinstance(long_text, str) and len(long_text.strip()) > _rc.chunk_window_chars()
+                if windowed:
+                    attrs.pop("text", None)          # embedded window by window below instead
                 label = (node.label or "").strip()
                 if len(label) >= ATTR_MIN_CHARS:
                     attrs.setdefault("label", label[:ATTR_MAX_CHARS])
                 for attr, value in attrs.items():
-                    surfaces.append((node, attr, attr_search_text(attr, value)))
+                    surfaces.append((node, attr, attr_search_text(attr, value), 0))
                     counts[attr] = counts.get(attr, 0) + 1
-            vectors = await embed_batch([text for _, _, text in surfaces]) if surfaces else []
+                if windowed:
+                    # Too long to be one surface: a passage is embedded window by window instead.
+                    for part, window in enumerate(text_windows(
+                            long_text, _rc.chunk_window_chars(), _rc.chunk_overlap_chars())[:TEXT_MAX_WINDOWS]):
+                        surfaces.append((node, "text", attr_search_text("text", window), part))
+                    counts["text"] = counts.get("text", 0) + 1
+            vectors = await embed_batch([text for _, _, text, _ in surfaces]) if surfaces else []
             sparse = await sparse_embed([document_text(n) or n.type for n in chunk])
             points = [VectorPoint(workspace_id=require_uuid(org, "workspace_id"), node_id=node.id, attr=attr,
-                                  text=text[:ATTR_MAX_CHARS],
+                                  text=text[:max(ATTR_MAX_CHARS, _rc.chunk_window_chars()) + 64], part=part,
                                   fields=search_fields(node), dense=list(vec))
-                      for (node, attr, text), vec in zip(surfaces, vectors) if vec]
+                      for (node, attr, text, part), vec in zip(surfaces, vectors) if vec]
             points += [document_point(node, vec, embedded=True) for node, vec in zip(chunk, sparse)]
             await self.vectors.delete(VectorFilter(workspace_id=require_uuid(org, "workspace_id"),
                                                    node_ids=[n.id for n in chunk],

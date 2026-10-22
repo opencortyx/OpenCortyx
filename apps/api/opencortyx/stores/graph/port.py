@@ -60,10 +60,12 @@ class GraphStore(ABC):
 
     # edges
     @abstractmethod
-    async def upsert_edges(self, edges: Sequence[Edge]) -> EdgeWrite:
+    async def upsert_edges(self, edges: Sequence[Edge], owned=None) -> EdgeWrite:
         """Write edges whose endpoints both exist in the edge's organization.
 
-        A new edge adds one to each endpoint's degree; rewriting an existing one does not."""
+        A new edge adds one to each endpoint's degree; rewriting an existing one does not. `owned`:
+        ids of vertices only this write touches right now (the elements a document upload just
+        created), whose degree a store may update in bulk rather than one atomic increment each."""
 
     @abstractmethod
     async def find_edges(self, workspace_id, query: EdgeQuery) -> list[Edge]: ...

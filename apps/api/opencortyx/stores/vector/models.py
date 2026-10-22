@@ -29,8 +29,9 @@ EVIDENCE_FLAGS = {"superseded": "superseded", "structural": "__structural", "int
 CONVERSATION_FLAG = "__memory"
 
 
-def point_id(node_id, attr: str) -> str:
-    return str(uuid.uuid5(_POINT_NS, f"{node_id}|{attr}"))
+def point_id(node_id, attr: str, part: int = 0) -> str:
+    """A point's id. Part 0 keeps the id it always had; a long text's further windows add theirs."""
+    return str(uuid.uuid5(_POINT_NS, f"{node_id}|{attr}" + (f"|{part}" if part else "")))
 
 
 def search_fields(node: Node) -> dict:
@@ -102,10 +103,11 @@ class VectorPoint:
     fields: dict = field(default_factory=dict)
     dense: Optional[list[float]] = None
     sparse: Optional[SparseVector] = None
+    part: int = 0                     # which window of a long text (core/substrate/document.py)
 
     @property
     def id(self) -> str:
-        return point_id(self.node_id, self.attr)
+        return point_id(self.node_id, self.attr, self.part)
 
 
 @dataclass

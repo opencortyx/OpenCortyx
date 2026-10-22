@@ -61,6 +61,10 @@ class V2Settings(BaseSettings):
     # PDF does not need one. Turn it on only after installing one (e.g. rapidocr), for scans.
     LAYOUT_OCR: bool = False
     LAYOUT_TABLE_STRUCTURE: bool = True      # TableFormer: real row/column grids for tables
+    #: A PDF longer than this is read this many pages at a time (docling/engine.py), so memory stays
+    #: flat whatever its length. Measured on a 34-page RFC: whole or in 10-page windows it passed 4 GB
+    #: and was killed; windows of 2/4/6 pages peaked at 1.2/1.5/2.0 GB in the same total time.
+    LAYOUT_PDF_PAGE_WINDOW: int = 4
     STRUCTURED_SAMPLE_N: int = 50           # rows sampled per table for profiling (null-rate/samples)
     STRUCTURED_MAX_LLM_TABLES: int = 40     # cap tables that get LLM enrichment (cost guard)
     STRUCTURED_MAPPING_ROW_LIMIT: int = 1000  # max rows read per table in granular mapping
@@ -126,11 +130,18 @@ class V2Settings(BaseSettings):
 
     # ── Request limits (cost + DoS guards on the expensive endpoints) ─────
     MAX_UPLOAD_BYTES: int = 50 * 1024 * 1024
+    #: Where uploaded files wait for their worker (core/uploads.py): a volume the API and the workers
+    #: share. Kept this long after the last upload of the same file, longer while a run still needs it.
+    UPLOAD_STORE: str = "/data/uploads"
+    UPLOAD_RETENTION_HOURS: int = 168
     MAX_REQUEST_BYTES: int = 50 * 1024 * 1024
     RATELIMIT_ENABLED: bool = True
     RATELIMIT_WINDOW_SECONDS: float = 60.0
     RATELIMIT_DEFAULT_PER_MIN: int = 240
     RATELIMIT_HEAVY_PER_MIN: int = 30
+    #: Uploads only store the file and queue it; the queue, not this limit, paces the work. Its own
+    #: bucket, so a 1000-file drop neither trips it nor uses up the questions' budget.
+    RATELIMIT_UPLOAD_PER_MIN: int = 600
 
     # ── First run ─────────────────────────────────────────────────────────
     #: Empty by design: no shipped credential, so a fresh install goes through the Setup page.
@@ -234,6 +245,13 @@ CROSS_ENCODER_MODEL = "BAAI/bge-reranker-v2-m3"   # stronger cross-encoder (dist
 #: fallback). Its vectors are EMBED_DIMENSIONS wide.
 BUILTIN_EMBED_PROVIDER = "fastembed"
 BUILTIN_EMBED_MODEL = "nomic-ai/nomic-embed-text-v1.5"
+#: The reranker a new workspace's registry is seeded with: a fastembed (ONNX) cross-encoder, which
+#: every image runs. It was CROSS_ENCODER_MODEL, a sentence-transformers model only an
+#: INSTALL_RERANK=1 image can run, so on a release install every question skipped the reranker.
+BUILTIN_RERANK_PROVIDER = "fastembed"
+BUILTIN_RERANK_MODEL = "Xenova/ms-marco-MiniLM-L-12-v2"
+#: The keyword (BM25) model the vector store's sparse vectors come from.
+SPARSE_MODEL = "Qdrant/bm25"
 PROFILE_RERANK = {
     "fast":       ["cross"],
     "docs_qa":    ["cross"],

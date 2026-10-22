@@ -60,6 +60,9 @@ def test_explicit_override_wins():
     ("x.conf", b"service: api\nreplicas: 3\nlimits:\n  cpu: 2\n", F.SEMISTRUCTURED),
     ("settings", b'[tool]\nname = "x"\nversion = 2\n', F.SEMISTRUCTURED),
     ("x.out", b"a,b,c\n1,2,3\n4,5,6\n7,8,9\n", F.STRUCTURED),
+    # Source code whose first lines happen to be JSON scalars is still prose to read, not JSON
+    # Lines: jinja2's idtracking.py was routed to the record walker.
+    ("idtracking.py", b'1\n"param"\nimport typing as t\nVAR_LOAD_PARAMETER = "param"\n', F.DOCUMENT),
 ])
 def test_unknown_extensions_are_identified_by_content(name, blob, expected):
     assert routing.route_for(name, blob) == expected

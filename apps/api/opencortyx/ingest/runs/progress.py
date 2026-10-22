@@ -12,7 +12,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 
 from opencortyx.core.db import V2Session
 from opencortyx.domain import IngestRun, Ingestion
@@ -25,16 +25,20 @@ def _now():
 
 
 async def reconcile_orphans(stale_minutes: int = 30) -> int:
-    """Called once on API startup. A run still `running`/`queued` with no progress for a while is an
-    orphan from a prior crash/restart (its Celery task is gone) — mark it `failed` so the Progress tab
-    reflects reality instead of showing perpetual ghosts. Healthy runs bump `updated_at` every step,
-    so a stale timestamp means the task is truly dead. Best-effort; never raises."""
+    """Called once on API startup. A run still `running` with no progress for a while is an orphan
+    from a prior crash/restart — mark it `failed` so the Progress tab reflects reality instead of
+    showing perpetual ghosts. Healthy runs bump `updated_at` every step, so a stale timestamp means the
+    task is truly dead. Best-effort; never raises.
+
+    A `queued` run is not touched: it is waiting its turn in the broker, which keeps it across
+    restarts, and a 1000-file drop leaves most runs queued for hours. Failing them by age reported
+    healthy uploads as failed (`tasks/maintenance.py` handles a queue the broker actually lost)."""
     try:
         cutoff = _now() - timedelta(minutes=stale_minutes)
         async with V2Session() as db:
             res = await db.execute(
                 update(IngestRun)
-                .where(IngestRun.status.in_(["running", "queued"]), IngestRun.updated_at < cutoff)
+                .where(IngestRun.status == "running", IngestRun.updated_at < cutoff)
                 .values(status="failed", error="interrupted (service restart)", finished_at=_now()))
             await db.commit()
             return res.rowcount or 0
@@ -65,20 +69,58 @@ def _self_dispatch() -> dict | None:
         return None
 
 
-async def create_run(workspace_id, kind, asset, task_id=None, source_ref=None):
+async def create_run(workspace_id, kind, asset, task_id=None, source_ref=None, batch_id=None):
     """Create a `queued` run row; returns its id (uuid) or None on failure (never raises)."""
     try:
         async with V2Session() as db:
             r = IngestRun(workspace_id=workspace_id, kind=kind, asset=(asset or "")[:500],
                           task_id=task_id, source_ref=(str(source_ref)[:300] if source_ref else None),
                           status="queued", steps=[], result={},
-                          retry_payload=_self_dispatch())
+                          retry_payload=_self_dispatch(),
+                          batch_id=(str(batch_id)[:80] if batch_id else None))
             db.add(r)
             await db.commit()
             await db.refresh(r)
             return r.id
     except Exception:
         return None
+
+
+async def dispatch(run_id, task, *args, **kwargs):
+    """Queue `task` for a run, and record on the run how to queue it again.
+
+    The record is what lets a run whose job the broker lost be sent again (tasks/maintenance.py):
+    a run created by the API, before any task exists, had none. Cheap to keep because a job's
+    arguments are small; a file travels as an upload reference (core/uploads.py), not as bytes."""
+    job = task.apply_async(args=list(args), kwargs=kwargs)
+    if run_id:
+        try:
+            async with V2Session() as db:
+                await db.execute(update(IngestRun).where(IngestRun.id == uuid.UUID(str(run_id))).values(
+                    task_id=job.id, retry_payload={"task": task.name, "args": list(args), "kwargs": kwargs}))
+                await db.commit()
+        except Exception:                          # noqa: BLE001 — bookkeeping never fails an upload
+            log.warning("run.dispatch_record_failed run=%s", run_id)
+    return job
+
+
+async def batch_status(workspace_id, batch_id) -> dict:
+    """One batch's progress: how many of its runs are in each state, and the ones that failed."""
+    from sqlalchemy import func
+    async with V2Session() as db:
+        counts = dict((await db.execute(
+            select(IngestRun.status, func.count()).where(
+                IngestRun.workspace_id == workspace_id, IngestRun.batch_id == str(batch_id))
+            .group_by(IngestRun.status))).all())
+        failed = (await db.execute(
+            select(IngestRun.id, IngestRun.asset, IngestRun.error).where(
+                IngestRun.workspace_id == workspace_id, IngestRun.batch_id == str(batch_id),
+                IngestRun.status == "failed").order_by(IngestRun.updated_at.desc()).limit(200))).all()
+    total = sum(counts.values())
+    done = sum(n for s, n in counts.items() if s in ("completed", "failed", "canceled"))
+    return {"batch_id": str(batch_id), "total": total, "done": done,
+            "counts": {k: int(v) for k, v in counts.items()},
+            "failed": [{"run_id": str(i), "asset": a, "error": e} for i, a, e in failed]}
 
 
 class ProgressReporter:
@@ -307,6 +349,11 @@ async def record_device_upload(workspace_id, kind, filename, run_id=None, batch_
     fname = (filename or "upload")[:300]
     try:
         async with V2Session() as db:
+            # One writer per batch at a time: Add data uploads files in parallel, and two of them
+            # reading the row together each appended their file and the second write dropped the
+            # first (or both created the row). Held until this transaction commits.
+            await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+                             {"k": f"upload-batch:{workspace_id}:{key}"})
             row = (await db.execute(select(Ingestion).where(
                 Ingestion.workspace_id == workspace_id,
                 Ingestion.config["batch_id"].astext == key))).scalars().first()

@@ -40,8 +40,10 @@ opencortyx logs <service>     # api, worker, extraction-worker, web, mcp, postgr
 |---|---|---|
 | `workers`: no worker listening on `<queue>` | That worker is down, so jobs on its queue wait forever | `opencortyx logs <service>` (the one named in brackets), then `opencortyx up` |
 | `queues`: a job has been held over 40 min | A worker was stopped mid-job without handing it back (an old version, or a killed container) | Nothing: Redis hands it out again after 40 minutes. A stopped worker hands its job back at once since 0.1.0-beta.7 |
-| `models`: not downloaded yet | The embedding worker downloads the search models when it starts (about 600 MB) | Wait a few minutes. If it stays, `opencortyx logs embedding-worker` shows why (`models.prefetch`), usually no internet access |
+| `models`: not downloaded yet | A model a workspace chose on the **Models** page is not on this machine yet (the defaults ship with OpenCortyx) | Open **Models**, edit the model and press **Download**. Without internet access, download it on a connected machine first |
 | `search index`: N recent node(s) without vectors | An upload is findable by keyword but not by meaning yet | A sweep embeds them every 10 minutes. If the number stays, `opencortyx logs embedding-worker` |
+| `uploads`: under 2 GB free | Uploaded files wait on the `uploads` volume until read, and are kept `UPLOAD_RETENTION_HOURS` (168) after | Free disk space, or lower `UPLOAD_RETENTION_HOURS` in `.env` and `opencortyx up` |
+| Add data lists files "not added" with HTTP 429 | More than `RATELIMIT_UPLOAD_PER_MIN` (600) uploads a minute from one user, after retries | Add the rest again, or raise the limit in `.env` |
 | `reranker`: needs an INSTALL_RERANK=1 image | The workspace chose a sentence-transformers reranker that this image does not have | Pick a fastembed reranker on the **Models** page, or build with `INSTALL_RERANK=1` |
 
 ## Memory

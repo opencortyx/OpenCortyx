@@ -167,7 +167,7 @@ async def _default_rows(role: str) -> list:
 
 async def check_models() -> str:
     """Every model the workspaces use and OpenCortyx runs itself is downloaded. The embedding worker
-    fetches them when it starts; until it has, the first upload waits on the download."""
+    The defaults ship in the image; a model chosen later is downloaded from the Models page."""
     from opencortyx.core.inference import hf_hub
     from opencortyx.core.inference.fastembed_models import describe, is_downloaded
     worst, missing, ready = OK, [], []
@@ -180,8 +180,8 @@ async def check_models() -> str:
             if provider == "transformers":
                 (ready if hf_hub.is_downloaded(model_id) else missing).append(model_id)
     if missing:
-        _line(WARN, "models", f"not downloaded yet: {', '.join(sorted(set(missing)))} (the embedding "
-                              "worker fetches them; check its log if this persists)")
+        _line(WARN, "models", f"not downloaded yet: {', '.join(sorted(set(missing)))} - open Models, "
+                              "edit the model and press Download (or it downloads on first use)")
         worst = WARN
     else:
         _line(OK, "models", f"downloaded: {', '.join(sorted(set(ready))) or 'none needed'}")
@@ -235,6 +235,29 @@ def check_queues() -> str:
                                        "was probably stopped mid-job; Redis will hand it out again")
         return WARN
     _line(OK, "queues", detail)
+    return OK
+
+
+def check_uploads() -> str:
+    """The store uploaded files wait in for their worker (core/uploads.py): how much it holds, and
+    whether its disk has room for more. A full disk refuses uploads."""
+    import shutil
+    from pathlib import Path
+
+    from opencortyx.core.config import settings
+    root = Path(settings.UPLOAD_STORE)
+    if not root.exists():
+        _line(WARN, "uploads", f"{root} does not exist: is the `uploads` volume mounted?")
+        return WARN
+    files = [f for f in root.glob("*/*") if f.is_file() and not f.name.startswith(".")]
+    held = sum(f.stat().st_size for f in files)
+    free = shutil.disk_usage(root).free
+    detail = (f"{len(files)} file(s), {held / 2**20:.0f} MB held; {free / 2**30:.1f} GB free "
+              f"(kept {settings.UPLOAD_RETENTION_HOURS} h after upload)")
+    if free < 2 * 2**30:
+        _line(WARN, "uploads", detail + " - under 2 GB free: free disk space or lower UPLOAD_RETENTION_HOURS")
+        return WARN
+    _line(OK, "uploads", detail)
     return OK
 
 
@@ -295,7 +318,7 @@ async def main() -> int:
     results = [await check_database(), check_redis(), check_workers(), check_queues(),
                await check_models(), await check_llm(), await check_embedding(),
                await check_reranker(), await check_graph_store(), await check_vector_store(),
-               await check_search_index()]
+               check_uploads(), await check_search_index()]
     failed = results.count(FAIL)
     print(f"\n  {results.count(OK)} ok, {results.count(WARN)} warnings, {failed} failed")
     return 1 if failed else 0

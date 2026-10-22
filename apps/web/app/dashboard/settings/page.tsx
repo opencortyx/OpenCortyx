@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { contextV2Api } from "@/lib/api/contextV2";
-import { Shield, Clock, Server, AlertCircle, Save, SlidersHorizontal, Lock, Download, Upload, HardDriveDownload, Layers, Calculator, Network, Workflow, Settings2, Boxes, ExternalLink, RefreshCw, Cpu, MemoryStick } from "lucide-react";
+import { Shield, Clock, Server, AlertCircle, Save, SlidersHorizontal, Lock, Download, Upload, HardDriveDownload, Layers, Calculator, Network, Workflow, Settings2, Boxes, ExternalLink, RefreshCw, Cpu, MemoryStick, Scissors } from "lucide-react";
 import Link from "next/link";
 import PageHeader from "@/components/layout/PageHeader";
 import Button from "@/components/ui/Button";
@@ -29,7 +29,7 @@ export default function SettingsPage() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   // Sub-tabs (clean "data hub" layout)
-  const [tab, setTab] = useState<"performance" | "parallelism" | "capabilities" | "extraction" | "agents" | "backup" | "audit" | "danger">("performance");
+  const [tab, setTab] = useState<"performance" | "parallelism" | "chunking" | "capabilities" | "extraction" | "agents" | "backup" | "audit" | "danger">("performance");
 
   // Capabilities tab — the platform-tree capability modules (schema-driven)
   const [caps, setCaps] = useState<any[]>([]);
@@ -222,6 +222,7 @@ export default function SettingsPage() {
   const TABS = [
     { id: "performance", label: "General", icon: SlidersHorizontal },
     { id: "parallelism", label: "Parallelism", icon: Network },
+    { id: "chunking", label: "Chunking", icon: Scissors },
     { id: "capabilities", label: "Capabilities", icon: Boxes },
     { id: "extraction", label: "Extraction", icon: Layers },
     { id: "agents", label: "Agents", icon: Shield },
@@ -563,6 +564,79 @@ export default function SettingsPage() {
               className="inline-flex items-center gap-2 bg-stone-900 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-stone-800 disabled:opacity-50"
             >
               <Save size={14} /> {cfgSaving ? "Saving…" : "Save parallelism"}
+            </button>
+          </div>
+        </div>
+      </div>
+      )}
+
+      {/* Chunking — how documents are cut for search and extraction. Its own tab because the
+          values interact (a chunk must fit what the embedding model reads; overlap is a share of
+          the chunk) and none of them belongs among the retrieval knobs on General. */}
+      {tab === "chunking" && (
+      <div className="bg-white dark:bg-stone-900 rounded-xl border border-stone-200/80 dark:border-stone-800 overflow-hidden">
+        <div className="px-6 py-4 border-b border-stone-100 dark:border-stone-800">
+          <h2 className="font-semibold text-stone-900 dark:text-stone-100 flex items-center gap-2">
+            <Scissors size={16} /> Chunking
+          </h2>
+          <p className="text-sm text-stone-500 dark:text-stone-400 mt-1">
+            A document is read into elements by its layout (headings, paragraphs, lists, tables, code),
+            and each element is searchable on its own. These settings cut what is too long. They
+            apply to files read after you save; a file already in keeps its chunks until it is read
+            again.
+          </p>
+        </div>
+        <div className="p-6 space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5">
+            {cfgSchema.filter((s: any) => s.group === "Chunking").map((s: any) => (
+              <div key={s.key} className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <label htmlFor={`cfg-${s.key}`} className="text-sm font-medium text-stone-800 dark:text-stone-200">{s.label}</label>
+                  <div className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">{s.help}</div>
+                  <div className="text-[10px] font-mono text-stone-400 mt-1">
+                    {s.key}{s.kind === "select" ? "" : ` · ${s.min}–${s.max}`}
+                  </div>
+                </div>
+                {s.kind === "select" ? (
+                  <select
+                    id={`cfg-${s.key}`}
+                    value={cfgValues[s.key] ?? ""}
+                    onChange={(e) => setCfgValues({ ...cfgValues, [s.key]: e.target.value })}
+                    className="shrink-0 w-28 border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-950 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                  >
+                    {(s.options || []).map((o: string) => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                ) : (
+                <input
+                  id={`cfg-${s.key}`}
+                  type="number"
+                  min={s.min}
+                  max={s.max}
+                  value={cfgValues[s.key] ?? ""}
+                  onChange={(e) =>
+                    setCfgValues({ ...cfgValues, [s.key]: parseInt(e.target.value || "0", 10) })
+                  }
+                  className="shrink-0 w-28 border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-950 rounded-md px-3 py-1.5 text-sm text-right font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                />
+                )}
+              </div>
+            ))}
+          </div>
+          {Number(cfgValues.chunk_overlap_chars ?? 0) * 2 > Number(cfgValues.chunk_window_chars ?? 2000) && (
+            <div className="text-xs rounded-lg px-3 py-2 border text-amber-700 bg-amber-50 border-amber-200">
+              Overlap is more than half the chunk size; it is capped at half when files are read.
+            </div>
+          )}
+          {cfgMsg && (
+            <div className="text-sm font-medium text-stone-600 bg-stone-50 border border-stone-200 rounded-lg px-3 py-2">{cfgMsg}</div>
+          )}
+          <div className="flex justify-end">
+            <button
+              onClick={handleSaveConfig}
+              disabled={cfgSaving}
+              className="inline-flex items-center gap-2 bg-stone-900 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-stone-800 disabled:opacity-50"
+            >
+              <Save size={14} /> {cfgSaving ? "Saving…" : "Save chunking"}
             </button>
           </div>
         </div>

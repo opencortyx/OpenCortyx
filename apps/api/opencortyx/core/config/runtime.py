@@ -66,6 +66,12 @@ _DEFAULTS = {
     "structured_default_mode": "row",       # 'row' (one node per row) | 'catalog' (schema only)
     "structured_default_max_rows": 1000,    # 0 = every row
     "defer_extraction": True,
+    # ── Chunking (read when a file is read or embedded; files already in keep theirs) ─────────
+    "chunk_window_chars": 2000,        # longest text embedded as one vector; longer is windowed
+    "chunk_overlap_chars": 200,        # how much consecutive windows share
+    "reading_unit_max_chars": 4000,    # a section handed to extraction closes past this
+    "pdf_page_window": settings.LAYOUT_PDF_PAGE_WINDOW,  # PDF pages the layout model reads at once
+    "pdf_table_mode": "fast",          # TableFormer: fast or accurate cell structure
     "defer_embedding": True,
     "embed_concurrency": 8,
     # Number of nodes/texts embedded per batch. 16-32 for laptops (constant low RAM), 128-256 for GPU/high-end servers (max throughput).
@@ -265,6 +271,32 @@ SCHEMA: list[dict[str, Any]] = [
      "help": "How many rows become nodes when no pipeline says otherwise. 0 = every row. A sample "
      "gives the same schema, edge shapes and retrieval behaviour as the full table at a fraction "
      "of the cost; raise it or set 0 when you need complete data."},
+    {"key": "chunk_window_chars", "label": "Chunk size (characters)", "kind": "int",
+     "min": 200, "max": 8000, "group": "Chunking",
+     "help": "Each element a document is read into (a paragraph, a list item, a table, a code block) "
+     "gets its own vector. One longer than this is cut into chunks of at most this size, at sentence "
+     "ends, each with its own vector. Keep it within what the embedding model reads: about 2,000 "
+     "characters for nomic-embed-text, 1,000 for all-MiniLM-L6-v2 (256 tokens). Applies to files "
+     "read after the change."},
+    {"key": "chunk_overlap_chars", "label": "Chunk overlap (characters)", "kind": "int",
+     "min": 0, "max": 2000, "group": "Chunking",
+     "help": "How much text consecutive chunks of one element share, so a sentence cut between two "
+     "chunks is whole in one of them. Usually 10% of the chunk size."},
+    {"key": "reading_unit_max_chars", "label": "Section size for extraction (characters)", "kind": "int",
+     "min": 500, "max": 50000, "group": "Chunking",
+     "help": "Extraction and pipeline steps read a document section by section, from one heading to "
+     "the next. A section is closed early once it holds this much text, so a file with no headings "
+     "(a plain-text RFC) is not handed over as one block."},
+    {"key": "pdf_page_window", "label": "PDF pages per layout pass", "kind": "int",
+     "min": 1, "max": 50, "group": "Chunking",
+     "help": "The layout model reads a PDF this many pages at a time. Memory grows steeply with it: "
+     "measured on a 34-page PDF, 2, 4 and 6 pages peaked at 1.2, 1.5 and 2.0 GB in the same total "
+     "time, and 10 pages passed 4 GB. Lower it if PDF uploads are killed for memory."},
+    {"key": "pdf_table_mode", "label": "PDF table detail", "kind": "select",
+     "options": ["fast", "accurate"], "group": "Chunking",
+     "help": "How the table model reads a PDF table's rows and columns. Measured on 34-41 page PDFs: "
+     "fast was about 12% quicker per page and peaked at 1.4 GB instead of up to 2.4 GB, finding the "
+     "same elements; accurate splits merged or irregular cells more exactly."},
     {"key": "defer_embedding", "label": "Defer embedding to its own queue", "kind": "bool",
      "group": "Extraction",
      "help": "Commit chunks without their vectors and embed them in the background. An embed call "
@@ -414,6 +446,12 @@ def structured_default_max_rows() -> int:
 
 
 def defer_extraction() -> bool: return bool(get("defer_extraction"))
+def chunk_window_chars() -> int: return max(200, min(8000, int(get("chunk_window_chars") or 2000)))
+def chunk_overlap_chars() -> int:
+    return max(0, min(chunk_window_chars() // 2, int(get("chunk_overlap_chars") or 0)))
+def reading_unit_max_chars() -> int: return max(500, int(get("reading_unit_max_chars") or 4000))
+def pdf_page_window() -> int: return max(1, min(50, int(get("pdf_page_window") or 4)))
+def pdf_table_mode() -> str: return "accurate" if get("pdf_table_mode") == "accurate" else "fast"
 def defer_embedding() -> bool: return bool(get("defer_embedding"))
 def embed_concurrency() -> int: return max(1, min(64, int(get("embed_concurrency") or 1)))
 def embed_batch_size() -> int: return max(8, min(512, int(get("embed_batch_size") or 32)))

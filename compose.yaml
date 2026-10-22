@@ -54,6 +54,8 @@ x-api-env: &api-env
 
 x-api-volumes: &api-volumes
   - model_cache:/cache
+  # Uploaded files wait here for their worker; the queue carries a reference (core/uploads.py).
+  - uploads:/data/uploads
   - ${OPENCORTYX_FILES_ROOT:-./data/files}:/host:ro
 
 x-after-setup: &after-setup
@@ -101,6 +103,12 @@ services:
     logging: *logging
     mem_limit: ${REDIS_MEM_LIMIT:-192m}
     memswap_limit: ${REDIS_MEM_LIMIT:-192m}
+    # Configured as the job queue it is. `maxmemory` below the container limit with `noeviction`:
+    # when full, Redis refuses new jobs with an error instead of being killed by the kernel or
+    # silently dropping queued ones. `appendonly`: the queue survives a restart (written every second).
+    command: >-
+      redis-server --maxmemory ${REDIS_MAXMEMORY:-128mb} --maxmemory-policy noeviction
+      --appendonly yes --appendfsync everysec
     volumes:
       - redis_data:/data
     healthcheck:
@@ -134,6 +142,10 @@ services:
     command:
       - --meta_server_addrs=nebula-metad:9559
       - --local_ip=nebula-metad
+      # Judge memory against this container's own limit (cgroup), not the whole machine: by
+      # default it refused queries once the Docker VM was 80% full, failing uploads that
+      # had plenty of room in the graph store itself.
+      - --containerized=true
       - --ws_ip=nebula-metad
       - --port=9559
       - --ws_http_port=19559
@@ -159,6 +171,7 @@ services:
     command:
       - --meta_server_addrs=nebula-metad:9559
       - --local_ip=nebula-storaged
+      - --containerized=true
       - --ws_ip=nebula-storaged
       - --port=9779
       - --ws_http_port=19779
@@ -184,6 +197,7 @@ services:
     command:
       - --meta_server_addrs=nebula-metad:9559
       - --local_ip=nebulagraph
+      - --containerized=true
       - --ws_ip=nebulagraph
       - --port=9669
       - --ws_http_port=19669
@@ -443,3 +457,4 @@ volumes:
   nebula_meta_data:
   nebula_storage_data:
   model_cache:
+  uploads:

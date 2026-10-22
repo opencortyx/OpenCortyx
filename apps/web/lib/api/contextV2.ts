@@ -567,6 +567,14 @@ export interface OutcomeTypeCount {
   examples: string[];
 }
 
+export interface UploadBatch {
+  batch_id: string;
+  total: number;
+  done: number;
+  counts: Record<string, number>;
+  failed: { run_id: string; asset: string; error: string | null }[];
+}
+
 export interface IngestOutcome {
   run_id: string;
   status: string;
@@ -1424,6 +1432,9 @@ export const contextV2Api = {
   /** What a run produced, and what is worth doing about it. Safe to poll while it is running. */
   getOutcome: (runId: string) =>
     apiClient.get<IngestOutcome>(`/api/v2/progress/${runId}/outcome`).then((r) => r.data),
+  /** A batch of uploads at a glance: runs per state, and the failed ones with why. */
+  getUploadBatch: (batchId: string) =>
+    apiClient.get<UploadBatch>(`/api/v2/uploads/batches/${encodeURIComponent(batchId)}`).then((r) => r.data),
 
   // ── Capability platform (Settings → Capabilities) ──────────────────────
   getCapabilities: () => apiClient.get("/api/v2/capabilities").then((r) => r.data),
