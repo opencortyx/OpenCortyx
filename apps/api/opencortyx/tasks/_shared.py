@@ -31,6 +31,48 @@ def _doc_plan_from_features(features):
     return {"asset_sections": "no_assets" not in f}
 
 
+#: Errors of the infrastructure, not of the file: a store restarting, a network hiccup, a write
+#: conflict. A graph store that was unreachable for a few seconds failed every upload the worker
+#: picked up in those seconds, for good; these are retried with backoff instead, over ~16 minutes.
+_TRANSIENT_TEXT = ("rpc failure", "connection refused", "connection reset", "connection aborted",
+                   "timed out", "temporarily unavailable", "broken pipe", "more than one request",
+                   "leader", "no available storage", "storage host")
+TRANSIENT_RETRIES = 6
+
+
+def is_transient(exc) -> bool:
+    """Whether `exc` is an infrastructure hiccup worth waiting out rather than a fault of the file."""
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    from opencortyx.stores.graph.exceptions import GraphStoreConnectionError
+    if isinstance(exc, SoftTimeLimitExceeded):          # the file took too long: retrying repeats it
+        return False
+    if isinstance(exc, (GraphStoreConnectionError, ConnectionError, TimeoutError)):
+        return True
+    text = str(exc).lower()
+    return any(t in text for t in _TRANSIENT_TEXT)
+
+
+def retry_policy(task, exc, default_retries: int = 2) -> tuple[int, int]:
+    """(max_retries, countdown seconds) for a failed ingest job: backoff 15 s .. 8 min for a
+    transient error, the task's usual retry otherwise."""
+    if is_transient(exc):
+        return TRANSIENT_RETRIES, min(480, 15 * 2 ** task.request.retries)
+    return default_retries, 30
+
+
+async def fail_or_wait(rep, task, exc, default_retries: int = 2) -> None:
+    """Mark the run failed, unless the job is about to be retried: then it waits and says why."""
+    if rep is None:
+        return
+    max_retries, delay = retry_policy(task, exc, default_retries)
+    if task.request.retries < max_retries:
+        await rep._patch(status="queued",
+                         error=f"Retrying in {delay} s (attempt {task.request.retries + 2}): {str(exc)[:200]}")
+    else:
+        await rep.finish("failed", error=exc)
+
+
 def _reporter(run_id):
     """Build a ProgressReporter for a run id (or a no-op reporter when there's no run)."""
     from opencortyx.ingest.runs.progress import ProgressReporter

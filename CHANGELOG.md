@@ -37,6 +37,9 @@ missed, and `opencortyx doctor` shows it.
 - Two workers updating the same node at once (every upload touches the day's Date node) failed a
   file with "More than one request trying to add/update/delete one edge/vertex at the same time".
   Such a conflict is retried with backoff now.
+- A graph store that was unreachable for a few seconds failed every upload the worker picked up
+  in that time, for good (two retries 30 s apart). An infrastructure error is now retried with
+  backoff for about 16 minutes while the run shows it is waiting; a fault of the file still fails it.
 - Long PDFs ran the reader out of memory: read whole, a 34-page PDF passed 4 GB and was killed on
   every attempt. PDFs are read 4 pages at a time (`LAYOUT_PDF_PAGE_WINDOW`), peaking near 1.5 GB at
   any length, in the same time.

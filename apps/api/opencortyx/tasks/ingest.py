@@ -15,7 +15,7 @@ from opencortyx.ingest.sources import datalake
 from opencortyx.ingest.pipelines.defaults import resolve_pipeline
 from opencortyx.ingest.extraction.templates import run_relationship_templates_for_source
 from opencortyx.ingest.walkers import walker_for
-from opencortyx.tasks._shared import _anchor_opts, _apply_anchors, _apply_anchors_sql, _close_ingestion, _doc_plan_from_features, _merge_mapping_file_settings, _post_ingest, _reporter, _roll_up_anchors
+from opencortyx.tasks._shared import fail_or_wait, retry_policy, _anchor_opts, _apply_anchors, _apply_anchors_sql, _close_ingestion, _doc_plan_from_features, _merge_mapping_file_settings, _post_ingest, _reporter, _roll_up_anchors
 from opencortyx.tasks.graph import _queue_embed_pass
 from opencortyx.tasks.graph_tree import schedule_tree_index
 
@@ -76,13 +76,14 @@ def v2_ingest_document(self, workspace_id: str, content_b64: str, filename: str,
             return res
         except Exception as e:
             if rep:
-                await rep.finish("failed", error=e)
+                await fail_or_wait(rep, self, e)
             raise
 
     try:
         return async_to_sync(_run)()
     except Exception as exc:
-        raise self.retry(exc=exc, countdown=30, max_retries=2)
+        _max, _delay = retry_policy(self, exc, 2)
+        raise self.retry(exc=exc, countdown=_delay, max_retries=_max)
 
 
 def _queue_extract_pass(workspace_id: str, res, features: str = None,
@@ -148,7 +149,8 @@ def v2_extract_document(self, workspace_id: str, source_id: str, features: str =
         if self.request.retries >= 2:                  # out of retries: the run says so, not "pending"
             async_to_sync(mark_deferred_extraction)(run_id, "failed", error=f"{type(exc).__name__}: {exc}")
             raise
-        raise self.retry(exc=exc, countdown=30, max_retries=2)
+        _max, _delay = retry_policy(self, exc, 2)
+        raise self.retry(exc=exc, countdown=_delay, max_retries=_max)
 
 
 @celery_app.task(bind=True, queue="extraction", name="opencortyx.run_document_pipeline",
@@ -191,7 +193,8 @@ def v2_run_document_pipeline(self, workspace_id: str, source_id: str, stages_jso
             async_to_sync(mark_deferred_extraction)(run_id, "failed", error=f"{type(exc).__name__}: {exc}",
                                                     step=None)
             raise
-        raise self.retry(exc=exc, countdown=30, max_retries=2)
+        _max, _delay = retry_policy(self, exc, 2)
+        raise self.retry(exc=exc, countdown=_delay, max_retries=_max)
 
 
 @celery_app.task(bind=True, queue="graphrag", name="opencortyx.ingest_json")
@@ -240,7 +243,7 @@ def v2_ingest_json(self, workspace_id: str, content_b64: str, filename: str,
             except ParseError as e:
                 # A malformed file is a reported failure: the decoder names the line and column.
                 if rep:
-                    await rep.finish("failed", error=e)
+                    await fail_or_wait(rep, self, e)
                 return {"status": "error", "reason": str(e), "filename": filename}
 
             summary = {k: v for k, v in res.items() if isinstance(v, (int, str, bool))}
@@ -263,13 +266,14 @@ def v2_ingest_json(self, workspace_id: str, content_b64: str, filename: str,
             return res
         except Exception as e:
             if rep:
-                await rep.finish("failed", error=e)
+                await fail_or_wait(rep, self, e)
             raise
 
     try:
         return async_to_sync(_run)()
     except Exception as exc:
-        raise self.retry(exc=exc, countdown=30, max_retries=2)
+        _max, _delay = retry_policy(self, exc, 2)
+        raise self.retry(exc=exc, countdown=_delay, max_retries=_max)
 
 
 @celery_app.task(bind=True, queue="graphrag", name="opencortyx.ingest_json_stream")
@@ -353,13 +357,14 @@ def v2_ingest_json_stream(self, workspace_id: str, host_path: str, opts_json: st
             return res
         except Exception as e:
             if rep:
-                await rep.finish("failed", error=e)
+                await fail_or_wait(rep, self, e, 1)
             raise
 
     try:
         return async_to_sync(_run)()
     except Exception as exc:
-        raise self.retry(exc=exc, countdown=30, max_retries=1)
+        _max, _delay = retry_policy(self, exc, 1)
+        raise self.retry(exc=exc, countdown=_delay, max_retries=_max)
 
 
 @celery_app.task(bind=True, queue="graphrag", name="opencortyx.ingest_document_flow")
@@ -412,13 +417,14 @@ def v2_ingest_document_flow(self, workspace_id: str, content_b64: str, filename:
             return res
         except Exception as e:
             if rep:
-                await rep.finish("failed", error=e)
+                await fail_or_wait(rep, self, e)
             raise
 
     try:
         return async_to_sync(_run)()
     except Exception as exc:
-        raise self.retry(exc=exc, countdown=30, max_retries=2)
+        _max, _delay = retry_policy(self, exc, 2)
+        raise self.retry(exc=exc, countdown=_delay, max_retries=_max)
 
 
 @celery_app.task(bind=True, queue="graphrag", name="opencortyx.ingest_tabular")
@@ -500,13 +506,14 @@ def v2_ingest_tabular(self, workspace_id: str, content_b64: str, filename: str,
             return res
         except Exception as e:
             if rep:
-                await rep.finish("failed", error=e)
+                await fail_or_wait(rep, self, e)
             raise
 
     try:
         return async_to_sync(_run)()
     except Exception as exc:
-        raise self.retry(exc=exc, countdown=30, max_retries=2)
+        _max, _delay = retry_policy(self, exc, 2)
+        raise self.retry(exc=exc, countdown=_delay, max_retries=_max)
 
 
 @celery_app.task(bind=True, queue="graphrag", name="opencortyx.ingest_connector_tabular")
@@ -625,7 +632,8 @@ def v2_ingest_connector_tabular(self, workspace_id: str, connector_id: str, path
     try:
         return async_to_sync(_run)()
     except Exception as exc:
-        raise self.retry(exc=exc, countdown=30, max_retries=2)
+        _max, _delay = retry_policy(self, exc, 2)
+        raise self.retry(exc=exc, countdown=_delay, max_retries=_max)
 
 
 @celery_app.task(bind=True, queue="graphrag", name="opencortyx.ingest_sql")
@@ -696,14 +704,15 @@ def v2_ingest_sql(self, workspace_id: str, dsn: str = None, schema: str = None,
             return res
         except Exception as e:
             if rep:
-                await rep.finish("failed", error=e)
+                await fail_or_wait(rep, self, e)
             await _close_ingestion(ingestion_id, "failed", run_id)
             raise
 
     try:
         return async_to_sync(_run)()
     except Exception as exc:
-        raise self.retry(exc=exc, countdown=30, max_retries=2)
+        _max, _delay = retry_policy(self, exc, 2)
+        raise self.retry(exc=exc, countdown=_delay, max_retries=_max)
 
 
 @celery_app.task(bind=True, queue="graphrag", name="opencortyx.ingest_lake_files")
@@ -796,4 +805,5 @@ def v2_ingest_lake_files(self, workspace_id: str, connector_id: str, collection_
     try:
         return async_to_sync(_run)()
     except Exception as exc:
-        raise self.retry(exc=exc, countdown=30, max_retries=1)
+        _max, _delay = retry_policy(self, exc, 1)
+        raise self.retry(exc=exc, countdown=_delay, max_retries=_max)
