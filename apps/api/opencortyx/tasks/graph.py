@@ -134,3 +134,45 @@ def v2_embed_node(self, workspace_id: str, node_id: str):
         return async_to_sync(_run)()
     except Exception as exc:
         raise self.retry(exc=exc, countdown=10, max_retries=3)
+
+
+#: Nodes younger than this are left to the job that is embedding them right now.
+SWEEP_SETTLE_MINUTES = 10
+#: How far back the sweep looks. Older gaps are a backfill (`index_node_attrs` with backfill=True).
+SWEEP_WINDOW_HOURS = 24
+
+
+@celery_app.task(bind=True, queue="embedding", name="opencortyx.sweep_unembedded", max_retries=0)
+def v2_sweep_unembedded(self):
+    """Embed recent nodes that still have no vectors, in every workspace.
+
+    The safety net under `embed_source`: a job lost in flight (a worker stopped or killed mid-way)
+    left an upload findable by keywords only, with nothing to notice. Run on a schedule; a node is
+    only taken once it is SWEEP_SETTLE_MINUTES old, so it never races the job that is embedding it.
+    Idempotent and cheap when there is nothing to do.
+    """
+    async def _run():
+        from datetime import datetime, timedelta, timezone
+
+        from sqlalchemy import select
+
+        from opencortyx.core.db import V2Session
+        from opencortyx.domain.control import Workspace
+
+        now = datetime.now(timezone.utc)
+        settled = now - timedelta(minutes=SWEEP_SETTLE_MINUTES)
+        async with V2Session() as db:
+            workspaces = [w for (w,) in (await db.execute(select(Workspace.workspace_id))).all()]
+        repo, done = NodeRepo(), {}
+        for oid in workspaces:
+            recent = await repo.find(oid, created_after=now - timedelta(hours=SWEEP_WINDOW_HOURS))
+            old_enough = [n for n in recent if n.created_at and n.created_at.replace(
+                tzinfo=n.created_at.tzinfo or timezone.utc) <= settled]
+            pending = await repo.unembedded(oid, old_enough)
+            if pending:
+                await repo.index_embeddings(oid, pending, embed_batch)
+                done[str(oid)] = len(pending)
+                log.warning("embedding.sweep_recovered", workspace_id=str(oid), nodes=len(pending))
+        return {"status": "ok", "recovered": done}
+
+    return async_to_sync(_run)()

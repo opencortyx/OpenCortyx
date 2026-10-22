@@ -12,7 +12,7 @@ Check it against your Docker VM:
 | Service | last measured | ceiling | notes |
 |---|---|---|---|
 | api | 1136 MiB | 3072m | embedding model plus retrieval working memory; 2048m was OOM-killed under load |
-| embedding-worker | 1034 MiB | 1792m | embedding model |
+| embedding-worker | 1616 MiB | 2304m | embedding model, in one prefork child (1517 MiB after re-embedding 1042 nodes; recycled past 1.5 GB) |
 | extraction-worker | 1041 MiB | 1664m | entity resolution loads the embedding model; 768m was OOM-killed |
 | worker | 234 MiB | 3072m | reads PDFs with Docling (layout + TableFormer models); at 1664m a PDF OOM-killed the child on every attempt |
 | maintenance-worker | 200 MiB | 832m | one child up to 293 MiB, plus the 512 MiB headroom rule below |
@@ -25,7 +25,7 @@ Check it against your Docker VM:
 | mcp | 65 MiB | 192m | |
 | redis | 20 MiB | 192m | |
 | setup | exits | 768m | one-shot: graph `ADD HOSTS` + schema, vector collection, database migrations |
-| **sum** | **4.1 GiB** | **16.81 GiB** | |
+| **sum** | **4.7 GiB** | **16.81 GiB** | |
 
 The graph and vector stores were missing from this table until 2026-09-19: it still described the
 single-Postgres world from ADR-001, which is why the documented ceiling total read 13.25 GiB while
@@ -36,7 +36,7 @@ than working sets — postgres, nebula-storaged and qdrant all grow with the dat
 your own load before trusting them.
 
 What this table is currently telling you: **the ceilings total 16.81 GiB and the measured working
-set is 4.1 GiB.** The stack fits an 8 GiB VM in practice and does not fit on paper, which is exactly
+set is 4.7 GiB.** The stack fits an 8 GiB VM in practice and does not fit on paper, which is exactly
 the condition where the kernel, not Docker, decides what dies. `setup` exits after start-up.
 
 The generation model is not in this table: it runs on the model server you connect (Ollama, LM
@@ -55,7 +55,7 @@ Every ceiling above is a default. Override any of them in `.env`, then run `dock
 | `API_MEM_LIMIT` | 3072m | api |
 | `WORKER_MEM_LIMIT` | 3072m | worker (file reading, Docling) |
 | `EXTRACTION_WORKER_MEM_LIMIT` | 1664m | extraction-worker |
-| `EMBEDDING_WORKER_MEM_LIMIT` | 1792m | embedding-worker |
+| `EMBEDDING_WORKER_MEM_LIMIT` | 2304m | embedding-worker |
 | `MAINTENANCE_WORKER_MEM_LIMIT` | 832m | maintenance-worker |
 | `POSTGRES_MEM_LIMIT`, `QDRANT_MEM_LIMIT` | 1024m | postgres, qdrant |
 | `NEBULAGRAPH_MEM_LIMIT`, `NEBULA_STORAGED_MEM_LIMIT`, `NEBULA_METAD_MEM_LIMIT` | 1024m, 1024m, 512m | the graph store |
@@ -63,6 +63,7 @@ Every ceiling above is a default. Override any of them in `.env`, then run `dock
 | `SETUP_MEM_LIMIT` | 768m | the one-shot setup |
 | `CELERY_WORKER_MAX_MEMORY_KB` | 1500000 | worker, per child |
 | `EXTRACTION_WORKER_MAX_MEMORY_KB` | 1000000 | extraction-worker, per child |
+| `EMBEDDING_WORKER_MAX_MEMORY_KB` | 1500000 | embedding-worker, per child |
 | `MAINTENANCE_WORKER_MAX_MEMORY_KB` | 300000 | maintenance-worker, per child |
 
 Each limit sets both `mem_limit` and `memswap_limit`, so a container never swaps. Two rules keep an

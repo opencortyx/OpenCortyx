@@ -173,7 +173,8 @@ async def system_health(user: CurrentUser = Depends(require_auth)):
     base = (gen.get("base_url") or "").rstrip("/")
     _model_server_name_ = _model_server_name(provider)
     if not gen:
-        add("Model server", "down", "No generation model is connected to this workspace.",
+        add("Model server", "warn", "No generation model is connected to this workspace, so the AI "
+            "Assistant cannot answer yet. Uploads and search work without one.",
             "Add one on the Models page: a server you run (Ollama, LM Studio, vLLM, ... by its "
             "address, e.g.  http://host.docker.internal:11434/v1  for Ollama on this computer) or a "
             "hosted API with its key.")

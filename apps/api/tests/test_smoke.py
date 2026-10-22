@@ -2,6 +2,8 @@
 import io
 import time
 
+import pytest
+
 
 
 def test_health_ok(client, auth_headers):
@@ -19,6 +21,16 @@ def test_auth_me(client, auth_headers):
     r = client.get("/auth/me", headers=auth_headers)
     assert r.status_code == 200
     assert "workspace_id" in r.json()
+
+
+def _answered(a) -> dict:
+    """The /answer body, skipping the test when the workspace has no generation model to answer
+    with: a fresh install has none until one is connected on the Models page."""
+    assert a.status_code == 200, a.text
+    body = a.json()
+    if str(body.get("answer", "")).startswith("No generation model is connected"):
+        pytest.skip("no generation model connected to the test workspace")
+    return body
 
 
 def test_ingest_then_retrieve(client, auth_headers):
@@ -44,9 +56,8 @@ def test_ingest_then_retrieve(client, auth_headers):
     assert status == "completed", f"ingestion did not complete (status={status})"
 
     # retrieve a fact from the freshly-ingested doc
-    a = client.post("/answer", headers=auth_headers, json={"query": "Who founded Quokka Industries?"})
-    assert a.status_code == 200, a.text
-    body = a.json()
+    body = _answered(client.post("/answer", headers=auth_headers,
+                                 json={"query": "Who founded Quokka Industries?"}))
     assert body["abstained"] is False, body
     assert "Naomi Patel" in body["answer"], body["answer"]
 
@@ -54,9 +65,9 @@ def test_ingest_then_retrieve(client, auth_headers):
 def test_question_form_retrieval_regression(client, auth_headers):
     """Regression for the rerank/abstain bug: a natural-language *question* whose answer is in the KB
     must NOT be abstained away by a flaky reranker score. (Keyword-form worked; question-form didn't.)"""
-    a = client.post("/answer", headers=auth_headers, json={"query": "Who founded Quokka Industries?"})
-    assert a.status_code == 200, a.text
-    assert a.json()["abstained"] is False, a.json()
+    body = _answered(client.post("/answer", headers=auth_headers,
+                                 json={"query": "Who founded Quokka Industries?"}))
+    assert body["abstained"] is False, body
 
 
 def test_abstains_when_out_of_kb(client, auth_headers):

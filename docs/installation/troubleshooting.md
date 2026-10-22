@@ -18,6 +18,7 @@ opencortyx logs <service>     # api, worker, extraction-worker, web, mcp, postgr
 | `POSTGRES_PASSWORD is not set` | Run `opencortyx init` in the installation directory |
 | Cannot sign in: invalid email or password, and nobody remembers the admin password | `opencortyx reset-password <email>` sets a new one (it asks for it). The account emails are listed if the one you give does not exist |
 | Port 3000, 8000 or 8001 already in use | Set `OPENCORTYX_WEB_PORT`, `OPENCORTYX_API_PORT` or `OPENCORTYX_MCP_PORT` in `.env`, then `opencortyx up` |
+| Port 5432, 6333 or 9669 already in use (another PostgreSQL, Qdrant or NebulaGraph) | Set `OPENCORTYX_POSTGRES_PORT`, `OPENCORTYX_QDRANT_PORT` or `OPENCORTYX_NEBULA_PORT` in `.env`, then `opencortyx up`. They are bound to `127.0.0.1` only |
 | Build fails with `ERESOLVE` during `npm ci` | You changed web dependencies with a newer npm; reinstall them with Node 20 (`apps/web/.nvmrc`) |
 
 ## Model server
@@ -29,7 +30,19 @@ opencortyx logs <service>     # api, worker, extraction-worker, web, mcp, postgr
 | `doctor`: LLM unreachable, local Ollama | Linux: Ollama must listen on `0.0.0.0` (see [linux.md](linux.md)). All platforms: the server address on the **Models** page uses `host.docker.internal`, not `localhost`, and ends with `/v1` |
 | A model row still points at `http://vllm:8000/v1` | The bundled vLLM server was removed; upgrading deletes those rows. Add the model server you use on the **Models** page |
 | With Ollama, long documents extract poorly or answers ignore part of the context | Ollama's context window is smaller than the 8192 tokens OpenCortyx sends and it drops the rest of the prompt. Raise it to 8192 (see [models.md](../models.md#ollama-lm-studio-vllm-or-another-server-you-run)) |
-| Answers say there is not enough information | Ingestion or extraction may still be running (see **Runs** in the dashboard), or the question is outside your data |
+| Answers say there is not enough information | Ingestion or extraction may still be running (see **Runs** in the dashboard), or the question is outside your data. `doctor`'s **search index** line says whether recent uploads are fully searchable |
+
+## Workers and search
+
+`doctor` checks the background workers and what they have done, besides the services:
+
+| `doctor` line | Means | Fix |
+|---|---|---|
+| `workers`: no worker listening on `<queue>` | That worker is down, so jobs on its queue wait forever | `opencortyx logs <service>` (the one named in brackets), then `opencortyx up` |
+| `queues`: a job has been held over 40 min | A worker was stopped mid-job without handing it back (an old version, or a killed container) | Nothing: Redis hands it out again after 40 minutes. A stopped worker hands its job back at once since 0.1.0-beta.7 |
+| `models`: not downloaded yet | The embedding worker downloads the search models when it starts (about 600 MB) | Wait a few minutes. If it stays, `opencortyx logs embedding-worker` shows why (`models.prefetch`), usually no internet access |
+| `search index`: N recent node(s) without vectors | An upload is findable by keyword but not by meaning yet | A sweep embeds them every 10 minutes. If the number stays, `opencortyx logs embedding-worker` |
+| `reranker`: needs an INSTALL_RERANK=1 image | The workspace chose a sentence-transformers reranker that this image does not have | Pick a fastembed reranker on the **Models** page, or build with `INSTALL_RERANK=1` |
 
 ## Memory
 

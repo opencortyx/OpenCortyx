@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+An upload could stay unsearchable by meaning, with nothing saying so: updating restarted the
+embedding worker mid-job, and the job sat unacknowledged for 40 minutes. Questions then found only
+keyword matches. Workers now hand their jobs back when stopped, a sweep catches anything still
+missed, and `opencortyx doctor` shows it.
+
+### Fixed
+- A stopped or updated worker hands its running jobs back to the queue at once (Celery soft
+  shutdown), so another worker starts them in seconds. Before, Docker's stop signal went to `sh`,
+  which did not pass it on, so Celery was killed mid-job every time.
+- The embedding worker runs one process instead of two threads: a thread cannot be cancelled, so
+  it could not hand its job back. Its child is recycled between jobs past 1.5 GB
+  (`EMBEDDING_WORKER_MAX_MEMORY_KB`).
+- A fresh install reported its health as down until a generation model was connected. That is a
+  warning now: uploads and search work without one; only the AI Assistant needs it.
+
+### Added
+- Every 10 minutes, a sweep embeds any node from the last 24 hours that is still without vectors.
+- The embedding worker downloads the search models (embedding and keyword) when it starts, so the
+  first upload on a new installation no longer waits on a 600 MB download inside its job.
+- `opencortyx doctor` checks:
+  - that a worker listens on every queue;
+  - jobs waiting and running, warning about one held over 40 minutes;
+  - that the models in use are downloaded;
+  - that recent uploads have vectors;
+  - which reranker each workspace uses.
+  See [Troubleshooting](docs/installation/troubleshooting.md#workers-and-search).
+- `OPENCORTYX_POSTGRES_PORT`, `OPENCORTYX_QDRANT_PORT` and `OPENCORTYX_NEBULA_PORT` change the
+  database ports when another server already uses them.
+- `tests/integration/test_hybrid_retrieval.py`: one question aimed at each search surface (vectors,
+  keywords, identifiers, misspelt names, entities, dates, types, the graph), each checking the
+  answer is found and that its surface returned results.
+
 ## 0.1.0-beta.6 - 2026-10-17
 
 Security fixes from an audit, and a sturdier Windows installer. (0.1.0-beta.5 was not published: its

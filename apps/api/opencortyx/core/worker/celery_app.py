@@ -215,6 +215,11 @@ celery_app.conf.update(
             "task": "opencortyx.audit_integrity",
             "schedule": float(getattr(settings, "INTEGRITY_AUDIT_SECONDS", 600.0) or 600.0),
         },
+        # Embeds what a lost job left without vectors (tasks/graph.py, v2_sweep_unembedded).
+        "embedding-sweep-tick": {
+            "task": "opencortyx.sweep_unembedded",
+            "schedule": 600.0,
+        },
     },
     task_soft_time_limit=settings.TASK_SOFT_TIME_LIMIT,
     task_time_limit=settings.TASK_TIME_LIMIT,
@@ -222,6 +227,17 @@ celery_app.conf.update(
 
     task_acks_late=True,
     task_reject_on_worker_lost=True,
+
+    # Stopping a worker (an update, a restart) must not strand the job it is running. Docker stops
+    # the workers with SIGQUIT (compose.yaml), which starts Celery's soft shutdown: running jobs get
+    # this many seconds to finish, then are cancelled and their messages put straight back on the
+    # queue for the next worker. Before, the worker was killed after Docker's grace period with the
+    # job unacknowledged, and Redis only re-delivered it after `visibility_timeout` (40 minutes): an
+    # upload's embeddings, interrupted by an update, simply did not exist for that long.
+    # Needs the prefork pool: soft shutdown ends by cancelling the running jobs, which a thread cannot
+    # be ("does not implement kill_job"), so every worker runs processes.
+    worker_soft_shutdown_timeout=20.0,
+    worker_enable_soft_shutdown_on_idle=True,
 
     worker_prefetch_multiplier=1,
 
@@ -345,6 +361,32 @@ def _sweep(d: dict) -> None:
     if len(d) > _TASK_STATE_MAX:
         for k in list(d)[: len(d) - _TASK_STATE_MAX // 2]:
             d.pop(k, None)
+
+
+@_signals.worker_ready.connect
+def _prefetch_models(sender=None, **_kw):
+    """The embedding worker downloads the models it will need as soon as it starts, in the background.
+
+    On a fresh install the first upload otherwise waited on a 520 MB download inside its embedding
+    job, the longest stretch in which a restart could cut the job off. Never fatal: without network
+    the models are fetched on first use, as before.
+    """
+    try:
+        queues = {q.name for q in sender.app.amqp.queues.consume_from.values()}
+    except Exception:                                         # noqa: BLE001
+        return
+    if "embedding" not in queues:
+        return
+    import threading
+
+    def run():
+        try:
+            from opencortyx.core.inference.prefetch import prefetch_models
+            prefetch_models()
+        except Exception as e:                                # noqa: BLE001
+            print(f"model prefetch skipped: {type(e).__name__}: {e}", flush=True)
+
+    threading.Thread(target=run, daemon=True, name="model-prefetch").start()
 
 
 @_signals.worker_init.connect

@@ -120,13 +120,150 @@ async def check_embedding() -> str:
     return OK
 
 
-def check_reranker() -> str:
+async def check_reranker() -> str:
+    """The rerank models the workspaces chose: a fastembed one must be downloaded; a
+    sentence-transformers one needs the library, which only an INSTALL_RERANK=1 image has."""
+    from opencortyx.core.inference.embedding import cross_encoder_installed
+    from opencortyx.core.inference.fastembed_models import describe, is_downloaded
+    rows = await _default_rows("rerank")
+    if not rows:
+        _line(OK, "reranker", "none chosen; retrieval ranks without one")
+        return OK
+    worst = OK
+    for label, provider, model_id in rows:
+        if provider == "fastembed":
+            d = describe("rerank", model_id)
+            if d and is_downloaded(d):
+                _line(OK, "reranker", f"{label}: {model_id} (fastembed, downloaded)")
+            else:
+                _line(WARN, "reranker", f"{label}: {model_id} not downloaded yet - open Models, edit it "
+                                        "and press Download (or it downloads on first search)")
+                worst = WARN
+        elif provider in ("sentence-transformers", "sentence_transformers", "st"):
+            if cross_encoder_installed():
+                _line(OK, "reranker", f"{label}: {model_id} (sentence-transformers)")
+            else:
+                _line(WARN, "reranker", f"{label}: {model_id} needs an INSTALL_RERANK=1 image; "
+                                        "retrieval ranks without it (or pick a fastembed reranker)")
+                worst = WARN
+        else:
+            _line(OK, "reranker", f"{label}: {model_id} ({provider})")
+    return worst
+
+
+async def _default_rows(role: str) -> list:
+    """(workspace label, provider, model_id) of each workspace's default model for `role`."""
+    from sqlalchemy import text
+
+    from opencortyx.core.db import V2Session
+    from opencortyx.domain.base import V2_SCHEMA
+    async with V2Session() as db:
+        rows = (await db.execute(text(
+            f"SELECT coalesce(w.name, ''), m.provider, m.model_id FROM {V2_SCHEMA}.model m "
+            f"LEFT JOIN {V2_SCHEMA}.workspace w ON w.workspace_id = m.workspace_id "
+            f"WHERE m.role = :role AND m.is_default"), {"role": role})).all()
+    return [(name or "workspace", (prov or "").lower(), mid) for name, prov, mid in rows]
+
+
+async def check_models() -> str:
+    """Every model the workspaces use and OpenCortyx runs itself is downloaded. The embedding worker
+    fetches them when it starts; until it has, the first upload waits on the download."""
+    from opencortyx.core.inference import hf_hub
+    from opencortyx.core.inference.fastembed_models import describe, is_downloaded
+    worst, missing, ready = OK, [], []
+    for label, provider, model_id in await _default_rows("embedding"):
+        d = describe("embedding", model_id) if provider == "fastembed" else None
+        if d is not None:
+            (ready if is_downloaded(d) else missing).append(model_id)
+    for role in ("generation", "extraction", "utility"):
+        for label, provider, model_id in await _default_rows(role):
+            if provider == "transformers":
+                (ready if hf_hub.is_downloaded(model_id) else missing).append(model_id)
+    if missing:
+        _line(WARN, "models", f"not downloaded yet: {', '.join(sorted(set(missing)))} (the embedding "
+                              "worker fetches them; check its log if this persists)")
+        worst = WARN
+    else:
+        _line(OK, "models", f"downloaded: {', '.join(sorted(set(ready))) or 'none needed'}")
+    return worst
+
+
+#: The queues every installation runs, and the worker that consumes each (compose.yaml).
+_QUEUES = {"graphrag": "worker", "extraction": "extraction-worker", "embedding": "embedding-worker",
+           "resolution": "embedding-worker", "maintenance": "maintenance-worker"}
+
+
+def check_workers() -> str:
+    """Each queue has a live worker listening on it."""
+    from opencortyx.core.worker.celery_app import celery_app
     try:
-        import sentence_transformers  # noqa: F401
-    except Exception:  # noqa: BLE001
-        _line(WARN, "reranker", "not installed (INSTALL_RERANK=0); retrieval ranks without it")
+        replies = celery_app.control.inspect(timeout=5).active_queues() or {}
+    except Exception as e:                                              # noqa: BLE001
+        _line(FAIL, "workers", f"could not ask the workers: {str(e)[:160]}")
+        return FAIL
+    served = {q["name"] for qs in replies.values() for q in qs}
+    missing = [f"{q} ({svc})" for q, svc in _QUEUES.items() if q not in served]
+    if missing:
+        _line(FAIL, "workers", f"no worker listening on: {', '.join(missing)} - see: opencortyx logs <service>")
+        return FAIL
+    _line(OK, "workers", f"{len(replies)} worker(s) answering on {', '.join(sorted(served & set(_QUEUES)))}")
+    return OK
+
+
+def check_queues() -> str:
+    """Jobs waiting and running. A running job older than the broker's visibility timeout was lost
+    (its worker stopped); Redis hands it out again, but it should not happen."""
+    import time
+
+    import redis
+
+    from opencortyx.core.config import settings
+    try:
+        r = redis.Redis.from_url(settings.CELERY_BROKER_URL, socket_timeout=5)
+        waiting = {q: r.llen(q) for q in _QUEUES}
+        running = r.zrange("unacked_index", 0, -1, withscores=True)
+    except Exception as e:                                              # noqa: BLE001
+        _line(FAIL, "queues", f"broker unreachable: {str(e)[:160]}")
+        return FAIL
+    now = time.time()
+    oldest = max((now - ts for _, ts in running), default=0)
+    lost_after = settings.TASK_TIME_LIMIT + 300
+    detail = (f"{sum(waiting.values())} waiting ({', '.join(f'{q} {n}' for q, n in waiting.items() if n) or 'none'}), "
+              f"{len(running)} held by workers" + (f", oldest {int(oldest // 60)} min" if running else ""))
+    if oldest > lost_after:
+        _line(WARN, "queues", detail + f" - a job has been held over {lost_after // 60} min: its worker "
+                                       "was probably stopped mid-job; Redis will hand it out again")
         return WARN
-    _line(OK, "reranker", "sentence-transformers available")
+    _line(OK, "queues", detail)
+    return OK
+
+
+async def check_search_index() -> str:
+    """Recent nodes that still have no vectors: findable by keywords only. The embedding sweep runs
+    every 10 minutes and fills them; a count that stays is a stuck embedding worker."""
+    from datetime import datetime, timedelta, timezone
+
+    from opencortyx.core.substrate import NodeRepo
+    from opencortyx.tasks.graph import SWEEP_SETTLE_MINUTES, SWEEP_WINDOW_HOURS
+    now = datetime.now(timezone.utc)
+    settled = now - timedelta(minutes=SWEEP_SETTLE_MINUTES)
+    repo, total = NodeRepo(), 0
+    from sqlalchemy import text
+
+    from opencortyx.core.db import V2Session
+    from opencortyx.domain.base import V2_SCHEMA
+    async with V2Session() as db:
+        workspaces = [w for (w,) in (await db.execute(text(f"SELECT workspace_id FROM {V2_SCHEMA}.workspace"))).all()]
+    for oid in workspaces:
+        recent = await repo.find(oid, created_after=now - timedelta(hours=SWEEP_WINDOW_HOURS))
+        settled_nodes = [n for n in recent if n.created_at and
+                         n.created_at.replace(tzinfo=n.created_at.tzinfo or timezone.utc) <= settled]
+        total += len(await repo.unembedded(oid, settled_nodes))
+    if total:
+        _line(WARN, "search index", f"{total} recent node(s) without vectors (keyword search only); the "
+                                    "embedding sweep fills them within 10 minutes")
+        return WARN
+    _line(OK, "search index", "every recent node has vectors")
     return OK
 
 
@@ -155,8 +292,10 @@ async def _check_store(name: str, store) -> str:
 
 
 async def main() -> int:
-    results = [await check_database(), check_redis(), await check_llm(), await check_embedding(),
-               check_reranker(), await check_graph_store(), await check_vector_store()]
+    results = [await check_database(), check_redis(), check_workers(), check_queues(),
+               await check_models(), await check_llm(), await check_embedding(),
+               await check_reranker(), await check_graph_store(), await check_vector_store(),
+               await check_search_index()]
     failed = results.count(FAIL)
     print(f"\n  {results.count(OK)} ok, {results.count(WARN)} warnings, {failed} failed")
     return 1 if failed else 0
