@@ -92,6 +92,8 @@ def node_matches(node: Node, q: NodeQuery) -> bool:
             return False
     if q.created_after is not None and (node.created_at is None or node.created_at <= q.created_after):
         return False
+    if q.created_before is not None and (node.created_at is None or node.created_at > q.created_before):
+        return False
     return True
 
 

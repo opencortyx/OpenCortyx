@@ -278,10 +278,8 @@ async def check_search_index() -> str:
     async with V2Session() as db:
         workspaces = [w for (w,) in (await db.execute(text(f"SELECT workspace_id FROM {V2_SCHEMA}.workspace"))).all()]
     for oid in workspaces:
-        recent = await repo.find(oid, created_after=now - timedelta(hours=SWEEP_WINDOW_HOURS))
-        settled_nodes = [n for n in recent if n.created_at and
-                         n.created_at.replace(tzinfo=n.created_at.tzinfo or timezone.utc) <= settled]
-        total += len(await repo.unembedded(oid, settled_nodes))
+        total += len(await repo.unembedded_ids(oid, created_after=now - timedelta(hours=SWEEP_WINDOW_HOURS),
+                                               created_before=settled))
     if total:
         _line(WARN, "search index", f"{total} recent node(s) without vectors (keyword search only); the "
                                     "embedding sweep fills them within 10 minutes")

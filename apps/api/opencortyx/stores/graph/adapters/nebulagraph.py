@@ -75,6 +75,11 @@ _NODE_COLUMNS = ", ".join(name for name, _ in _NODE_PROPS)
 _EDGE_COLUMNS = ", ".join(name for name, _ in _EDGE_PROPS)
 _BATCH = 200
 _IN_CHUNK = 500
+#: Rows per read (per partition) when a pass covers a whole workspace or a wide window of it. The
+#: graph service frees memory only every few seconds: one answer of ~115,000 rows, ids only, held
+#: ~400 MB of its 1 GB, and a few such passes at once took it down. Measured over 179,000 nodes, a
+#: whole pass peaks at ~620 MB with 2000, ~250 MB with 500 and ~120 MB with 200 (and takes longer).
+_SLICE = 500
 #: NebulaGraph refuses a write to a vertex or edge another request is writing at that moment ("More
 #: than one request trying to add/update/delete one edge/vertex at the same time"). That is optimistic
 #: concurrency, and the answer is to try again shortly: every ingest touches the same hub vertices (the
@@ -105,6 +110,19 @@ def _vid(value) -> str:
 
 def _list(values) -> str:
     return "[" + ", ".join(_lit(v) for v in values) + "]"
+
+
+#: Values per lookup when matching one of several values on an index.
+_ANY_CHUNK = 100
+
+
+def _any_of(base: str, field: str, values) -> str:
+    """`base AND field IN values`, written as one exact match per value. NebulaGraph answers an OR of
+    exact index matches with one index lookup each, but an IN on an index's second column (after
+    `workspace_id`) with more than one value scans the workspace's whole index and filters it in the
+    graph service: measured on 179,000 nodes, 1.6 s and up to ~365 MB for 5 ids, against 0.05 s.
+    Every subtree walk and id lookup paid that, which is what kept the graph service falling over."""
+    return " OR ".join(f"({base} AND {field} == {_lit(v)})" for v in values)
 
 
 def _rank(e: Edge) -> int:
@@ -579,10 +597,10 @@ class NebulaGraphStore(GraphStore):
                      or query.entity_type is not None or query.ids is not None)
         if query.source_refs is not None:
             refs = [str(r) for r in query.source_refs if r is not None]
-            clauses = [f"{base} AND node.source_ref IN {_list(chunk)}" for chunk in _chunks(refs, _IN_CHUNK)]
+            clauses = [_any_of(base, "node.source_ref", chunk) for chunk in _chunks(refs, _ANY_CHUNK)]
             return clauses, exact and not any((query.types, query.exact_types, query.collection_ids,
                                                query.source_key, query.status, query.label,
-                                               query.created_after))
+                                               query.created_after, query.created_before))
         if query.source_key is not None:
             key = str(query.source_key)
             return [f"{base} AND node.source_key == {_lit(key[:_KEY_LEN])}"], False
@@ -593,20 +611,23 @@ class NebulaGraphStore(GraphStore):
             return [f"{base} AND node.name_key == {_lit(query.name_key[:_KEY_LEN])}"], False
         if query.types:
             wanted = type_variants(*query.types)
-            clauses = [f"{base} AND node.base_type IN {_list(wanted)}", f"{base} AND node.type IN {_list(wanted)}"]
+            clauses = [_any_of(base, "node.base_type", wanted), _any_of(base, "node.type", wanted)]
             return clauses, False
         if query.exact_types:
-            return [f"{base} AND node.type IN {_list(list(query.exact_types))}"], \
-                exact and not any((query.collection_ids, query.status, query.created_after))
+            return [_any_of(base, "node.type", list(query.exact_types))], \
+                exact and not any((query.collection_ids, query.status, query.created_after,
+                                   query.created_before))
         if query.collection_ids:
             ids = [str(c) for c in query.collection_ids]
-            return [f"{base} AND node.collection_id IN {_list(ids)}"], \
-                exact and not any((query.status, query.created_after))
+            return [_any_of(base, "node.collection_id", ids)], \
+                exact and not any((query.status, query.created_after, query.created_before))
         if query.status is not None:
             return [f"{base} AND node.status == {_lit(query.status)}"], \
-                exact and query.created_after is None
-        if query.created_after is not None:
-            return [f"{base} AND node.created_at > {_micros(query.created_after)}"], exact
+                exact and query.created_after is None and query.created_before is None
+        if query.created_after is not None or query.created_before is not None:
+            since = "" if query.created_after is None else f" AND node.created_at > {_micros(query.created_after)}"
+            until = "" if query.created_before is None else f" AND node.created_at <= {_micros(query.created_before)}"
+            return [f"{base}{since}{until}"], exact
         return [base], exact
 
     async def _lookup_ids(self, workspace_id, query: NodeQuery) -> list[str]:
@@ -631,6 +652,57 @@ class NebulaGraphStore(GraphStore):
         else:
             candidates = await self.get_nodes(workspace_id, await self._lookup_ids(workspace_id, query))
         return q.select_nodes(candidates, query)
+
+    async def _created_slices(self, workspace_id, yields: str, after=None, before=None) -> list:
+        """Rows for the workspace's nodes created in (after, before], read as `node_by_created` index
+        ranges of at most `_SLICE` rows: a range whose capped read comes back full is halved and read
+        again. Bounded answers whatever the workspace's size, at a few wasted reads per split."""
+        base = f"node.workspace_id == {_lit(str(workspace_id))}"
+        lo = int(_micros(after) or 0) if after is not None else -1
+        hi = (int(_micros(before) or 0) if before is not None
+              else int(_micros(datetime.now(timezone.utc)) or 0) + 86_400_000_000)
+        out: list = []
+        todo = [(lo, hi)]
+        while todo:
+            a, b = todo.pop()
+            divisible = b - a > 1            # a single microsecond is read whole: it cannot be split
+            stmt = f"LOOKUP ON node WHERE {base} AND node.created_at > {a} AND node.created_at <= {b} YIELD {yields}"
+            rows = await self._rows(stmt + (f" | LIMIT {_SLICE + 1};" if divisible else ";"))
+            if divisible and len(rows) > _SLICE:
+                mid = (a + b) // 2
+                todo += [(mid, b), (a, mid)]
+                continue
+            out += rows
+        return out
+
+    async def find_node_ids(self, workspace_id, query: NodeQuery) -> list[str]:
+        if query == NodeQuery(created_after=query.created_after, created_before=query.created_before):
+            rows = await self._created_slices(workspace_id, "id(vertex) AS vid",
+                                              query.created_after, query.created_before)
+            return [r[0] for r in rows]
+        clauses, exact = self._lookup_where(workspace_id, query)
+        if exact and query.ids is None and not query.order_by and query.limit is None:
+            return await self._lookup_ids(workspace_id, query)       # the index answers; no FETCH
+        return await super().find_node_ids(workspace_id, query)
+
+    async def node_outlines(self, workspace_id) -> list[Node]:
+        org = uuid.UUID(str(workspace_id))
+        rows = await self._created_slices(workspace_id, "id(vertex) AS vid, node.type AS t, node.base_type AS b, "
+                                                        "node.label AS l, node.source_ref AS s, node.status AS st")
+        return [Node(id=uuid.UUID(vid), workspace_id=org, type=t, label=label, source_ref=q.as_uuid(ref),
+                     properties={"__base_type": base or t, "__status": st or "active"})
+                for vid, t, base, label, ref, st in rows]
+
+    async def edge_ends(self, workspace_id, exclude_types: Sequence[str] = ()) -> list[tuple[str, str]]:
+        # Each edge once, from its source node, a slice of nodes at a time: no answer holds all edges.
+        org, skip, out = _lit(str(workspace_id)), set(exclude_types), []
+        ids = [r[0] for r in await self._created_slices(workspace_id, "id(vertex) AS vid")]
+        for batch in _chunks(ids, _IN_CHUNK):
+            rows = await self._rows("GO FROM " + ", ".join(_vid(i) for i in batch)
+                                    + f" OVER rel WHERE rel.workspace_id == {org} "
+                                    "YIELD src(edge) AS s, dst(edge) AS d, rel.type AS t;")
+            out += [(src, dst) for src, dst, t in rows if t not in skip]
+        return out
 
     async def count_nodes(self, workspace_id, query: NodeQuery | None = None) -> int:
         query = query or NodeQuery()
@@ -756,8 +828,8 @@ class NebulaGraphStore(GraphStore):
         org = _lit(str(workspace_id))
         edges: list[Edge] = []
         if query.ids is not None:
-            for batch in _chunks([str(i) for i in query.ids], _IN_CHUNK):
-                rows = await self._rows(f"LOOKUP ON rel WHERE rel.workspace_id == {org} AND rel.id IN {_list(batch)} "
+            for batch in _chunks([str(i) for i in query.ids], _ANY_CHUNK):
+                rows = await self._rows(f"LOOKUP ON rel WHERE {_any_of(f'rel.workspace_id == {org}', 'rel.id', batch)} "
                                         "YIELD src(edge) AS s, dst(edge) AS d, properties(edge) AS p;")
                 edges += [e for e in (_edge_from(*row) for row in rows) if e]
         elif query.source_ids is not None or query.target_ids is not None or query.node_ids is not None:
@@ -771,7 +843,7 @@ class NebulaGraphStore(GraphStore):
         else:
             where = f"rel.workspace_id == {org}"
             if query.types:
-                where += f" AND rel.type IN {_list(list(query.types))}"
+                where = _any_of(where, "rel.type", list(query.types))
             rows = await self._rows(f"LOOKUP ON rel WHERE {where} "
                                     "YIELD src(edge) AS s, dst(edge) AS d, properties(edge) AS p;")
             edges = [e for e in (_edge_from(*row) for row in rows) if e]

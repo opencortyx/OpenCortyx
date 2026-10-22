@@ -51,6 +51,7 @@ TAGS_PER_ASSET = 20
 EDGE_CAP = 2000             # relationships returned with one page, for drawing links between items
 PARTS_CACHE_S = 120         # an opened asset's parts are listed once, then paged from memory
 LINKED_SCAN = 20000         # past this many parts, what they link to is not listed (too costly)
+ASSET_PAGE = 200            # assets read in full at a time by the index pass
 
 #: Time bookkeeping: every node has a CREATED_ON edge to its calendar Date node. Following those
 #: would make one Date the neighbour of everything written that day.
@@ -164,9 +165,10 @@ def _page(offset: int, limit: int | None) -> tuple[int, int]:
 async def reindex(workspace_id) -> dict:
     """Rebuild an organization's tree index from its graph.
 
-    Assets come from an index lookup (their types). Unconnected parts need the whole graph — nodes,
-    edges and provenance pointers — joined with union-find: O(graph) memory and one read of every
-    edge, but no clustering, so it runs in a fraction of the time the community view takes."""
+    Unconnected parts need the whole graph — nodes, edges and provenance pointers — joined with
+    union-find, but only its outline: ids, types, labels and the ends of each edge. Reading whole
+    nodes, text included, for every pass ran the graph store out of memory once a thousand files
+    were in it. Only assets, which the index describes, are then read in full, a page at a time."""
     org = uuid.UUID(str(workspace_id))
     started, t0 = datetime.now(timezone.utc), time.monotonic()
     await _run_row(org, status="running", started_at=started, finished_at=None, error=None)
@@ -175,14 +177,17 @@ async def reindex(workspace_id) -> dict:
         repo = NodeRepo()
         # The central node IS the root. Left in, it would be drawn again as an unconnected part, and
         # anything hung from it would glue every part it touches into one.
-        nodes = [n for n in await repo.find(org)
+        nodes = [n for n in await repo.outlines(org)
                  if n.type not in CALENDAR_TYPES and node_status(n) not in HIDDEN_STATUSES
                  and n.id != org]
-        edges = [e for e in await repo.edges(org) if e.type not in BOOKKEEPING_EDGES]
+        edges = await repo.edge_ends(org, exclude_types=sorted(BOOKKEEPING_EDGES))
         async with V2Session() as s:
             collections = {str(c.id): c.name for c in
                            (await s.execute(select(Collection).where(Collection.workspace_id == org))).scalars()}
-        assets = [n for n in nodes if is_asset_node(n)]
+        asset_ids = [n.id for n in nodes if is_asset_node(n)]
+        assets = []
+        for i in range(0, len(asset_ids), ASSET_PAGE):
+            assets += await repo.get_many(org, asset_ids[i:i + ASSET_PAGE])
         roots = unconnected_parts(nodes, edges)
         await _replace_index(org, assets, collections, roots)
         result = {"nodes": len(nodes), "assets": len(assets), "roots": len(roots)}
@@ -196,9 +201,16 @@ async def reindex(workspace_id) -> dict:
 
 def unconnected_parts(nodes, edges) -> list[dict]:
     """The connected parts of the graph that hold no asset, largest first, each named after its
-    best-connected node. A provenance pointer (`source_ref`) joins a node to its source like an edge
-    does: a claim read from a chunk belongs to the chunk's asset even with no edge between them."""
+    best-connected node: the most links within `edges`. A provenance pointer (`source_ref`) joins a
+    node to its source like an edge does: a claim read from a chunk belongs to the chunk's asset even
+    with no edge between them. `edges` are Edges or (source id, target id) pairs."""
     parent = {str(n.id): str(n.id) for n in nodes}
+    ends = [(str(e[0]), str(e[1])) if isinstance(e, tuple) else (str(e.source_id), str(e.target_id))
+            for e in edges]
+    links: Counter = Counter()
+    for a, b in ends:
+        links[a] += 1
+        links[b] += 1
 
     def find(x: str) -> str:
         while parent[x] != x:
@@ -212,8 +224,8 @@ def unconnected_parts(nodes, edges) -> list[dict]:
             if ra != rb:
                 parent[ra] = rb
 
-    for e in edges:
-        union(str(e.source_id), str(e.target_id))
+    for a, b in ends:
+        union(a, b)
     for n in nodes:
         if n.source_ref:
             union(str(n.id), str(n.source_ref))
@@ -225,7 +237,7 @@ def unconnected_parts(nodes, edges) -> list[dict]:
             parts[r].append(n)
     out = []
     for members in parts.values():
-        rep = min(members, key=lambda n: (-(n.degree or 0), (n.label or "").lower(), str(n.id)))
+        rep = min(members, key=lambda n: (-links[str(n.id)], (n.label or "").lower(), str(n.id)))
         out.append({"node_id": rep.id, "label": (rep.label or rep.type or "")[:300], "type": (rep.type or "")[:80],
                     "size": len(members), "types": dict(Counter(n.type for n in members).most_common(12))})
     out.sort(key=lambda r: (-r["size"], r["label"].lower(), str(r["node_id"])))

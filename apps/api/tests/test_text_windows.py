@@ -38,3 +38,11 @@ def test_a_sentence_longer_than_a_window_is_still_cut_within_the_limit():
 def test_window_points_have_their_own_ids_and_the_first_keeps_its_old_one():
     assert point_id("n", "text") == point_id("n", "text", 0)
     assert len({point_id("n", "text", p) for p in range(5)}) == 5
+
+
+def test_without_overlap_each_sentence_is_in_one_window():
+    # The paragraph split into nodes: [-0:] once meant "all of it", repeating each window in the next.
+    text = " ".join(f"Sentence {i} is about a part of the system." for i in range(40))
+    windows = text_windows(text, 200, overlap=0)
+    assert len(windows) > 1 and all(len(w) <= 200 for w in windows)
+    assert " ".join(windows) == text

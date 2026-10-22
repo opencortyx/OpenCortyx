@@ -282,3 +282,71 @@ def test_the_dates_every_write_stamps_are_never_compared():
     from opencortyx.resolution.spec import STAMPED
     assert set(STAMPED) == set(AUDIT_DATE_KEYS)
     assert SPEC.compared(["region", "created_date", "modified_date"]) == ["region"]
+
+
+class _JoinStore:
+    """The two questions the resolution task asks before resolving."""
+    def __init__(self, pending=False, waiting=False):
+        self.pending, self._waiting = pending, waiting
+
+    async def wait_for_embeddings(self, org, src):
+        self._waiting = self._waiting or self.pending
+        return self.pending
+
+    async def waiting(self, org, src):
+        return self._waiting
+
+
+@pytest.fixture
+def resolve_task(monkeypatch):
+    import opencortyx.resolution as resolution_pkg
+    from opencortyx.resolution import engine
+    from opencortyx.tasks.resolution import v2_resolve_asset
+    resolved = []
+
+    async def fake_resolve(org, src):
+        resolved.append(str(src))
+        return {"types": {}}
+
+    def run(store, **kw):
+        monkeypatch.setattr(engine, "Store", lambda: store)
+        monkeypatch.setattr(resolution_pkg, "resolve_asset", fake_resolve)
+        return v2_resolve_asset(str(uuid.uuid4()), str(SRC), **kw)
+    return run, resolved
+
+
+SRC = uuid.uuid4()
+
+
+def test_an_embedded_asset_is_resolved_at_once(resolve_task):
+    run, resolved = resolve_task
+    run(_JoinStore(pending=False))
+    assert resolved == [str(SRC)]
+
+
+def test_an_asset_without_vectors_waits_for_them_without_polling(resolve_task, monkeypatch):
+    from opencortyx.tasks.resolution import v2_resolve_asset
+    run, resolved = resolve_task
+    asked = {}
+
+    class Scheduled(Exception):
+        pass
+
+    def retry(**kw):
+        asked.update(kw)
+        return Scheduled()
+    monkeypatch.setattr(v2_resolve_asset, "retry", retry)
+    store = _JoinStore(pending=True)
+    with pytest.raises(Scheduled):
+        run(store)
+    assert resolved == [] and store._waiting
+    # One backstop, half an hour on, not a re-check every few seconds.
+    assert asked["countdown"] == 30 * 60 and asked["kwargs"] == {"backstop": True}
+
+
+def test_the_backstop_skips_an_asset_resolved_since_and_resolves_one_still_waiting(resolve_task):
+    run, resolved = resolve_task
+    assert run(_JoinStore(waiting=False), backstop=True)["status"] == "skipped"
+    assert resolved == []
+    run(_JoinStore(waiting=True), backstop=True)
+    assert resolved == [str(SRC)]

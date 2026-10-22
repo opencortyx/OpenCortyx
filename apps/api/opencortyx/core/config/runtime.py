@@ -67,14 +67,14 @@ _DEFAULTS = {
     "structured_default_max_rows": 1000,    # 0 = every row
     "defer_extraction": True,
     # ── Chunking (read when a file is read or embedded; files already in keep theirs) ─────────
-    "chunk_window_chars": 2000,        # longest text embedded as one vector; longer is windowed
-    "chunk_overlap_chars": 200,        # how much consecutive windows share
+    "chunk_window_chars": 800,         # longest paragraph kept as one node / text embedded as one vector
+    "chunk_overlap_chars": 80,         # how much consecutive windows of a table or code block share
     "reading_unit_max_chars": 4000,    # a section handed to extraction closes past this
     "pdf_ocr": settings.LAYOUT_OCR,    # read scanned PDF pages and images with OCR
     "defer_embedding": True,
     "embed_concurrency": 8,
-    # Number of nodes/texts embedded per batch. 16-32 for laptops (constant low RAM), 128-256 for GPU/high-end servers (max throughput).
-    "embed_batch_size": 32,
+    "embed_batch_size": 128,           # nodes per embedding pass
+    "embed_run_chars": settings.FASTEMBED_MAX_BATCH_CHARS,   # most characters one model run holds
 }
 
 # UI rendering schema for the editable knobs (label / kind / bounds / help / group).
@@ -272,15 +272,16 @@ SCHEMA: list[dict[str, Any]] = [
      "of the cost; raise it or set 0 when you need complete data."},
     {"key": "chunk_window_chars", "label": "Chunk size (characters)", "kind": "int",
      "min": 200, "max": 8000, "group": "Chunking",
-     "help": "Each element a document is read into (a paragraph, a list item, a table, a code block) "
-     "gets its own vector. One longer than this is cut into chunks of at most this size, at sentence "
-     "ends, each with its own vector. Keep it within what the embedding model reads: about 2,000 "
-     "characters for nomic-embed-text, 1,000 for all-MiniLM-L6-v2 (256 tokens). Applies to files "
-     "read after the change."},
+     "help": "A paragraph, list item or caption longer than this is stored as several nodes of at most "
+     "this size, cut at sentence ends and linked in reading order, each with its own vector. A table "
+     "or code block stays one node and is searched by windows of this size. Keep it within what the "
+     "embedding model reads: about 1,000 characters for all-MiniLM-L6-v2 (256 tokens), 2,000 for "
+     "nomic-embed-text. Applies to files read after the change."},
     {"key": "chunk_overlap_chars", "label": "Chunk overlap (characters)", "kind": "int",
      "min": 0, "max": 2000, "group": "Chunking",
-     "help": "How much text consecutive chunks of one element share, so a sentence cut between two "
-     "chunks is whole in one of them. Usually 10% of the chunk size."},
+     "help": "How much text consecutive search windows of a table or code block share, so a line cut "
+     "between two windows is whole in one of them. Usually 10% of the chunk size. Paragraphs split "
+     "into nodes do not overlap: each sentence is in one node."},
     {"key": "reading_unit_max_chars", "label": "Section size for extraction (characters)", "kind": "int",
      "min": 500, "max": 50000, "group": "Chunking",
      "help": "Extraction and pipeline steps read a document section by section, from one heading to "
@@ -305,10 +306,19 @@ SCHEMA: list[dict[str, Any]] = [
      "help": "How many embeddings are computed at once within a batch. Measured against an HTTP "
      "embedder: 8.3/s at 1, 31.9/s at 4, 64.8/s at 16 — an embed waits on the model server rather "
      "than on local CPU, so concurrency buys close to linear throughput until it saturates."},
-    {"key": "embed_batch_size", "label": "Embedding batch size", "kind": "int",
-     "min": 8, "max": 512, "group": "Parallelism",
-     "help": "Number of nodes/texts embedded per batch pass. Use 16-32 on laptops for bounded O(1) RAM "
-     "and 128-256 on GPU / high-end servers for maximum vectorized throughput."},
+    {"key": "embed_batch_size", "label": "Embedding batch size (nodes)", "kind": "int",
+     "min": 8, "max": 512, "group": "Chunking",
+     "help": "Nodes embedded per pass. Their texts are sorted by length and run in groups capped by "
+     "characters, so memory stays bounded at any value; more nodes per pass means tighter groups. "
+     "Measured with all-MiniLM-L6-v2 on a 16-core CPU (run size 8,000): 138 texts/s at 32 nodes, "
+     "186 at 128, 161 at 256."},
+    {"key": "embed_run_chars", "label": "Embedding run size (characters)", "kind": "int",
+     "min": 1000, "max": 64000, "group": "Chunking",
+     "help": "The most text the built-in embedder computes in one run: texts x the longest of them. "
+     "Its memory follows the largest run it has made, so this bounds the embedding worker's memory; "
+     "larger runs are not faster. Measured with all-MiniLM-L6-v2 at 128 nodes per pass: 207 texts/s "
+     "at 2,000, 226 at 4,000, 166-186 at 8,000, 101 at 32,000. Applies to the built-in (fastembed) "
+     "embedder."},
     {"key": "extraction_full_coverage", "label": "Full coverage — no chunk cap, no call folding",
      "kind": "bool", "group": "Extraction",
      "help": "Every chunk, node and turn reaches every extractor. While on, two settings below are "
@@ -439,14 +449,15 @@ def structured_default_max_rows() -> int:
 
 
 def defer_extraction() -> bool: return bool(get("defer_extraction"))
-def chunk_window_chars() -> int: return max(200, min(8000, int(get("chunk_window_chars") or 2000)))
+def chunk_window_chars() -> int: return max(200, min(8000, int(get("chunk_window_chars") or 800)))
 def chunk_overlap_chars() -> int:
     return max(0, min(chunk_window_chars() // 2, int(get("chunk_overlap_chars") or 0)))
 def reading_unit_max_chars() -> int: return max(500, int(get("reading_unit_max_chars") or 4000))
 def pdf_ocr() -> bool: return bool(get("pdf_ocr"))
 def defer_embedding() -> bool: return bool(get("defer_embedding"))
 def embed_concurrency() -> int: return max(1, min(64, int(get("embed_concurrency") or 1)))
-def embed_batch_size() -> int: return max(8, min(512, int(get("embed_batch_size") or 32)))
+def embed_batch_size() -> int: return max(8, min(512, int(get("embed_batch_size") or 128)))
+def embed_run_chars() -> int: return max(1000, min(64000, int(get("embed_run_chars") or 4000)))
 def extraction_call_groups() -> list:
     """Sanitized ordered call groups: [{"name": str, "extractors": [str, ...]}, ...]."""
     if extraction_full_coverage():

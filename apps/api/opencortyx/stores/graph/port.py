@@ -7,6 +7,7 @@ from typing import Sequence
 from opencortyx.stores.graph.models import (
     Edge, EdgeQuery, EdgeWrite, Neighbor, NeighborGroup, Node, NodeQuery, Path,
 )
+from opencortyx.stores.graph.query import node_status
 
 
 class GraphStore(ABC):
@@ -43,6 +44,32 @@ class GraphStore(ABC):
 
     @abstractmethod
     async def find_nodes(self, workspace_id, query: NodeQuery) -> list[Node]: ...
+
+    async def find_node_ids(self, workspace_id, query: NodeQuery) -> list[str]:
+        """The ids `find_nodes` would return, without loading the nodes. A store that can answer from
+        its indexes alone overrides this: a job that only needs to know WHICH nodes (is it embedded?)
+        should not pull every node's text through the store's memory to find out."""
+        return [str(n.id) for n in await self.find_nodes(workspace_id, query)]
+
+    async def node_outlines(self, workspace_id) -> list[Node]:
+        """Every node of the workspace with only what an overview of the whole graph needs: id, type,
+        label and provenance pointer, and in `properties` only `__base_type` and `__status`. No text,
+        no other properties, no degree. A store that can project columns overrides this, so the
+        overview never moves every node's text through the store's memory."""
+        out = []
+        for n in await self.find_nodes(workspace_id, NodeQuery()):
+            props = n.properties or {}
+            out.append(Node(id=n.id, workspace_id=n.workspace_id, type=n.type, label=n.label,
+                            source_ref=n.source_ref,
+                            properties={"__base_type": props.get("__base_type") or n.type,
+                                        "__status": node_status(n)}))
+        return out
+
+    async def edge_ends(self, workspace_id, exclude_types: Sequence[str] = ()) -> list[tuple[str, str]]:
+        """(source id, target id) of every edge whose type is not excluded, without the edges'
+        properties."""
+        edges = await self.find_edges(workspace_id, EdgeQuery(exclude_types=list(exclude_types) or None))
+        return [(str(e.source_id), str(e.target_id)) for e in edges]
 
     @abstractmethod
     async def count_nodes(self, workspace_id, query: NodeQuery | None = None) -> int: ...

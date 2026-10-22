@@ -90,8 +90,9 @@ class V2Settings(BaseSettings):
 
     EMBED_DIMENSIONS: int = 768
     EMBED_BATCH_SIZE: int = 64
-    # In-process embedder: most characters one ONNX run may hold (texts x longest text).
-    FASTEMBED_MAX_BATCH_CHARS: int = 8000
+    # In-process embedder: most characters one ONNX run may hold (texts x longest text). The default
+    # for the `embed_run_chars` setting, which Settings > Chunking changes at runtime.
+    FASTEMBED_MAX_BATCH_CHARS: int = 4000
 
     # ── Stores: NebulaGraph holds the graph, Qdrant the vectors ───────────
     VECTOR_STORE_PROVIDER: Literal["qdrant", "memory"] = "qdrant"
@@ -237,9 +238,13 @@ CROSS_ENCODER_MODEL = "BAAI/bge-reranker-v2-m3"   # stronger cross-encoder (dist
 # text) live at query time. Downloads ~2GB into the container on first use. Needs `sentence-transformers`.
 
 #: The in-process embedder a new workspace's registry is seeded with (a visible, editable row; never a
-#: fallback). Its vectors are EMBED_DIMENSIONS wide.
+#: fallback): the one whose vectors fit the index. A new installation's .env sets EMBED_DIMENSIONS=384,
+#: all-MiniLM-L6-v2, which the image carries: ~6x less work per text than nomic on CPU, so a thousand
+#: files are searchable in hours, not a day. An installation from before, with no setting, keeps 768
+#: and nomic-embed-text-v1.5, which its model cache already holds, so its vectors stay valid.
 BUILTIN_EMBED_PROVIDER = "fastembed"
-BUILTIN_EMBED_MODEL = "nomic-ai/nomic-embed-text-v1.5"
+BUILTIN_EMBED_MODELS = {384: "sentence-transformers/all-MiniLM-L6-v2", 768: "nomic-ai/nomic-embed-text-v1.5"}
+BUILTIN_EMBED_MODEL = BUILTIN_EMBED_MODELS.get(settings.EMBED_DIMENSIONS, BUILTIN_EMBED_MODELS[384])
 #: The reranker a new workspace's registry is seeded with: a fastembed (ONNX) cross-encoder, which
 #: every image runs. It was CROSS_ENCODER_MODEL, a sentence-transformers model only an
 #: INSTALL_RERANK=1 image can run, so on a release install every question skipped the reranker.

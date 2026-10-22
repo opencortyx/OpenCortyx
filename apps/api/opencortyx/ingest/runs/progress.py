@@ -189,7 +189,7 @@ class ProgressReporter:
         await self._patch(**fields)
         await settle_upload_ingestion(self.run_id)
         if status == "completed":
-            await self._index_new_attributes()
+            await self._index_new_attributes(res)
 
     async def _written_by_this_run(self, source_id) -> bool:
         """Whether the asset `source_id` names was first written after this run was created."""
@@ -206,7 +206,7 @@ class ProgressReporter:
         except Exception:                           # noqa: BLE001 — undecidable → keep what the path said
             return False
 
-    async def _index_new_attributes(self):
+    async def _index_new_attributes(self, res: dict | None = None):
         """Give the nodes this run created their per-attribute embedding surfaces.
 
         Fired from `finish` because EVERY ingest path reports through this reporter - document,
@@ -215,7 +215,14 @@ class ProgressReporter:
         `node_attr_embedding` had exactly one writer, a manual CLI, so anything ingested through
         the UI had the `attr_embedding` surface empty and simply retrieved worse.
 
-        SCOPED TO THIS RUN by `started_at`, not to the whole org. Org-wide it would have queued
+        SCOPED TO THIS RUN'S SOURCES when its result names them: nothing more when it already queued
+        their embedding (`"embedding": "deferred"`), else one `embed_source` per source. A time
+        window is not a run's scope once runs overlap: a thousand files dropped at once each asked
+        for "every node since I started", so each task loaded nearly the whole upload, ran the
+        graph store out of memory, and stalled embedding for hours.
+
+        A result that names no source falls back to the run's time window, `started_at`, not the
+        whole org. Org-wide it would have queued
         20,000 nodes of embedding work on EVERY completion - measured 398,549 unindexed nodes on
         this deployment - onto the same queue the ingest itself depends on, so a one-file upload
         paid for the entire backlog. Whole-graph indexing stays available as an explicit
@@ -228,11 +235,20 @@ class ProgressReporter:
         """
         if not self.run_id:
             return
+        res = res or {}
+        if res.get("embedding") == "deferred":
+            return
         try:
             async with V2Session() as db:
                 run = await db.get(IngestRun, self.run_id)
             workspace_id = getattr(run, "workspace_id", None) if run else None
             if not workspace_id:
+                return
+            from opencortyx.tasks.graph import result_source_ids, v2_embed_source
+            sids = result_source_ids(res)
+            if sids:
+                for sid in sids:
+                    v2_embed_source.delay(str(workspace_id), sid)
                 return
             since = getattr(run, "started_at", None) or getattr(run, "created_at", None)
             if not since:

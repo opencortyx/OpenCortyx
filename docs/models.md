@@ -84,8 +84,9 @@ choose OpenAI-compatible server and enter the provider's address.
 
 ## Embeddings
 
-A new workspace uses `nomic-ai/nomic-embed-text-v1.5` on `fastembed` (768 dimensions). To use
-another, **Add** under Embedding: the provider is fastembed, and the list shows every model it can
+A new installation uses `sentence-transformers/all-MiniLM-L6-v2` on `fastembed` (384 dimensions),
+which the image carries. An installation from before 0.1.0-beta.7 keeps `nomic-ai/nomic-embed-text-v1.5`
+(768 dimensions) and its vectors. To use another, **Add** under Embedding: the provider is fastembed, and the list shows every model it can
 run with its vector size; pick one and press **Download**. Changing the embedding model requires
 re-indexing existing data, and a model with a different vector size also needs `EMBED_DIMENSIONS`
 in `.env` to match (the form refuses one that does not).

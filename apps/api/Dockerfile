@@ -57,7 +57,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # these names in step with the config.
 RUN python -c "from fastembed import TextEmbedding, SparseTextEmbedding; \
 from fastembed.rerank.cross_encoder import TextCrossEncoder; \
-TextEmbedding('nomic-ai/nomic-embed-text-v1.5', cache_dir='/cache', lazy_load=True); \
+TextEmbedding('sentence-transformers/all-MiniLM-L6-v2', cache_dir='/cache', lazy_load=True); \
 SparseTextEmbedding('Qdrant/bm25', cache_dir='/cache', lazy_load=True); \
 TextCrossEncoder('Xenova/ms-marco-MiniLM-L-12-v2', cache_dir='/cache', lazy_load=True)"
 

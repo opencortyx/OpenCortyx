@@ -21,6 +21,9 @@ from opencortyx.resolution.spec import load_specs
 
 log = get_logger(__name__)
 _CHUNK = 1000
+#: Set on an asset whose resolution found embeddings still missing; the embedding job that finishes
+#: them queues the resolution again when it sees it, and resolving clears it.
+RESOLVE_WAITING = "__resolve_waiting"
 
 
 class Store:
@@ -114,12 +117,25 @@ class Store:
                  if str((n.properties or {}).get("__structural") or "") != "true"]
         return bool(nodes) and bool(await self.repo.unembedded(workspace_id, nodes))
 
+    async def wait_for_embeddings(self, workspace_id, source_id) -> bool:
+        """Whether the asset must wait for its embeddings; if so it is marked waiting, so the
+        embedding job that finishes them queues its resolution."""
+        if not await self.pending_embeddings(workspace_id, source_id):
+            return False
+        await self.repo.patch_properties(workspace_id, [source_id], {RESOLVE_WAITING: "true"},
+                                         bump_version=False)
+        return True
+
+    async def waiting(self, workspace_id, source_id) -> bool:
+        root = await self.repo.get(workspace_id, source_id)
+        return bool(root and (root.properties or {}).get(RESOLVE_WAITING))
+
     async def mark_resolved(self, workspace_id, source_id, summary: dict) -> None:
         """Stamp the asset, so the UI and the operator can see when and how it was resolved."""
         from datetime import datetime, timezone
         await self.repo.patch_properties(workspace_id, [source_id], {
             "__resolved_at": datetime.now(timezone.utc).isoformat(), "__resolution": summary},
-            bump_version=False)
+            remove=[RESOLVE_WAITING], bump_version=False)
 
     async def statements(self, workspace_id, source_id) -> dict:
         from opencortyx.capabilities.modules import contradiction as c

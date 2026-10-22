@@ -108,6 +108,14 @@ async def test_find_nodes_by_every_indexed_field(store, org, clean):
                                                      props_not={"__status": "proposed"}))) == {table.id}
     assert ids(await store.find_nodes(org, NodeQuery(created_after=t0 + timedelta(minutes=1)))) == \
         {retyped.id, col.id, other.id}
+    assert ids(await store.find_nodes(org, NodeQuery(created_before=t0 + timedelta(minutes=1)))) == {table.id}
+    assert ids(await store.find_nodes(org, NodeQuery(created_after=t0 - timedelta(minutes=1),
+                                                     created_before=t0))) == {table.id}
+    # Ids alone, as the embedding sweep asks: the same answer as find_nodes, without loading nodes.
+    assert set(await store.find_node_ids(org, NodeQuery(created_after=t0 + timedelta(minutes=1)))) == \
+        {str(retyped.id), str(col.id), str(other.id)}
+    assert set(await store.find_node_ids(org, NodeQuery(created_before=t0))) == {str(table.id)}
+    assert set(await store.find_node_ids(org, NodeQuery(types=["Table"]))) == {str(table.id)}
     newest = await store.find_nodes(org, NodeQuery(order_by="-created_at", limit=1))
     assert newest[0].id != table.id and len(newest) == 1
     assert await store.count_nodes(org, NodeQuery(types=["Table", "Attribute"])) == 2
@@ -131,6 +139,45 @@ async def test_edges_are_idempotent_and_keep_degree(store, org, clean):
     assert edge.weight == 0.5 and edge.type == "HAS_ATTRIBUTE"
     assert await store.count_edges(org) == 2
     assert (await store.count_edges_by_type(org)) == {"HAS_ATTRIBUTE": 2}
+
+
+async def test_outlines_and_edge_ends_cover_the_graph_without_its_text(store, org, clean):
+    doc = _node(org, "Aadhaar", "card.pdf", properties={"__base_type": "Source", "text": "x" * 5000})
+    part = _node(org, "Text", "para", source_ref=doc.id, properties={"text": "long body"})
+    hidden = _node(org, "Claim", "c", properties={"__status": "proposed"})
+    await store.upsert_nodes([doc, part, hidden])
+    await store.upsert_edges([Edge(workspace_id=org, source_id=doc.id, target_id=part.id, type="CONTAINS"),
+                              Edge(workspace_id=org, source_id=part.id, target_id=hidden.id, type="CREATED_ON")])
+    outlines = {n.id: n for n in await store.node_outlines(org)}
+    assert set(outlines) == {doc.id, part.id, hidden.id}
+    assert outlines[doc.id].type == "Aadhaar" and outlines[doc.id].label == "card.pdf"
+    assert outlines[doc.id].properties == {"__base_type": "Source", "__status": "active"}
+    assert outlines[part.id].source_ref == doc.id and "text" not in outlines[part.id].properties
+    assert outlines[hidden.id].properties["__status"] == "proposed"
+    assert sorted(await store.edge_ends(org)) == sorted(
+        [(str(doc.id), str(part.id)), (str(part.id), str(hidden.id))])
+    assert await store.edge_ends(org, exclude_types=["CREATED_ON"]) == [(str(doc.id), str(part.id))]
+
+
+async def test_whole_workspace_reads_are_complete_when_read_in_slices(store, org, clean, monkeypatch):
+    # The NebulaGraph adapter reads a whole workspace as capped index ranges, halving a range whose
+    # read comes back full. A cap of one row forces every split, down to nodes sharing a microsecond.
+    if store.provider_name == "nebulagraph":
+        from opencortyx.stores.graph.adapters import nebulagraph
+        monkeypatch.setattr(nebulagraph, "_SLICE", 1)
+    t0 = datetime.now(timezone.utc) - timedelta(hours=2)
+    nodes = [_node(org, "Text", f"n{i}", created_at=t0 + timedelta(minutes=i)) for i in range(6)]
+    nodes += [_node(org, "Text", "same", created_at=t0 + timedelta(minutes=9)) for _ in range(3)]
+    await store.upsert_nodes(nodes)
+    await store.upsert_edges([Edge(workspace_id=org, source_id=nodes[i].id, target_id=nodes[i + 1].id, type="NEXT")
+                              for i in range(len(nodes) - 1)])
+    want = {str(n.id) for n in nodes}
+    assert sorted(await store.find_node_ids(org, NodeQuery())) == sorted(want)
+    assert {str(n.id) for n in await store.node_outlines(org)} == want
+    assert len(await store.edge_ends(org)) == len(nodes) - 1
+    window = await store.find_node_ids(org, NodeQuery(created_after=t0 + timedelta(minutes=1),
+                                                      created_before=t0 + timedelta(minutes=4)))
+    assert sorted(window) == sorted(str(n.id) for n in nodes[2:5])
 
 
 async def test_parallel_edges_differ_by_relation(store, org, clean):

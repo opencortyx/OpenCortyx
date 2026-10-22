@@ -24,12 +24,36 @@ missed, and `opencortyx doctor` shows it.
 - A new volume, `uploads`, holds uploaded files until their worker has read them.
 - New settings, all optional: `UPLOAD_RETENTION_HOURS` (168), `RATELIMIT_UPLOAD_PER_MIN` (600),
   `REDIS_MAXMEMORY` (128mb), `EMBEDDING_WORKER_MAX_MEMORY_KB` (1500000) and the database ports below.
+- An existing installation keeps its embedding model (nomic-embed-text-v1.5, 768 dimensions) and its
+  vectors; only a new installation starts on all-MiniLM-L6-v2. To move an existing one, add
+  `EMBED_DIMENSIONS=384` to `.env`, pick all-MiniLM-L6-v2 on the Models page and re-index.
+- Files read after the update are cut at the new chunk size (800 characters): a longer paragraph
+  becomes several nodes. Files already read keep their nodes.
 
 ### Fixed
+- The graph store scanned a workspace's whole index for every lookup of "one of these ids": an
+  `IN` list on an index's second field is not served from the index by NebulaGraph. Walking one
+  document's parts, checking whether it was embedded and fetching edges by id each read all 179,000
+  nodes of a thousand-file workspace (1.6 s and up to ~365 MB per lookup), and a few at once took the
+  graph service down. They are exact matches now, one index lookup each: 0.05 s, under 30 MB.
+- Embedding padded short texts to the longest in their batch: a node's label ran at the length of
+  a 2,000-character passage. Texts are sorted by length first now, about twice as fast.
 - Reading a document wrote its graph one element at a time, about 17 round trips to the graph store
   each, which was most of an upload's time. A document's elements and links are written in one
   batch now, and the per-node link counts of its own elements in a few bulk writes instead of one
   each: a 30 KB text document went from 26.5 s to 3.8 s, a 950-element HTML page from 16.5 s to 1.6 s.
+- Embedding stalled for hours after a large upload. Each finished file asked to embed "every node
+  created since it started", so with a thousand files in flight each request loaded nearly the
+  whole upload, text and all, and the graph store ran out of memory. A file now embeds only the
+  sources it wrote, already queued when it finished. The 10-minute sweep and `opencortyx doctor`
+  find missing vectors by node id first and load only the nodes that lack them.
+- Two more jobs held the graph store down after a large upload:
+  - The dashboard graph's index pass read every node, text included, and every edge with its
+    properties, after each upload. It reads only ids, types, labels and the ends of each edge now,
+    one type at a time, and reads in full only the assets it lists.
+  - Resolving an asset waited for its embeddings by checking every 15 seconds, on the same worker
+    that embeds, and gave up after 10 minutes. It now starts when the embedding job finishes the
+    asset's vectors, with one check half an hour later in case that job never comes.
 - A passage longer than 2,000 characters (a long paragraph, a code block, a table) had no embedding
   at all and was findable by keyword only. It is embedded in overlapping chunks now, each its own
   vector, cut at sentence ends.
@@ -79,10 +103,20 @@ missed, and `opencortyx doctor` shows it.
   warning now: uploads and search work without one; only the AI Assistant needs it.
 
 ### Added
-- **Settings > Chunking**: the chunk size and overlap for embedding, the section size handed to
-  extraction, and whether scanned pages and images are read with OCR.
+- **Settings > Chunking**: the chunk size and overlap, the section size handed to extraction, whether
+  scanned pages and images are read with OCR, and the embedding batch and run sizes (128 nodes and
+  4,000 characters by default, the fastest measured).
 
 ### Changed
+- **A new installation embeds with all-MiniLM-L6-v2** (384 dimensions), which the image carries,
+  instead of nomic-embed-text-v1.5. Measured on this release's thousand-file corpus on CPU: 10x the
+  speed (186 against 18.6 texts a second) at under a third of the memory (458 MB against 1.66 GB).
+  nomic-embed-text and others stay one Download away on the Models page.
+- **Chunk size 800 characters**, within what all-MiniLM-L6-v2 reads (256 tokens). A paragraph, list
+  item or caption longer than that becomes several nodes, cut at sentence ends and linked in reading
+  order; a table or code block stays one node, searched by windows of that size.
+- The dashboard graph's index pass waits at least five times as long as its last pass took before
+  the next, so it takes at most a sixth of the time however large the graph is.
 - **Docling is replaced by one reader per format** (`ingest/formats/unstructured/layout/readers/`).
   PDFs are read with LiteParse: measured on a 34-page PDF, about 1 s instead of 32-41 s and tens of MB
   instead of 0.9-2.4 GB. Images are read by OCR (Tesseract, offline). Word and PowerPoint are read

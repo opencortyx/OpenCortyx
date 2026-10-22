@@ -98,6 +98,7 @@ class NodeQuery:
     props: dict[str, Any] = field(default_factory=dict)
     props_not: dict[str, Any] = field(default_factory=dict)
     created_after: Optional[datetime] = None
+    created_before: Optional[datetime] = None   # inclusive
     order_by: Optional[str] = None          # created_at | -created_at | -updated_at | -degree
     limit: Optional[int] = None
 

@@ -4,29 +4,34 @@ import uuid
 from opencortyx.core.worker.celery_app import celery_app
 from opencortyx.core.worker.utils import async_to_sync
 
-#: How long an asset waits for its embeddings before it is resolved anyway (an asset that is never
-#: embedded, with no embedding model configured, must still be resolved): WAIT_TRIES × WAIT_SECONDS.
-WAIT_TRIES, WAIT_SECONDS = 40, 15
-
-
-class _NotEmbeddedYet(Exception):
-    pass
+#: An asset still waiting for its embeddings is resolved when the embedding job that finishes them
+#: queues it again. In case none ever does (embedding failed for good), one backstop run this much
+#: later resolves it anyway. Kept under the broker's visibility timeout (40 minutes), past which a
+#: held message would be delivered twice.
+BACKSTOP_SECONDS = 30 * 60
 
 
 @celery_app.task(bind=True, queue="resolution", name="opencortyx.resolve_asset", acks_late=True,
-                 max_retries=WAIT_TRIES + 2)
-def v2_resolve_asset(self, workspace_id: str, source_id: str):
+                 max_retries=5)
+def v2_resolve_asset(self, workspace_id: str, source_id: str, backstop: bool = False):
     """Queued when an asset completes. On its own queue, so a long resolution (thousands of statements)
-    never holds up embeddings or another asset; it waits for this asset's embeddings first, because the
-    semantic comparisons need its vectors. Idempotent: decisions and index rows are keyed by content."""
+    never holds up another asset. It needs the asset's embeddings (the semantic comparisons use its
+    vectors), so it runs once they exist: queued by the ingest's last step, and again by the
+    embedding job if it found them missing. Not polled: every asset of a large upload re-checking
+    every 15 seconds walked the graph store faster than the embedding it waited for could finish,
+    on the same worker. Idempotent: decisions and index rows are keyed by content."""
     from opencortyx.resolution import resolve_asset
     from opencortyx.resolution.engine import Store
     oid, sid = uuid.UUID(workspace_id), uuid.UUID(source_id)
+    store = Store()
     try:
-        if self.request.retries < WAIT_TRIES and async_to_sync(Store().pending_embeddings)(oid, sid):
-            raise _NotEmbeddedYet()
-        return async_to_sync(resolve_asset)(oid, sid)
-    except _NotEmbeddedYet:
-        raise self.retry(countdown=WAIT_SECONDS)
+        if backstop:
+            if not async_to_sync(store.waiting)(oid, sid):
+                return {"status": "skipped", "reason": "resolved since"}
+            return async_to_sync(resolve_asset)(oid, sid)
+        wait = async_to_sync(store.wait_for_embeddings)(oid, sid)
+        if not wait:
+            return async_to_sync(resolve_asset)(oid, sid)
     except Exception as exc:
         raise self.retry(exc=exc, countdown=30)
+    raise self.retry(args=(workspace_id, source_id), kwargs={"backstop": True}, countdown=BACKSTOP_SECONDS)

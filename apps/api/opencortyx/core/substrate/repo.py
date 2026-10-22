@@ -219,6 +219,14 @@ class NodeRepo:
     async def find(self, workspace_id, query: NodeQuery | None = None, **filters) -> list[Node]:
         return await self.graph.find_nodes(as_uuid(workspace_id), query or NodeQuery(**filters))
 
+    async def outlines(self, workspace_id) -> list[Node]:
+        """Every node, without text or properties beyond its base type and status: for passes over
+        the whole graph (`GraphStore.node_outlines`)."""
+        return await self.graph.node_outlines(as_uuid(workspace_id))
+
+    async def edge_ends(self, workspace_id, exclude_types: Sequence[str] = ()) -> list[tuple[str, str]]:
+        return await self.graph.edge_ends(as_uuid(workspace_id), exclude_types)
+
     async def count(self, workspace_id, query: NodeQuery | None = None, **filters) -> int:
         return await self.graph.count_nodes(as_uuid(workspace_id), query or NodeQuery(**filters))
 
@@ -644,6 +652,17 @@ class NodeRepo:
         """The nodes among `nodes` whose attribute embeddings are missing or out of date."""
         current = await self.vectors.embedded_nodes(as_uuid(workspace_id), [n.id for n in nodes])
         return [n for n in nodes if str(n.id) not in current]
+
+    async def unembedded_ids(self, workspace_id, *, created_after=None, created_before=None) -> list[str]:
+        """Ids of the nodes created in the window that have no embeddings, found from ids alone.
+
+        Ids first, nodes only for what is missing: after a thousand-file upload the window holds
+        hundreds of thousands of nodes, and loading every one (text and all) to learn that nearly all
+        are embedded ran the graph store out of memory."""
+        ids = await self.graph.find_node_ids(as_uuid(workspace_id), NodeQuery(
+            created_after=created_after, created_before=created_before))
+        current = await self.vectors.embedded_nodes(as_uuid(workspace_id), ids)
+        return [i for i in ids if i not in current]
 
     async def clear_org(self, workspace_id) -> int:
         org = as_uuid(workspace_id)

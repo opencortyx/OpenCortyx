@@ -6,12 +6,23 @@ installation downloads the new default on its first upload while the baked one s
 """
 from pathlib import Path
 
-from opencortyx.core.config import BUILTIN_EMBED_MODEL, BUILTIN_RERANK_MODEL, SPARSE_MODEL
+import re
+
+import pytest
+
+from opencortyx.core.config import BUILTIN_RERANK_MODEL, SPARSE_MODEL
+from opencortyx.core.config.env import BUILTIN_EMBED_MODELS
 
 DOCKERFILE = Path(__file__).resolve().parents[1] / "Dockerfile"
 
 
 def test_dockerfile_bakes_the_default_models():
+    # A new installation's embedder is the one that fits the width its .env starts with.
+    example = next((p / ".env.example" for p in Path(__file__).resolve().parents
+                    if (p / ".env.example").exists()), None)
+    if example is None:
+        pytest.skip("runs from a checkout of the repository")
+    width = int(re.search(r"^EMBED_DIMENSIONS=(\d+)", example.read_text(encoding="utf-8"), re.M)[1])
     text = DOCKERFILE.read_text(encoding="utf-8")
-    for name in (BUILTIN_EMBED_MODEL, SPARSE_MODEL, BUILTIN_RERANK_MODEL):
+    for name in (BUILTIN_EMBED_MODELS[width], SPARSE_MODEL, BUILTIN_RERANK_MODEL):
         assert f"'{name}'" in text, f"the Dockerfile does not bake {name}"

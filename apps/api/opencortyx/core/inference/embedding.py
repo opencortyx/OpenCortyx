@@ -236,12 +236,22 @@ async def _fastembed_embed_batch(texts: list, model=None) -> list:
     import asyncio
     loop = asyncio.get_running_loop()
 
-    groups = _char_budget_groups(texts, max(1, settings.FASTEMBED_MAX_BATCH_CHARS))
+    # Shortest first, so each ONNX run holds texts of about one length. A run is computed at its
+    # longest text's length: a node's 18-character label batched with a 2,000-character passage cost
+    # as much as the passage. Measured on a thousand-file corpus's own texts with nomic-embed-text:
+    # 8.7 texts/s in input order, 21 sorted.
+    order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
+    from opencortyx.core.config import runtime as _rc
+    groups = _char_budget_groups([texts[i] for i in order], _rc.embed_run_chars())
 
     def _run():
         m = _get_fastembed_model(model)          # load AND embed, both off the loop
-        return [v.tolist() if hasattr(v, "tolist") else list(v)
-                for group in groups for v in m.embed(group, batch_size=len(group))]
+        vectors = [v.tolist() if hasattr(v, "tolist") else list(v)
+                   for group in groups for v in m.embed(group, batch_size=len(group))]
+        out: list = [None] * len(texts)
+        for i, vec in zip(order, vectors):
+            out[i] = vec
+        return out
     return await loop.run_in_executor(None, _run)
 
 

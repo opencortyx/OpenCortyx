@@ -9,6 +9,26 @@ from opencortyx.core.substrate import NodeRepo
 log = get_logger(__name__)
 
 
+def result_source_ids(res) -> list[str]:
+    """The sources an ingest result says it wrote: its own `source_ids`/`source_id`, else those of
+    the per-file results it nests (a folder or archive reports one result per file)."""
+    if not isinstance(res, dict):
+        return []
+
+    def own(d: dict) -> list:
+        out = [str(x) for x in (d.get("source_ids") or []) if x]
+        if not out and d.get("source_id"):
+            out = [str(d["source_id"])]
+        return out
+
+    sids = own(res)
+    if not sids:
+        for v in res.values():
+            if isinstance(v, dict):
+                sids.extend(sid for sid in own(v) if sid not in sids)
+    return sids
+
+
 def _queue_embed_pass(workspace_id: str, res) -> None:
     """Queue the deferred embedding pass for whatever source this ingest just wrote.
 
@@ -21,24 +41,7 @@ def _queue_embed_pass(workspace_id: str, res) -> None:
         from opencortyx.core.config import runtime as _rc
         if not _rc.defer_embedding():
             return
-        if not isinstance(res, dict):
-            return
-
-        def _sids(d: dict) -> list:
-            out = [str(x) for x in (d.get("source_ids") or []) if x]
-            if not out and d.get("source_id"):
-                out = [str(d["source_id"])]
-            return out
-
-        sids = _sids(res)
-        if not sids:
-            seen = set()
-            for v in res.values():
-                if isinstance(v, dict):
-                    for sid in _sids(v):
-                        if sid not in seen:
-                            seen.add(sid)
-                            sids.append(sid)
+        sids = result_source_ids(res)
         if not sids:
             return
         jobs = [v2_embed_source.delay(str(workspace_id), sid) for sid in sids]
@@ -76,12 +79,18 @@ def v2_embed_source(self, workspace_id: str, source_id: str):
         subtree = ([root] if root else []) + await repo.descendants(oid, [sid])
         subtree = [n for n in subtree if str((n.properties or {}).get("__structural") or "") != "true"]
         pending = await repo.unembedded(oid, subtree)
-        if not pending:
-            return {"status": "ok", "source_id": source_id, "embedded": 0}
-        await repo.index_embeddings(oid, pending, embed_batch, batch_size=_rc.embed_batch_size())
-        spec = await active_embedding_spec()
-        if str((spec or {}).get("provider") or "").lower() in ("fastembed", "onnx"):
-            gc.collect()
+        if pending:
+            await repo.index_embeddings(oid, pending, embed_batch, batch_size=_rc.embed_batch_size())
+            spec = await active_embedding_spec()
+            if str((spec or {}).get("provider") or "").lower() in ("fastembed", "onnx"):
+                gc.collect()
+        # Read again, not from before embedding: the asset's resolution may have started waiting
+        # for these vectors in the meantime.
+        from opencortyx.resolution.engine import RESOLVE_WAITING
+        root = await repo.get(oid, sid)
+        if root and (root.properties or {}).get(RESOLVE_WAITING):
+            from opencortyx.tasks.resolution import v2_resolve_asset
+            v2_resolve_asset.delay(workspace_id, source_id)
         return {"status": "ok", "source_id": source_id, "embedded": len(pending)}
 
     try:
@@ -103,8 +112,13 @@ def v2_index_node_attrs(self, workspace_id: str, since_iso: str = None, limit: i
         from datetime import datetime
         repo, oid = NodeRepo(), uuid.UUID(workspace_id)
         since = datetime.fromisoformat(since_iso) if since_iso and not backfill else None
-        pending = await repo.unembedded(oid, await repo.find(oid, created_after=since))
-        counts = await repo.index_embeddings(oid, pending[:limit], embed_batch, batch_size=batch)
+        pending = await repo.unembedded_ids(oid, created_after=since)
+        counts: dict = {}
+        for start in range(0, min(len(pending), limit), PAGE):
+            page = pending[start:min(start + PAGE, limit)]
+            for attr, n in (await repo.index_embeddings(oid, await repo.get_many(oid, page), embed_batch,
+                                                        batch_size=batch)).items():
+                counts[attr] = counts.get(attr, 0) + n
         rest = max(0, len(pending) - limit)
         if rest:
             log.warning("index.attributes_incomplete", workspace_id=str(workspace_id), unindexed=rest)
@@ -136,6 +150,8 @@ def v2_embed_node(self, workspace_id: str, node_id: str):
         raise self.retry(exc=exc, countdown=10, max_retries=3)
 
 
+#: Nodes loaded and embedded at a time by the passes that find their work by id.
+PAGE = 500
 #: Nodes younger than this are left to the job that is embedding them right now.
 SWEEP_SETTLE_MINUTES = 10
 #: How far back the sweep looks. Older gaps are a backfill (`index_node_attrs` with backfill=True).
@@ -165,12 +181,12 @@ def v2_sweep_unembedded(self):
             workspaces = [w for (w,) in (await db.execute(select(Workspace.workspace_id))).all()]
         repo, done = NodeRepo(), {}
         for oid in workspaces:
-            recent = await repo.find(oid, created_after=now - timedelta(hours=SWEEP_WINDOW_HOURS))
-            old_enough = [n for n in recent if n.created_at and n.created_at.replace(
-                tzinfo=n.created_at.tzinfo or timezone.utc) <= settled]
-            pending = await repo.unembedded(oid, old_enough)
+            pending = await repo.unembedded_ids(oid, created_after=now - timedelta(hours=SWEEP_WINDOW_HOURS),
+                                                created_before=settled)
+            for start in range(0, len(pending), PAGE):
+                await repo.index_embeddings(oid, await repo.get_many(oid, pending[start:start + PAGE]),
+                                            embed_batch)
             if pending:
-                await repo.index_embeddings(oid, pending, embed_batch)
                 done[str(oid)] = len(pending)
                 log.warning("embedding.sweep_recovered", workspace_id=str(oid), nodes=len(pending))
         return {"status": "ok", "recovered": done}

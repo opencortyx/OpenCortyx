@@ -24,3 +24,22 @@ def test_short_queries_share_one_batch():
 def test_empty_texts_still_count():
     assert _char_budget_groups(["", "", ""], 2) == [["", ""], [""]]
     assert _char_budget_groups([], 8000) == []
+
+
+def test_texts_are_embedded_shortest_first_and_returned_in_input_order(monkeypatch):
+    import asyncio
+
+    from opencortyx.core.inference import embedding as E
+    runs = []
+
+    class Model:
+        def embed(self, group, batch_size):
+            runs.append(list(group))
+            return [[float(len(t))] for t in group]
+    monkeypatch.setattr(E, "_get_fastembed_model", lambda model=None: Model())
+    labels = [f"label {i}" for i in range(40)]
+    texts = ["p" * 1500] + labels[:20] + ["q" * 1400] + labels[20:]
+    out = asyncio.run(E._fastembed_embed_batch(texts))
+    assert out == [[float(len(t))] for t in texts]
+    # Labels are not padded to a passage's length: they run together, the passages apart.
+    assert sorted(runs[0]) == sorted(labels) and runs[1:] == [["q" * 1400, "p" * 1500]]

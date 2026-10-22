@@ -49,6 +49,30 @@ def test_assembler_hierarchy_and_next_flow():
     assert [n.next_id for n in a.build()] == [p1.id, h2.id, t1.id, None]
 
 
+def test_long_prose_becomes_consecutive_nodes_and_tables_and_code_stay_whole():
+    """The Chunk size: a paragraph longer than it is stored as several nodes, cut at sentence ends,
+    under the same heading and in reading order, each sentence in exactly one of them."""
+    a = LayoutAssembler(doc_id="d", max_chars=100)
+    h = a.add_element(raw_label="section_header", text="Scope", level=1)
+    sentences = [f"Sentence number {i} says something about the scope of this policy." for i in range(6)]
+    first = a.add_element(raw_label="text", text=" ".join(sentences))
+    code = a.add_element(raw_label="code", text="\n".join(f"x{i} = {i}" for i in range(40)))
+    table = a.add_element(raw_label="table", text="\n".join(["A | B"] * 60), grid=[["A", "B"]] * 60)
+    nodes = a.build()
+    parts = [n for n in nodes if n.type == "Text"]
+    assert first is parts[0] and len(parts) > 1 and all(len(n.text) <= 100 for n in parts)
+    assert all(n.parent_id == h.id for n in parts)
+    assert " ".join(n.text for n in parts) == " ".join(sentences)          # nothing repeated, nothing lost
+    assert [n.next_id for n in parts[:-1]] == [n.id for n in parts[1:]] and parts[-1].next_id == code.id
+    assert len(code.text) > 100 and len(table.text) > 100                   # kept whole
+
+
+def test_without_a_chunk_size_every_element_is_kept_whole():
+    a = LayoutAssembler(doc_id="d")
+    a.add_element(raw_label="text", text="word " * 1000)
+    assert len(a.build()) == 1
+
+
 def test_only_headings_open_a_section():
     """An element carrying a level (a list item, a caption) must not adopt what follows it."""
     a = LayoutAssembler(doc_id="doc")

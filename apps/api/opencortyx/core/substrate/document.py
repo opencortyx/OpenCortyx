@@ -103,9 +103,9 @@ def text_windows(text: str, size: int = ATTR_MAX_CHARS, overlap: int = TEXT_WIND
             out.append(pieces_head)
         if current and len(current) + 1 + len(piece) > size:
             out.append(current)
-            tail = current[-overlap:]
+            tail = current[-overlap:] if overlap > 0 else ""      # [-0:] would be all of it
             tail = tail[tail.find(" ") + 1:] if " " in tail else tail
-            current = f"{tail} {piece}" if len(tail) + 1 + len(piece) <= size else piece
+            current = f"{tail} {piece}" if tail and len(tail) + 1 + len(piece) <= size else piece
         else:
             current = f"{current} {piece}" if current else piece
     if current:

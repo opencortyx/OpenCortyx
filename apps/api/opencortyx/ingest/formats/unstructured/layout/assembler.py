@@ -10,6 +10,12 @@ from typing import Any, Optional
 
 from .schemas import BoundingBox, DocumentASTNode, ElementMetadata, to_pascal_case
 
+#: Prose that is split into nodes of at most `max_chars` characters, at sentence ends. Tables, code,
+#: formulas and headings stay one node each: cut at a sentence end they would no longer be a table or
+#: a function. A long one is searched by windows of its text instead (`index_embeddings`).
+SPLIT_LABELS = frozenset({"text", "paragraph", "list_item", "caption", "footnote", "handwritten_text",
+                          "reference"})
+
 
 class LayoutAssembler:
     """Assembles a flat stream of document elements into a dual-edge AST.
@@ -18,8 +24,10 @@ class LayoutAssembler:
     2. next_id: Direct subsequent element in reading order flow.
     """
 
-    def __init__(self, doc_id: str = "", document_id: str = ""):
+    def __init__(self, doc_id: str = "", document_id: str = "", max_chars: Optional[int] = None):
         self.doc_id = doc_id or document_id or "doc"
+        #: Longest prose element kept as one node (the Chunk size setting); None keeps every element whole.
+        self.max_chars = max_chars
         self.heading_stack: list[tuple[int, str]] = []  # [(heading_level, node_id)]
         self.nodes: list[DocumentASTNode] = []
         self._seq = 0
@@ -44,10 +52,17 @@ class LayoutAssembler:
         asset_reference: Optional[str] = None,
         label: str = "",
     ) -> DocumentASTNode:
-        """Add an element into the AST, resolving parent_id and next_id dynamically."""
-        node_id = self._next_id(page_no)
+        """Add an element into the AST, resolving parent_id and next_id dynamically. Prose longer than
+        `max_chars` becomes consecutive elements of the same kind, one per piece; the first is returned."""
         effective_label = raw_label or label or "paragraph"
         norm_label = str(effective_label).lower().strip()
+        body = str(text or "").strip()
+        if self.max_chars and norm_label in SPLIT_LABELS and len(body) > self.max_chars:
+            from opencortyx.core.substrate.document import text_windows
+            pieces = [self.add_element(raw_label=norm_label, text=piece, page_no=page_no, bbox=bbox, level=level)
+                      for piece in text_windows(body, self.max_chars, overlap=0)]
+            return pieces[0]
+        node_id = self._next_id(page_no)
         node_type = to_pascal_case(norm_label)
 
         # Parse bounding box
