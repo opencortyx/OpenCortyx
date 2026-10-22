@@ -38,7 +38,7 @@ _FK_SUFFIX = re.compile(r"_id$", re.I)
 #: A node type is spelled out by the ontology and by every later query, so a model-proposed one
 #: must be a single capitalised word or it is discarded rather than sanitised.
 _TYPE_NAME = re.compile(r"[A-Z][A-Za-z0-9]{1,39}")
-#: Pages a document structure preview reads. Docling costs seconds per page; a preview needs the
+#: Pages a document structure preview reads. A long document costs time per page; a preview needs the
 #: document's shape, not all of it. Ingestion reads every page.
 PREVIEW_PAGES = 5
 
@@ -228,10 +228,10 @@ class DocumentMappingDrafter(Drafter):
         # Always layout: the reading that keeps a document's structure (titles, sections, tables,
         # lists, figures as node types of their own) and the one ingestion uses by default. This was
         # chosen only when the extracted TEXT had Markdown `#` headings — which a PDF's text seldom
-        # has — so most PDFs were previewed, and then read, as sliding-window chunks. Docling reads
+        # has — so most PDFs were previewed, and then read, as sliding-window chunks. The layout reader reads
         # the FILE, where that structure is; the text is used only for a sample with no file bytes.
         strategy = "layout"
-        # In a thread: layout runs Docling, which is CPU-bound and would stall the API's event loop.
+        # In a thread: layout reading is CPU-bound and would stall the API's event loop.
         info = await asyncio.to_thread(
             UnstructuredWalker.introspect, sample.document or sample.text or "",
             filename=sample.filename, mime=sample.format, strategy=strategy,
@@ -246,13 +246,13 @@ class DocumentMappingDrafter(Drafter):
                     if n.get("type") in ("Title", "SectionHeader", "Heading")]
         engine = info.get("engine") or ""
         evidence: list[Evidence] = [Evidence(
-            claim=(f"read by layout ({'Docling' if engine == 'docling' else 'built-in structural parser'}): "
+            claim=(f"read by layout ({engine + ' reader' if engine and engine != 'fallback' else 'built-in structural parser'}): "
                    f"{info.get('node_count', 0)} element(s) of {len(info.get('types') or [])} kind(s), "
                    f"{len(headings)} heading(s)"),
             basis=((f"first heading {str(headings[0].get('text') or '').strip()[:60]!r}" if headings
                     else "no headings found, so its elements hang directly from the document")
-                   + (f"; Docling unavailable: {info.get('fallback_reason')}"
-                      if engine and engine != "docling" else "")
+                   + (f"; its reader failed: {info.get('fallback_reason')}"
+                      if engine == "fallback" else "")
                    + f"; previewed up to {PREVIEW_PAGES} page(s)"),
             path="document")]
         # 1. Document Root Node derived from walker

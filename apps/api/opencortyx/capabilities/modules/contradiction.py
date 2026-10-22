@@ -717,13 +717,13 @@ _READING_UNIT_TYPES = None
 
 
 def _reading_unit_types() -> frozenset:
-    """The reader's own unit types — the default chunk and Docling's layout labels — for units written
+    """The reader's own unit types — the default chunk and the layout labels — for units written
     before they were stamped. Not every platform type: a JSON record or a remembered Fact IS a
     statement."""
     global _READING_UNIT_TYPES
     if _READING_UNIT_TYPES is None:
         try:
-            from opencortyx.ingest.formats.unstructured.docling.schemas import layout_element_types
+            from opencortyx.ingest.formats.unstructured.layout.schemas import layout_element_types
             _READING_UNIT_TYPES = frozenset({"Chunk"} | set(layout_element_types()))
         except Exception:                           # noqa: BLE001
             _READING_UNIT_TYPES = frozenset({"Chunk"})

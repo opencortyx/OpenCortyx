@@ -1,7 +1,7 @@
-"""Pydantic and data schemas for IBM Docling Layout AST.
+"""The layout AST every document reader produces, whatever the format.
 
-Preserves exact labels detected by IBM Docling (title, section_header, paragraph, table,
-picture, formula, code, caption, list_item, etc.) and provides dual graph edges:
+Elements carry layout labels (title, section_header, text, list_item, table, picture, caption,
+code, page_header, page_footer, ...) and two graph edges:
 1. parent_id: hierarchical containment under the enclosing heading/section.
 2. next_id: linear reading order sequence connecting elements in reading flow.
 """
@@ -75,12 +75,19 @@ class DocumentASTNode(BaseModel):
         }
 
 
+#: Every element label a reader may emit. This is the label set the layout reader has written since
+#: the first release (it was Docling's), kept as it was so the node types of existing graphs, the
+#: ontology and the Mapper stay the same with the readers that replaced it.
+LAYOUT_LABELS = (
+    "caption", "chart", "checkbox_selected", "checkbox_unselected", "code", "document_index",
+    "empty_value", "field_heading", "field_hint", "field_item", "field_key", "field_region",
+    "field_value", "footnote", "form", "formula", "grading_scale", "handwritten_text",
+    "key_value_region", "list_item", "marker", "page_footer", "page_header", "paragraph", "picture",
+    "reference", "section_header", "table", "text", "title",
+)
+
+
 def layout_element_types() -> frozenset:
-    """Every node type the layout reader can write: Docling's element labels, named the way the
-    assembler names them. Read from Docling itself so the list follows the library it describes."""
-    try:
-        from docling_core.types.doc import DocItemLabel
-        return frozenset(to_pascal_case(label.value) for label in DocItemLabel)
-    except Exception:                                   # noqa: BLE001 — docling not installed here
-        return frozenset({"Title", "SectionHeader", "Text", "ListItem", "Table", "Picture",
-                          "Caption", "Footnote", "PageHeader", "PageFooter", "Paragraph"})
+    """Every node type the layout reader can write: the element labels, named the way the assembler
+    names them."""
+    return frozenset(to_pascal_case(label) for label in LAYOUT_LABELS)

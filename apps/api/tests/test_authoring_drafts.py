@@ -227,18 +227,17 @@ async def test_a_plain_text_document_drafts_document_and_its_elements(no_model):
 async def test_a_pdf_is_previewed_from_the_file_not_its_text(no_model):
     """A PDF's extracted text has no Markdown `#` headings, so a preview that read only the text
     (which is what it did) showed a PDF with real headings as sliding-window chunks."""
-    fitz = pytest.importorskip("fitz")
-    doc = fitz.open()
-    page = doc.new_page()
-    y = 60
-    for text, size, font in (("Leave Policy", 20, "hebo"), ("Annual leave", 14, "hebo"),
-                             ("Employees get 25 days of paid leave each year.", 10, "helv"),
-                             ("Sick leave", 14, "hebo"),
-                             ("Up to ten days a year with a doctor's note.", 10, "helv")):
+    pytest.importorskip("liteparse")
+    from tests.pdfwriter import make_pdf
+    lines, y = [], 60
+    for text, size, bold in (("Leave Policy", 20, True), ("Annual leave", 14, True),
+                             ("Employees get 25 days of paid leave each year.", 10, False),
+                             ("Sick leave", 14, True),
+                             ("Up to ten days a year with a doctor's note.", 10, False)):
         y += 24 if size > 10 else 4
-        page.insert_text((50, y), text, fontsize=size, fontname=font)
+        lines.append((50, y, text, size, bold))
         y += size * 1.6
-    sample = build_sample(doc.tobytes(), "leave.pdf")
+    sample = build_sample(make_pdf([lines]), "leave.pdf")
     assert sample.document, "the sample must keep the file itself for a structure preview"
     editor = (await _run(DraftKind.MAPPING, sample))[0].payload["payload"]["editor"]
     labels = [n["nodeLabel"] for n in editor["nodeRules"]]

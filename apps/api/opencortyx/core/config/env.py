@@ -57,14 +57,9 @@ class V2Settings(BaseSettings):
     EMBED_CACHE_SIZE: int = 4096
 
     # ── Structured ingestion tuning ───────────────────────────────────────
-    # Layout strategy (Docling). Not DOCLING_*: Docling reads that env namespace itself. OCR is off by default: the image ships no OCR engine, and a text
-    # PDF does not need one. Turn it on only after installing one (e.g. rapidocr), for scans.
-    LAYOUT_OCR: bool = False
-    LAYOUT_TABLE_STRUCTURE: bool = True      # TableFormer: real row/column grids for tables
-    #: A PDF longer than this is read this many pages at a time (docling/engine.py), so memory stays
-    #: flat whatever its length. Measured on a 34-page RFC: whole or in 10-page windows it passed 4 GB
-    #: and was killed; windows of 2/4/6 pages peaked at 1.2/1.5/2.0 GB in the same total time.
-    LAYOUT_PDF_PAGE_WINDOW: int = 4
+    # Layout reading (ingest/formats/unstructured/layout/). OCR reads scanned PDF pages and images
+    # with Tesseract (bundled with LiteParse); a page with a text layer is read from it, not OCR'd.
+    LAYOUT_OCR: bool = True
     STRUCTURED_SAMPLE_N: int = 50           # rows sampled per table for profiling (null-rate/samples)
     STRUCTURED_MAX_LLM_TABLES: int = 40     # cap tables that get LLM enrichment (cost guard)
     STRUCTURED_MAPPING_ROW_LIMIT: int = 1000  # max rows read per table in granular mapping

@@ -121,8 +121,11 @@ flowchart TD
 
 ### How a document is read
 
-Documents are read by [Docling](https://github.com/docling-project/docling), which looks at the file
-itself (its layout, not just its text), and each element it finds becomes a node of its own type:
+Documents are read by the reader for their format, which looks at the file itself (its layout, not
+just its text): PDFs with [LiteParse](https://github.com/run-llama/liteparse) (scanned pages and images
+by OCR), Word and PowerPoint by their styles and slides, HTML and EPUB by their tags, Markdown, plain
+text and notebooks by their structure, and legacy or OpenDocument office files converted to PDF with
+LibreOffice first. Every reader produces the same elements, and each becomes a node of its own type:
 
 | Element | Node type | Sits under |
 |---|---|---|

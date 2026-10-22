@@ -134,7 +134,7 @@ export default function MapperBuilderPage() {
         const res: any = await (contextV2Api as any).listModels?.();
         const byRole: Record<string, string | null> = {};
         for (const el of DOC_ELEMENTS) {
-          if (!el.role) continue;              // built-in (Docling) or not model-served
+          if (!el.role) continue;              // built-in (the layout reader) or not model-served
           const hit = (res?.items || []).find((m: any) => m.role === el.role && (m.default || m.is_default));
           byRole[el.role] = hit ? (hit.model_id || hit.name) : null;
         }
@@ -252,7 +252,7 @@ export default function MapperBuilderPage() {
   /* ──────────────────────────────────────────────────── upload + propose */
 
   const onFile = (f: File) => {
-    // A PDF, Word file and the like is read by Docling on the server, the way ingestion reads it:
+    // A PDF, Word file and the like is read by its layout reader on the server, as ingestion reads it:
     // the preview then shows its real title, sections, lists, tables and page headers/footers.
     if (paradigm === "unstructured" && !/\.(md|markdown|txt)$/i.test(f.name)) {
       setUploadMsg(`reading ${f.name}…`);
@@ -263,9 +263,9 @@ export default function MapperBuilderPage() {
         setPick(f.name);
         setDirty(true);
         const furniture = r.elements.filter((e) => e.label === "page_header" || e.label === "page_footer").length;
-        setUploadMsg(r.engine === "docling"
-          ? `read ${f.name}: ${r.elements.length} elements, ${furniture} page header/footer(s)`
-          : `read ${f.name} without Docling (${r.fallback_reason || "unavailable"}): structure may be missing`);
+        setUploadMsg(r.engine !== "fallback"
+          ? `read ${f.name} (${r.engine} reader): ${r.elements.length} elements, ${furniture} page header/footer(s)`
+          : `read ${f.name} as plain text (${r.fallback_reason || "its reader failed"}): structure may be missing`);
       }).catch((e: any) => setUploadMsg(`could not read that file — ${e?.response?.data?.detail || e?.message || "unsupported"}`));
       return;
     }

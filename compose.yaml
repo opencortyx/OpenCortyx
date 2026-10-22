@@ -163,8 +163,11 @@ services:
     image: vesoft/nebula-storaged:v3.8.0
     restart: unless-stopped
     logging: *logging
-    mem_limit: ${NEBULA_STORAGED_MEM_LIMIT:-1024m}
-    memswap_limit: ${NEBULA_STORAGED_MEM_LIMIT:-1024m}
+    # RocksDB is sized to fit: its index and filter blocks live in a bounded block cache instead of
+    # growing with the data, and the write buffers are smaller. With the defaults it climbed past
+    # 1 GB as a 1000-document graph grew and was killed every few minutes, failing uploads in flight.
+    mem_limit: ${NEBULA_STORAGED_MEM_LIMIT:-2048m}
+    memswap_limit: ${NEBULA_STORAGED_MEM_LIMIT:-2048m}
     depends_on:
       nebula-metad:
         condition: service_healthy
@@ -172,6 +175,9 @@ services:
       - --meta_server_addrs=nebula-metad:9559
       - --local_ip=nebula-storaged
       - --containerized=true
+      - --enable_partitioned_index_filter=true
+      - --rocksdb_block_cache=256
+      - '--rocksdb_column_family_options={"write_buffer_size":"33554432","max_write_buffer_number":"2","max_bytes_for_level_base":"268435456"}'
       - --ws_ip=nebula-storaged
       - --port=9779
       - --ws_http_port=19779
@@ -280,7 +286,7 @@ services:
     stop_grace_period: 30s
     logging: *logging
     # Ingestion embeds in-process, so a child holds the embedding model (~1.2 GiB resident).
-    # Docling's layout + TableFormer models read PDFs on this worker; 1664m could not hold them
+    # Reads uploaded files (layout/readers/; LibreOffice converts legacy office files); 1664m could not hold them
     # beside the pool parent and beat, and a PDF OOM-killed the child on every attempt.
     mem_limit: ${WORKER_MEM_LIMIT:-3072m}
     memswap_limit: ${WORKER_MEM_LIMIT:-3072m}

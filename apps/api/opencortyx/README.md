@@ -49,7 +49,7 @@ ingest/      ingestion (Layer 2) — detect → parse → walk, one package per 
   runner.py          ingest_file(): detect the kind (or take it), run that kind's default walker
   formats/           bytes → a paradigm's model: catalog.py (all 39 extensions) + one reader per family
                        structured/ tabular · semistructured/ json_reader jsonl_reader xml_to_json
-                       yaml_to_json toml_to_json ini_to_json · unstructured/ documents docling/
+                       yaml_to_json toml_to_json ini_to_json · unstructured/ documents layout/ (readers/)
   detection/         which paradigm a file is (routing.py: route_for / describe)
   walkers/           the DEFAULT walker per kind, used when nothing is declared
   structured/        SQL and table files → Table/Attribute/row nodes (ingest, catalog, translate)

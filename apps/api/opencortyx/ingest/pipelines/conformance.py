@@ -32,7 +32,7 @@ def platform_reading_types() -> dict:
     and the layout reader's element kinds. A mapping that repeats these is describing how its file is
     read, not declaring new ontology; publishing them as reviewable candidates asked a person to
     approve `Chunk`, `NEXT` and `SectionHeader`."""
-    from opencortyx.ingest.formats.unstructured.docling.schemas import layout_element_types
+    from opencortyx.ingest.formats.unstructured.layout.schemas import layout_element_types
     from opencortyx.ontology.extractors import READING_SHAPES
     nodes = {n["type"] for shape in READING_SHAPES.values() for n in shape.get("nodes") or []}
     edges = {e["type"] for shape in READING_SHAPES.values() for e in shape.get("edges") or []}

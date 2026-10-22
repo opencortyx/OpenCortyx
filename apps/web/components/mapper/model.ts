@@ -701,7 +701,7 @@ export function parseCSV(text: string): Record<string, any>[] {
 }
 
 /**
- * A parsed document from Docling's reading of a file (PDF, Word, ...), in the same shape as
+ * A parsed document from the layout reader's reading of a file (PDF, Word, ...), in the same shape as
  * `docFromText`: one section per heading, holding the elements under it with their own kind
  * (text, list_item, table, ...). Running page headers and footers are kept apart, in
  * `page_furniture`, because they belong to the document rather than to any section.

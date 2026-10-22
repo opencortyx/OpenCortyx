@@ -258,7 +258,7 @@ def document_elements(text: str) -> dict:
     """The non-prose ELEMENTS a document carries: tables and figures.
 
     `parse_content` returns text, but for the formats that matter that text is MARKDOWN — `.md` files
-    natively, and PDFs via pymupdf4llm, which renders tables as pipe tables and figures as `![alt](src)`.
+    natively, and other formats through their layout reader, which renders tables as pipe tables and figures as `![alt](src)`.
     So the elements ARE in there; nothing had ever looked for them, which is why the engine's "Embedded
     Tables & Grids" / "Images, Figures & Charts" switches were inert in both positions.
 
@@ -598,7 +598,7 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
     fingerprint = simhash64(text)                  # 64-bit SimHash for near-duplicate version detection
 
     step1 = await resolve_step1_chunk_config(workspace_id, pipeline, filename)
-    # Layout (Docling) unless a mapping or the stage asks for windows: it is the reading that keeps
+    # Layout unless a mapping or the stage asks for windows: it is the reading that keeps
     # the document's own structure — titles, sections, tables, lists and figures as node types of
     # their own. Sliding windows cut text into equal pieces and keep none of it.
     strategy = step1.get("strategy") or "layout"
@@ -702,13 +702,13 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
 
     layout_reader: dict = {}
     if strategy == "layout":
-        from opencortyx.ingest.formats.unstructured.docling.engine import DoclingEngine
+        from opencortyx.ingest.formats.unstructured.layout import LayoutEngine
         # In a thread: layout analysis is seconds of CPU per page, and run inline it froze this
         # worker's event loop — every other coroutine on it (progress writes, heartbeats) stalled.
         assembler = await asyncio.to_thread(
-            DoclingEngine.convert, content, filename=filename, doc_id=str(source_id))
+            LayoutEngine.convert, content, filename=filename, doc_id=str(source_id))
         layout_reader = {"engine": assembler.engine, "fallback_reason": assembler.fallback_reason}
-        if assembler.engine != "docling":
+        if assembler.engine == "fallback":
             log.warning("document.layout_fallback", filename=filename,
                         reason=assembler.fallback_reason)
         ast_nodes = assembler.nodes
@@ -745,8 +745,8 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
                 props["asset_reference"] = ast_node.asset_reference
             props[READING_UNIT_KEY] = True
 
-            # Docling's `table`/`picture` elements take the mapping's element types (the same
-            # `table_type`/`image_type` the non-layout path uses). Written as Docling names them, a
+            # Layout `table`/`picture` elements take the mapping's element types (the same
+            # `table_type`/`image_type` the non-layout path uses). Written as the reader names them, a
             # table in a Word file became a `Table` — the catalogue's type for a database table —
             # and was listed among the workspace's assets.
             kind = _LAYOUT_ELEMENT_KINDS.get(ast_node.label)
@@ -985,7 +985,7 @@ async def extract_over_source(workspace_id: uuid.UUID, source_id: uuid.UUID, *,
     return {**totals, "status": "ok"}
 
 
-#: Docling element labels the mapping retypes: a table takes `table_type`, a figure `image_type`.
+#: Layout element labels the mapping retypes: a table takes `table_type`, a figure `image_type`.
 _LAYOUT_ELEMENT_KINDS = {"table": "table", "picture": "image", "chart": "image"}
 
 

@@ -34,7 +34,7 @@ class UnstructuredWalker(BaseWalker):
 
         Supports two primary strategies:
           - 'sliding' (or 'sliding_window'): standard character/token window chunking.
-          - 'layout': IBM Docling dynamic AST extraction with arbitrary labels, 2D table grids,
+          - 'layout': the format's layout reader (layout/readers/): element labels, 2D table grids,
                       picture assets, and dual edges (hierarchy + NEXT flow).
         """
         from opencortyx.ingest.unstructured.chunking import chunk_document
@@ -65,10 +65,10 @@ class UnstructuredWalker(BaseWalker):
             ],
         }
 
-        # ── 1. Layout-Aware IBM Docling Strategy ─────────────────────────────
+        # ── 1. Layout strategy: the reader for the format ─────────────────────────────
         if strategy == "layout":
-            from opencortyx.ingest.formats.unstructured.docling.engine import DoclingEngine
-            assembler = DoclingEngine.convert(text_or_bytes, filename=filename, max_pages=max_pages)
+            from opencortyx.ingest.formats.unstructured.layout import LayoutEngine
+            assembler = LayoutEngine.convert(text_or_bytes, filename=filename, max_pages=max_pages)
             ast_nodes = assembler.nodes
 
             # Collect dynamic discovered node types (no restricted enums)

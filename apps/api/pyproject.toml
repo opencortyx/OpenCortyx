@@ -18,7 +18,7 @@ fastapi = "0.141.1"
 uvicorn = { extras = ["standard"], version = "0.53.0" }
 starlette = ">=1.3.1"
 python-multipart = "^0.0.32"          # file uploads (/sources/upload)
-httpx = ">=0.28,<1"                  # Ollama + outbound calls (docling requires >= 0.28)
+httpx = ">=0.28,<1"                  # Ollama + outbound calls
 
 # ── Stores: PostgreSQL (control plane), NebulaGraph (graph), Qdrant (vectors) ──
 sqlalchemy = { extras = ["asyncio"], version = "^2.0.30" }
@@ -43,18 +43,20 @@ fastembed = ">=0.4.0"                  # In-process CPU ONNX embeddings (~25ms, 
 onnxruntime = ">=1.18.0"               # ONNX runtime engine for fastembed
 einops = ">=0.8.0"                    # Tensor ops for nomic-bert attention architecture
 
-# ── Document parsing (lazy-imported in opencortyx/parsing.py) ─────────────────
-docling = "^2.132.0"                  # Layout-aware document AST parser (MIT License); 2.132 = security floor
-# Not used directly: docling's layout models (docling-ibm-models) run on it. The floor is the
-# security fix (PYSEC-2026-3929); resolvers otherwise keep the 4.x line.
+# ── Document reading: one reader per format (ingest/formats/unstructured/layout/readers/) ──
+liteparse = "^2.16.0"                # PDFs (PDFium) and images (Tesseract OCR); Office/legacy via LibreOffice
+python-docx = "^1.2.0"               # .docx: styles, numbering, tables, headers and footers
+python-pptx = "^1.0.2"               # .pptx: slide titles, text, tables
+beautifulsoup4 = "^4.12.0"           # HTML and EPUB chapters, by tag
+lxml = ">=5.0"                       # HTML parser for BeautifulSoup; XML documents
+striprtf = "^0.0.29"                 # .rtf to text
+pandas = ">=2.2"                     # a workbook read as a document, sheet by sheet
+defusedxml = "^0.7.1"                # XML records parsed safe from entity expansion (formats/semistructured/xml_to_json.py)
+# The in-process Hugging Face model provider (core/inference/local_llm.py) runs on these. The floor
+# on transformers is a security fix (PYSEC-2026-3929). The Dockerfile installs torch from the CPU
+# index first so the image never pulls the CUDA build.
 transformers = ">=5.10.0,<6"
-# Pinned as a PAIR. Docling needs both, and torchvision declares only `torch = "*"` in its lock
-# metadata, so an unpinned resolve picked torchvision 0.12 (the torch 1.11 era). The Dockerfile
-# installs these two from the CPU index first so the image never pulls the CUDA build.
 torch = "2.13.0"
-torchvision = "0.28.0"
-pymupdf4llm = "^0.0.10"              # PDF → Markdown
-pypdf = "^6.19.0"                    # PDF fallback; 6.19 = security floor
 langdetect = "^1.0.9"               # language detection (optional/lazy)
 openpyxl = "^3.1.3"                 # BEAM eval xlsx report
 ijson = "^3.3.0"                     # streaming JSON: GB-scale files at constant memory
@@ -94,7 +96,7 @@ adlfs = "*"
 gcsfs = "*"
 
 # ── Config / logging ──────────────────────────────────────────────────────────
-pydantic = ">=2.10,<3"          # docling >= 2.1xx fails to import below 2.10 (AttributeError at class build)
+pydantic = ">=2.10,<3"
 pydantic-settings = "^2.3.0"
 python-dotenv = "^1.0.1"
 structlog = "^24.2.0"

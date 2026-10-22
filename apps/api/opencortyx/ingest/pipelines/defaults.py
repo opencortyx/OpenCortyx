@@ -82,7 +82,7 @@ DEFAULT_PIPELINES = [
                 "action": "chunking_rules",
                 "config": {
                     "auto_accept": True,
-                    # read by layout (Docling): structure becomes node types, not equal-size chunks
+                    # read by layout: structure becomes node types, not equal-size chunks
                     "strategy": "layout",
                     "mapper_class": "UniversalDocMapper"
                 }

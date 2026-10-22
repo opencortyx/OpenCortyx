@@ -292,14 +292,11 @@ def doc_bytes(fmt: str, text: str) -> bytes | None:
         m.set_content(text)
         return bytes(m) if text.strip() else text.encode()
     if fmt == "pdf":
-        import fitz
-        d = fitz.open()
-        if text.strip():
-            page = d.new_page()
-            page.insert_textbox(fitz.Rect(40, 40, 560, 800), text[:3000], fontsize=10)
-        else:
-            d.new_page()
-        return d.tobytes()
+        import textwrap
+
+        from tests.pdfwriter import make_pdf
+        wrapped = textwrap.wrap(text[:3000], 95) if text.strip() else []
+        return make_pdf([[(40, 50 + 13 * i, line, 10, False) for i, line in enumerate(wrapped[:58])]])
     if fmt == "docx":
         import docx
         d = docx.Document()

@@ -678,12 +678,12 @@ export interface ElementDef {
 export const DOC_ELEMENTS: ElementDef[] = [
   { key: "layout", title: "Section & Layout Structure", rule: "Section",
     blurb: "Reads headings, reading order and page regions so sections become nodes.",
-    builtin: "Docling layout reader" },
+    builtin: "Layout reader for the format" },
   { key: "chunks", title: "Text Paragraph Chunks", role: "embedding", rule: "Chunk",
     blurb: "Turns each chunk into a vector so the chunk nodes are searchable." },
   { key: "tables", title: "Embedded Tables & Grids", rule: "Table",
     blurb: "Recovers table structure (cells, headers, spans) into table nodes.",
-    builtin: "Docling TableFormer" },
+    builtin: "Layout reader (table cells)" },
   { key: "figures", title: "Images, Figures & Charts", rule: "Figure",
     blurb: "Describes figures and charts so image nodes carry real captions.",
     unwired: "Figures are kept as image nodes without captions — no captioning model is used yet." },
@@ -736,7 +736,7 @@ export function ElementsPanel({ state, models, onToggle }: {
 
 const STRATEGIES: { k: ChunkCfg["strategy"]; n: string; d: string; tag?: string }[] = [
   { k: "sliding", n: "Sliding window", d: "Fixed windows of target size with the overlap carried forward." },
-  { k: "layout", n: "Layout", tag: "docling", d: "Docling layout-aware AST with dynamic node types, 2D table grids, pictures, and NEXT reading flow." },
+  { k: "layout", n: "Layout", tag: "per format", d: "Read by the reader for the file's format: titles, sections, 2D table grids, pictures, and NEXT reading flow." },
 ];
 
 export function ChunkingPanel({ cfg, sample, onCfg, onSample }: {
@@ -790,7 +790,7 @@ export function ChunkingPanel({ cfg, sample, onCfg, onSample }: {
           <div className="rounded-lg border border-teal-200 bg-teal-50/60 p-3 text-[12px] text-teal-900 leading-relaxed mb-3">
             <div className="font-semibold text-teal-800 mb-1 flex items-center gap-1.5">
               <Sparkles className="w-3.5 h-3.5 text-teal-600" />
-              Docling Layout-Aware AST Engine Active
+              Layout reading active
             </div>
             Extracts native layout blocks dynamically (<b>SectionHeader</b>, <b>Paragraph</b>, <b>Table</b> 2D grids, <b>Picture</b>) and connects them via hierarchical containment and sequential <b>NEXT</b> reading order edges.
           </div>

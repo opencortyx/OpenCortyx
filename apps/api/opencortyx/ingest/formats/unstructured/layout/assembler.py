@@ -1,7 +1,8 @@
-"""Dynamic AST Structural Assembler for IBM Docling.
+"""Assembles a reader's flat stream of elements into the layout AST.
 
-Preserves all detected Docling labels without coercion, maintains an active heading hierarchy
-stack for parent_id resolution, and links every sequential element via next_id.
+Keeps every label a reader gives, maintains the open-heading stack for parent_id, and links every
+element to the next in reading order (next_id). Readers only call `add_element` in reading order;
+the tree, and so the graph, comes out the same whichever reader produced it.
 """
 from __future__ import annotations
 
@@ -10,8 +11,8 @@ from typing import Any, Optional
 from .schemas import BoundingBox, DocumentASTNode, ElementMetadata, to_pascal_case
 
 
-class DynamicDoclingAssembler:
-    """Assembles a flat stream of Docling document elements into a dual-edge AST.
+class LayoutAssembler:
+    """Assembles a flat stream of document elements into a dual-edge AST.
     
     1. parent_id: Enclosing structural heading/section in the hierarchy tree.
     2. next_id: Direct subsequent element in reading order flow.
@@ -22,8 +23,9 @@ class DynamicDoclingAssembler:
         self.heading_stack: list[tuple[int, str]] = []  # [(heading_level, node_id)]
         self.nodes: list[DocumentASTNode] = []
         self._seq = 0
-        #: "docling" or "fallback" once converted, and why the fallback ran. Recorded on the Source
-        #: so a graph whose shape differs from a colleague's can be traced to the engine that read it.
+        #: The reader that read the document ("pdf", "docx", "markdown", ...), or "fallback", and why
+        #: the fallback ran. Recorded on the Source so a graph whose shape differs from a colleague's
+        #: can be traced to what read it.
         self.engine: str = ""
         self.fallback_reason: str = ""
 
@@ -131,3 +133,30 @@ class DynamicDoclingAssembler:
     def get_unique_node_types(self) -> set[str]:
         """Return set of distinct PascalCase node types detected."""
         return {node.type for node in self.nodes}
+
+    def to_markdown(self) -> str:
+        """The document as Markdown: what the chunking path and previews read when they want text
+        with its structure (headings as #, list items as -, tables as pipe tables)."""
+        out: list[str] = []
+        for n in self.nodes:
+            if not n.text and not n.grid:
+                continue
+            if n.label == "title":
+                out.append(f"# {n.text}")
+            elif n.label == "section_header":
+                out.append("#" * min(6, 1 + max(1, n.level or 1)) + f" {n.text}")
+            elif n.label == "list_item":
+                out.append(n.text if n.text[:2] in ("- ", "* ") else f"- {n.text}")
+            elif n.label == "table" and n.grid:
+                rows = [[str(c).replace("|", "\\|") for c in r] for r in n.grid if r]
+                width = max(len(r) for r in rows)
+                rows = [r + [""] * (width - len(r)) for r in rows]
+                out.append("\n".join(["| " + " | ".join(rows[0]) + " |",
+                                       "|" + "---|" * width] + ["| " + " | ".join(r) + " |" for r in rows[1:]]))
+            elif n.label == "code":
+                out.append(f"```\n{n.text}\n```")
+            elif n.label == "picture":
+                out.append(f"![{n.text}]({n.asset_reference or ''})")
+            else:
+                out.append(n.text)
+        return "\n\n".join(out)

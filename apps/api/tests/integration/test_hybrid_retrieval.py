@@ -60,16 +60,14 @@ HANDBOOK = [
 
 
 def _pdf() -> bytes:
-    import fitz
-    doc = fitz.open()
-    page = doc.new_page(width=595, height=842)
-    page.insert_text((50, 35), "Hybrid Test Corp - Handbook", fontsize=8)
+    from tests.pdfwriter import make_pdf
+    lines = [(50, 35, "Hybrid Test Corp - Handbook", 8, False)]
     y = 90
     for text, size in HANDBOOK:
-        page.insert_text((50, y), text, fontsize=size, fontname="hebo" if size > 11 else "helv")
+        lines.append((50, y, text, size, size > 11))
         y += size * 2.4
-    page.insert_text((50, 812), "Internal - Page 1", fontsize=8)
-    return doc.tobytes()
+    lines.append((50, 812, "Internal - Page 1", 8, False))
+    return make_pdf([lines])
 
 
 def _csv(rows) -> bytes:

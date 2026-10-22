@@ -7,7 +7,7 @@
     semistructured/   → the JSON tree          json_reader  jsonl_reader  (read natively)
                                                xml_to_json  yaml_to_json  toml_to_json  ini_to_json
                                                (translated into the same tree)
-    unstructured/     → text                   documents.py (pdf, office, text) · docling/ (layout-aware)
+    unstructured/     → text                   documents.py (text) · layout/ (one reader per format)
 
 Pattern: one Adapter per format, all converging on one model per paradigm, so each pipeline in
 `ingest/<paradigm>/` reads a single shape however the bytes arrived. A new format is a catalog entry

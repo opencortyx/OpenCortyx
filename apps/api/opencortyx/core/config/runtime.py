@@ -70,8 +70,7 @@ _DEFAULTS = {
     "chunk_window_chars": 2000,        # longest text embedded as one vector; longer is windowed
     "chunk_overlap_chars": 200,        # how much consecutive windows share
     "reading_unit_max_chars": 4000,    # a section handed to extraction closes past this
-    "pdf_page_window": settings.LAYOUT_PDF_PAGE_WINDOW,  # PDF pages the layout model reads at once
-    "pdf_table_mode": "fast",          # TableFormer: fast or accurate cell structure
+    "pdf_ocr": settings.LAYOUT_OCR,    # read scanned PDF pages and images with OCR
     "defer_embedding": True,
     "embed_concurrency": 8,
     # Number of nodes/texts embedded per batch. 16-32 for laptops (constant low RAM), 128-256 for GPU/high-end servers (max throughput).
@@ -287,16 +286,10 @@ SCHEMA: list[dict[str, Any]] = [
      "help": "Extraction and pipeline steps read a document section by section, from one heading to "
      "the next. A section is closed early once it holds this much text, so a file with no headings "
      "(a plain-text RFC) is not handed over as one block."},
-    {"key": "pdf_page_window", "label": "PDF pages per layout pass", "kind": "int",
-     "min": 1, "max": 50, "group": "Chunking",
-     "help": "The layout model reads a PDF this many pages at a time. Memory grows steeply with it: "
-     "measured on a 34-page PDF, 2, 4 and 6 pages peaked at 1.2, 1.5 and 2.0 GB in the same total "
-     "time, and 10 pages passed 4 GB. Lower it if PDF uploads are killed for memory."},
-    {"key": "pdf_table_mode", "label": "PDF table detail", "kind": "select",
-     "options": ["fast", "accurate"], "group": "Chunking",
-     "help": "How the table model reads a PDF table's rows and columns. Measured on 34-41 page PDFs: "
-     "fast was about 12% quicker per page and peaked at 1.4 GB instead of up to 2.4 GB, finding the "
-     "same elements; accurate splits merged or irregular cells more exactly."},
+    {"key": "pdf_ocr", "label": "Read scanned pages with OCR", "kind": "bool", "group": "Chunking",
+     "help": "A PDF page with no text layer (a scan, a photo) and an uploaded image are read by "
+     "optical character recognition. Pages that have text are read from it either way. Off, such "
+     "pages are skipped."},
     {"key": "defer_embedding", "label": "Defer embedding to its own queue", "kind": "bool",
      "group": "Extraction",
      "help": "Commit chunks without their vectors and embed them in the background. An embed call "
@@ -450,8 +443,7 @@ def chunk_window_chars() -> int: return max(200, min(8000, int(get("chunk_window
 def chunk_overlap_chars() -> int:
     return max(0, min(chunk_window_chars() // 2, int(get("chunk_overlap_chars") or 0)))
 def reading_unit_max_chars() -> int: return max(500, int(get("reading_unit_max_chars") or 4000))
-def pdf_page_window() -> int: return max(1, min(50, int(get("pdf_page_window") or 4)))
-def pdf_table_mode() -> str: return "accurate" if get("pdf_table_mode") == "accurate" else "fast"
+def pdf_ocr() -> bool: return bool(get("pdf_ocr"))
 def defer_embedding() -> bool: return bool(get("defer_embedding"))
 def embed_concurrency() -> int: return max(1, min(64, int(get("embed_concurrency") or 1)))
 def embed_batch_size() -> int: return max(8, min(512, int(get("embed_batch_size") or 32)))

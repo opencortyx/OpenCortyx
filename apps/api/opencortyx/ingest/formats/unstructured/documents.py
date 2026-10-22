@@ -1,19 +1,24 @@
-"""Documents → text: PDF, Office (docx/pptx/odt), and plain-text formats.
+"""Documents → text: PDF, Office, HTML, e-books, notebooks, images, and plain-text formats.
 
-Chunking the text is the unstructured pipeline's job (`ingest/unstructured/chunking.py`). Optional heavy libs (pymupdf4llm/pypdf for PDF, langdetect) are imported lazily so this
-module always imports even when they are absent.
+The rich formats are read by their layout reader (layout/readers/) and returned as Markdown, so
+headings, lists and tables survive into chunking. Chunking the text is the unstructured pipeline's
+job (`ingest/unstructured/chunking.py`). langdetect is imported lazily.
 """
 import hashlib
 import io
-import os
 import re
-import tempfile
 import zipfile
 from typing import Any, Dict
 
 #: Office documents: zip containers of XML, never text. Decoding their bytes as UTF-8 (the old
 #: fall-through) ingested the compressed archive as prose, chunks of `PK\x03\x04 word/styles.xml`.
 OFFICE_EXTENSIONS = frozenset({"docx", "pptx", "odt", "odp"})
+#: Read by their layout reader (layout/readers/) and returned as Markdown.
+LAYOUT_EXTENSIONS = frozenset({
+    "pdf", "docx", "docm", "doc", "pptx", "pptm", "ppt", "odt", "odp", "ods", "rtf", "epub", "ipynb",
+    "html", "htm", "xhtml", "pages", "key", "numbers", "png", "jpg", "jpeg", "gif", "bmp", "tif", "tiff",
+    "webp", "svg",
+})
 #: Formats that can only be read whole: a zip's directory and a PDF's xref sit at the END of the
 #: file, so a prefix of either is unreadable. Samplers must hand these over complete.
 WHOLE_FILE_EXTENSIONS = OFFICE_EXTENSIONS | {"pdf"}
@@ -34,13 +39,11 @@ def parse_content(content: bytes, mime_type: str = "text/plain", filename: str =
     extension = filename.split(".")[-1].lower() if "." in filename else ""
     raw_text, category = "", "document"
 
-    if mime_type == "application/pdf" or extension == "pdf":
-        raw_text = _parse_pdf(content)
+    if mime_type == "application/pdf" or extension in LAYOUT_EXTENSIONS:
+        raw_text = _layout_markdown(content, filename or f"document.{extension or 'pdf'}", extension)
     elif extension == "eml":
         raw_text = _parse_eml(content)
-    elif extension in OFFICE_EXTENSIONS:
-        raw_text = _parse_office(content, extension)
-    elif extension in ("txt", "md", "rtf", "tex", "log", "rst", "html", "htm"):
+    elif extension in ("txt", "md", "tex", "log", "rst"):
         raw_text = content.decode("utf-8", errors="ignore")[:200000]
     elif extension in ("json", "xml", "yaml", "yml", "toml"):
         raw_text, category = content.decode("utf-8", errors="ignore")[:50000], "structured"
@@ -57,8 +60,8 @@ def parse_content(content: bytes, mime_type: str = "text/plain", filename: str =
     }
 
 
-#: Page separators a converter adds between pages ('-----' from pymupdf4llm). Not content: a PDF that is
-#: nothing but separators has no readable text.
+#: Page separators a converter adds between pages ('-----'). Not content: a document that is nothing but
+#: separators has no readable text.
 _SEPARATOR_LINE = re.compile(r"(?m)^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
 
 
@@ -82,46 +85,18 @@ def _parse_eml(content: bytes) -> str:
     return "\n\n".join(parts)[:200000]
 
 
-def _parse_pdf(content: bytes) -> str:
+def _layout_markdown(content: bytes, filename: str, extension: str) -> str:
+    """The document read by its layout reader, as Markdown. An Office file whose reader fails still
+    gives its paragraph text, straight from the archive's XML."""
+    from opencortyx.ingest.formats.unstructured.layout import LayoutEngine
     try:
-        import pymupdf4llm
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp.write(content)
-            tmp_path = tmp.name
-        try:
-            return pymupdf4llm.to_markdown(tmp_path)
-        finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-    except Exception:
-        pass
-    try:
-        from pypdf import PdfReader
-        reader = PdfReader(io.BytesIO(content))
-        return "\n".join(p.extract_text() for p in reader.pages if p.extract_text())
-    except Exception as e:
-        raise UnreadableDocument(f"not a readable PDF ({e})") from e
-
-
-def _parse_office(content: bytes, extension: str) -> str:
-    """Office document → Markdown through Docling, so headings and tables survive into chunking;
-    the XML text alone when Docling cannot read it."""
-    if extension in ("docx", "pptx"):
-        try:
-            from opencortyx.ingest.formats.unstructured.docling.engine import DoclingEngine
-            converter = DoclingEngine.get_converter()
-            if converter is not None:
-                with tempfile.NamedTemporaryFile(suffix="." + extension, delete=False) as tmp:
-                    tmp.write(content)
-                    tmp_path = tmp.name
-                try:
-                    text = converter.convert(tmp_path).document.export_to_markdown()
-                    if text.strip():
-                        return text[:200000]
-                finally:
-                    os.remove(tmp_path)
-        except Exception:                                   # noqa: BLE001 — the XML read below
-            pass
+        assembler = LayoutEngine.convert(content, filename=filename)
+        text = assembler.to_markdown()
+        if text.strip() or extension not in _OFFICE_PARTS:
+            return text[:200000]
+    except Exception as e:                                       # noqa: BLE001 — the XML read below
+        if extension not in _OFFICE_PARTS:
+            raise UnreadableDocument(f"'{filename}' could not be read ({e})") from e
     return _office_xml_text(content, extension)
 
 

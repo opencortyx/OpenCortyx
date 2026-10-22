@@ -594,10 +594,18 @@ export default function SettingsPage() {
                   <label htmlFor={`cfg-${s.key}`} className="text-sm font-medium text-stone-800 dark:text-stone-200">{s.label}</label>
                   <div className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">{s.help}</div>
                   <div className="text-[10px] font-mono text-stone-400 mt-1">
-                    {s.key}{s.kind === "select" ? "" : ` · ${s.min}–${s.max}`}
+                    {s.key}{s.kind === "select" || s.kind === "bool" ? "" : ` · ${s.min}–${s.max}`}
                   </div>
                 </div>
-                {s.kind === "select" ? (
+                {s.kind === "bool" ? (
+                  <input
+                    id={`cfg-${s.key}`}
+                    type="checkbox"
+                    checked={!!cfgValues[s.key]}
+                    onChange={(e) => setCfgValues({ ...cfgValues, [s.key]: e.target.checked })}
+                    className="shrink-0 mt-1 h-4 w-4 accent-emerald-600"
+                  />
+                ) : s.kind === "select" ? (
                   <select
                     id={`cfg-${s.key}`}
                     value={cfgValues[s.key] ?? ""}

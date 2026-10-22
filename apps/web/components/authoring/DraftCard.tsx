@@ -157,7 +157,7 @@ function getStageInfo(stage: any, index: number) {
       title: "Document Reader",
       // what the reader will actually do: layout unless something asks for sliding windows
       subtitle: /^sliding/.test(String(stage.config?.strategy || ""))
-        ? "Sliding-window chunks" : "Layout (Docling): titles, sections, tables, lists",
+        ? "Sliding-window chunks" : "Layout: titles, sections, tables, lists",
       icon: Scissors,
       color: "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950 dark:text-blue-300 dark:border-blue-800",
     };

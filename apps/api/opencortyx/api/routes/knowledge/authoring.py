@@ -77,21 +77,21 @@ async def draft_from_upload(
 
 @router.post("/authoring/layout")
 async def read_layout(file: UploadFile = File(...), user: CurrentUser = Depends(require_auth)):
-    """How a document reads: every element Docling finds, in reading order, with its label (title,
+    """How a document reads: every element its layout reader finds, in reading order, with its label (title,
     section_header, text, list_item, table, page_header, page_footer, ...), heading level, page and
     the section it sits in. The Mapper previews PDFs, Word files and the like from this, so what an
     author verifies is what ingestion will read. Reads the first pages only, and saves nothing."""
     import anyio
 
     from opencortyx.drafting.drafters.mapping import PREVIEW_PAGES
-    from opencortyx.ingest.formats.unstructured.docling.engine import DoclingEngine
+    from opencortyx.ingest.formats.unstructured.layout import LayoutEngine
 
     content = await file.read()
     guard_upload_size(content, file.filename)
     guard_readable(content, file.filename)
     name = file.filename or "upload"
     a = await anyio.to_thread.run_sync(
-        lambda: DoclingEngine.convert(content, filename=name, max_pages=PREVIEW_PAGES))
+        lambda: LayoutEngine.convert(content, filename=name, max_pages=PREVIEW_PAGES))
     return {"filename": name, "engine": a.engine, "fallback_reason": a.fallback_reason or None,
             "doc_id": a.doc_id, "pages_read": PREVIEW_PAGES,
             "elements": [{"id": n.id, "label": n.label, "type": n.type, "text": n.text[:4000],

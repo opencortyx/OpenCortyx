@@ -444,7 +444,7 @@ export interface DiscoveredModel {
 }
 export interface ModelDiscovery { items: DiscoveredModel[]; source: string; provider: string; note?: string | null; }
 
-// One element of a document as Docling reads it (POST /authoring/layout).
+// One element of a document as its layout reader reads it (POST /authoring/layout).
 export interface LayoutElement {
   id: string; label: string; type: string; text: string;
   level: number | null; page: number; parent_id: string | null;
@@ -1358,7 +1358,7 @@ export const contextV2Api = {
       "/api/v2/authoring/drafters").then((r) => r.data),
 
   /** Draft from a file. Reads and samples it — never ingests, so it is safe to call on every pick. */
-  // How Docling reads a document (PDF, Word, ...): every element in reading order. Saves nothing.
+  // How a document reads (PDF, Word, ...): every element in reading order. Saves nothing.
   readLayout: (file: File) => {
     const fd = new FormData();
     fd.append("file", file);

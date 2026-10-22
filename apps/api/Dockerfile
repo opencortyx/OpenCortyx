@@ -12,16 +12,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxml2-dev \
     libz-dev \
     libpq-dev \
-    poppler-utils \
     tesseract-ocr \
-    libgl1 \
-    libglib2.0-0 \
+    libreoffice-writer-nogui \
+    libreoffice-impress-nogui \
+    libreoffice-calc-nogui \
+    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
-# libgl1 + libglib2.0-0: OpenCV, which Docling's layout models load on the first PDF. Without them
-# every PDF failed with ImportError('libGL.so.1') and was read by the plain-text fallback instead.
+# tesseract-ocr: the OCR engine and its English data, which LiteParse reads scanned pages and images
+# with (TESSDATA_PREFIX below), so OCR works offline with nothing fetched on first use.
+# libreoffice-*-nogui: legacy and OpenDocument office files (.doc, .ppt, .odt, .rtf, iWork) are
+# converted to PDF before LiteParse reads them (layout/readers/pdf.py ConvertedReader).
+ENV TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/tessdata
 
-# Set to 1 to install the local cross-encoder reranker. Torch is already installed (Docling needs it)
-# at the locked version; installing it again here would break the torch/torchvision pair.
+# Set to 1 to install the local cross-encoder reranker. Torch is already installed (the in-process
+# Hugging Face model provider needs it) at the locked version.
 ARG INSTALL_RERANK=0
 
 # Poetry only resolves the lock file; it runs in a throwaway venv and is not part of the image.
@@ -33,24 +37,18 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     rm -rf /opt/poetry && \
     pip install --upgrade pip setuptools && \
     export PIP_DEFAULT_TIMEOUT=200 && \
-    grep -E '^(torch|torchvision)==' /tmp/requirements.txt | sed 's/ *;.*//' > /tmp/torch.txt && \
+    grep -E '^torch==' /tmp/requirements.txt | sed 's/ *;.*//' > /tmp/torch.txt && \
     pip install --index-url https://download.pytorch.org/whl/cpu -r /tmp/torch.txt && \
     grep -vE '^(nvidia-[a-z0-9-]+|cuda-(bindings|pathfinder|toolkit)|triton)(\[|==| )' /tmp/requirements.txt > /tmp/requirements.cpu.txt && \
     pip install -r /tmp/requirements.cpu.txt && \
     rm /tmp/requirements.txt /tmp/requirements.cpu.txt /tmp/torch.txt
-# torch/torchvision go first, from the CPU index, at the locked versions. Docling depends on torch,
-# and from PyPI that resolves to the CUDA build — gigabytes of NVIDIA libraries in an image that
+# torch goes first, from the CPU index, at the locked version. The in-process Hugging Face model
+# provider (transformers) runs on it, and from PyPI it resolves to the CUDA build — gigabytes of NVIDIA libraries in an image that
 # never touches a GPU (text generation runs on a model server you connect). `==2.13.0` in requirements is then
 # already satisfied by `2.13.0+cpu`, so the second install leaves it alone.
 # The export also lists the CUDA build's own dependencies (nvidia-*, cuda-*, triton) as separate
 # lines marked `platform_system == "Linux"`, which every container is, so they are dropped: only
 # torch depends on them, and the CPU build does not.
-
-# Docling's layout and table models, baked in. Otherwise they download from Hugging Face on the
-# first document in EVERY fresh container, and an offline install silently reads every document
-# with the fallback parser instead.
-ENV DOCLING_ARTIFACTS_PATH=/opt/docling-models
-RUN docling-tools models download layout tableformer -o /opt/docling-models
 
 # The search models a new workspace uses (core/config/env.py: BUILTIN_EMBED_MODEL, SPARSE_MODEL,
 # BUILTIN_RERANK_MODEL), baked in for the same reason. They go to /cache, where the `model_cache`

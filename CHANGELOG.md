@@ -40,9 +40,6 @@ missed, and `opencortyx doctor` shows it.
 - A graph store that was unreachable for a few seconds failed every upload the worker picked up
   in that time, for good (two retries 30 s apart). An infrastructure error is now retried with
   backoff for about 16 minutes while the run shows it is waiting; a fault of the file still fails it.
-- Long PDFs ran the reader out of memory: read whole, a 34-page PDF passed 4 GB and was killed on
-  every attempt. PDFs are read 4 pages at a time (`LAYOUT_PDF_PAGE_WINDOW`), peaking near 1.5 GB at
-  any length, in the same time.
 - Housekeeping jobs piled up behind a long upload (49 sync ticks and 52 browse-tree passes behind one
   PDF). Scheduled ticks now expire when they could not start in time, and one browse-tree pass is
   booked at a time.
@@ -76,12 +73,22 @@ missed, and `opencortyx doctor` shows it.
 
 ### Added
 - **Settings > Chunking**: the chunk size and overlap for embedding, the section size handed to
-  extraction, how many PDF pages the layout model reads at once, and the PDF table detail.
+  extraction, and whether scanned pages and images are read with OCR.
 
 ### Changed
-- PDF tables are read with the table model's fast mode by default: measured about 12% quicker per
-  page and up to 1 GB less memory, finding the same elements. **Settings > Chunking > PDF table
-  detail** switches back to accurate.
+- **Docling is replaced by one reader per format** (`ingest/formats/unstructured/layout/readers/`).
+  PDFs are read with LiteParse: measured on a 34-page PDF, about 1 s instead of 32-41 s and tens of MB
+  instead of 0.9-2.4 GB. Images are read by OCR (Tesseract, offline). Word and PowerPoint are read
+  by their styles and slides, HTML and EPUB by their tags, Markdown, plain text, reStructuredText and
+  notebooks by their structure, RTF through striprtf; legacy and OpenDocument office files (.doc,
+  .ppt, .odt, .odp, .ods) and Apple iWork files are converted to PDF with LibreOffice first. Every
+  reader produces the same elements as before (title, sections with levels, text, list items,
+  tables with grids, pictures, page headers and footers), so documents become the same graph.
+  Docling, its models (~700 MB), PyMuPDF and pypdf are gone from the image.
+- New formats accepted on upload: images (.png, .jpg, .tiff, ...), .rtf, .epub, .ipynb, .odp, .ods,
+  .docm, .pptm, .ppt, .pages, .key, .numbers, .xhtml.
+- **Settings > Chunking > Read scanned pages with OCR** replaces the two PDF settings that only
+  applied to Docling.
 - The models a new workspace uses for search (the embedder, the keyword model and the reranker) ship
   in the image, so a fresh installation never downloads them.
 - `GET /api/v2/uploads/batches/{batch_id}`: a batch of uploads at a glance.
