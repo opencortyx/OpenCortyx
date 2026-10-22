@@ -25,7 +25,7 @@ macOS and Linux:
 ```bash
 cd ~/opencortyx
 git fetch --tags
-git checkout v0.1.0-beta.6
+git checkout v0.1.0-beta.7
 bin/opencortyx up
 ```
 
@@ -34,7 +34,7 @@ Windows (PowerShell):
 ```powershell
 cd $HOME\opencortyx
 git fetch --tags
-git checkout v0.1.0-beta.6
+git checkout v0.1.0-beta.7
 .\bin\opencortyx.ps1 up
 ```
 

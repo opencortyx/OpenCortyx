@@ -1,11 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-beta.7 - 2026-10-22
 
 A new installation handles a large first upload: a thousand files dropped on Add data at once are
 all accepted and read, and the models search needs are already there. Before, uploads after the
 30th were refused, a few hundred queued files could take the job queue down with them, and the
-first upload waited on a 600 MB model download.
+first upload waited on a 600 MB model download. Measured on a 16-CPU PC: 1,004 files (PDF,
+HTML, Markdown, reStructuredText, text; 75 MB) sent from Add data in about a minute and a half,
+all read in 26 minutes, none failed.
 
 An upload could also stay unsearchable by meaning, with nothing saying so: updating restarted the
 embedding worker mid-job, and the job sat unacknowledged for 40 minutes. Questions then found only
@@ -13,6 +15,11 @@ keyword matches. Workers now hand their jobs back when stopped, a sweep catches 
 missed, and `opencortyx doctor` shows it.
 
 ### Upgrading
+- From 0.1.0-beta.3, beta.4 or beta.6: `opencortyx update`. From 0.1.0-beta.2: by hand, as in
+  [Updating](docs/installation/updating.md#from-010-beta2).
+- The image no longer has Docling. Documents already read keep their graph; new ones become the same
+  node types. The two Docling-only settings (PDF table structure, PDF page window) are gone, and a
+  saved value for them is ignored.
 - A database migration (`0031_ingest_run_batch`) runs on `opencortyx update`.
 - A new volume, `uploads`, holds uploaded files until their worker has read them.
 - New settings, all optional: `UPLOAD_RETENTION_HOURS` (168), `RATELIMIT_UPLOAD_PER_MIN` (600),
