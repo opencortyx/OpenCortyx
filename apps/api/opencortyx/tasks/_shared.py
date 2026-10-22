@@ -36,7 +36,9 @@ def _doc_plan_from_features(features):
 #: picked up in those seconds, for good; these are retried with backoff instead, over ~16 minutes.
 _TRANSIENT_TEXT = ("rpc failure", "connection refused", "connection reset", "connection aborted",
                    "timed out", "temporarily unavailable", "broken pipe", "more than one request",
-                   "leader", "no available storage", "storage host")
+                   "leader", "no available storage", "storage host",
+                   # the graph service under memory pressure or restarting: it recovers on its own
+                   "high watermark", "graphmemoryexceeded", "services status exception")
 TRANSIENT_RETRIES = 6
 
 

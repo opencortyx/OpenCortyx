@@ -36,6 +36,19 @@ missed, and `opencortyx doctor` shows it.
   document's parts, checking whether it was embedded and fetching edges by id each read all 179,000
   nodes of a thousand-file workspace (1.6 s and up to ~365 MB per lookup), and a few at once took the
   graph service down. They are exact matches now, one index lookup each: 0.05 s, under 30 MB.
+- Qdrant held every vector, the keyword index and the search graph in memory, and was killed 18 times
+  for memory during one thousand-file upload; each time, embedding jobs failed and 50 files kept no
+  vectors. Vectors, the search graph and the large payload indexes are kept on disk now, with an int8
+  copy of the vectors in memory that a search reads first and then rescores: ~450 MB at rest for
+  544,000 points, against more than 1 GB. An existing collection is converted on start-up; its
+  memory limit is 1.5 GB (`QDRANT_MEM_LIMIT`), as the conversion peaked at 1.33 GB.
+- Embedding and resolution jobs gave up after three tries 30 s apart; a store restarting is waited
+  out now, as ingest already did (about 16 minutes), and the graph service's memory-pressure errors
+  count as passing.
+- The 10-minute embedding sweep found missing vectors by reading every node of the last day from the
+  graph, the whole of a large upload, and failed on the graph service's memory. It reads what is
+  still owed from the vector store instead (each node's keyword entry says whether its vectors
+  landed), and takes a node only when the previous sweep also found it.
 - Embedding padded short texts to the longest in their batch: a node's label ran at the length of
   a 2,000-character passage. Texts are sorted by length first now, about twice as fast.
 - Reading a document wrote its graph one element at a time, about 17 round trips to the graph store

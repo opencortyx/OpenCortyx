@@ -20,12 +20,12 @@ Check it against your Docker VM:
 | nebulagraph | 36 MiB | 1024m | graphd |
 | nebula-storaged | 986 MiB | 2048m | RocksDB, sized by flags (256 MB block cache, 2 x 32 MB write buffers); 1024m was killed repeatedly at ~1000 documents |
 | nebula-metad | 52 MiB | 512m | |
-| qdrant | 132 MiB | 1024m | grows with the number of indexed surfaces |
+| qdrant | 132 MiB | 1536m | grows with the number of indexed surfaces; ~450 MiB at rest for 1,004 files (544,000 points, vectors on disk) |
 | web | 85 MiB | 512m | production build |
 | mcp | 65 MiB | 192m | |
 | redis | 20 MiB | 192m | |
 | setup | exits | 768m | one-shot: graph `ADD HOSTS` + schema, vector collection, database migrations |
-| **sum** | **5.6 GiB** | **17.81 GiB** | |
+| **sum** | **5.6 GiB** | **18.31 GiB** | |
 
 The graph and vector stores were missing from this table until 2026-09-19: it still described the
 single-Postgres world from ADR-001, which is why the documented ceiling total read 13.25 GiB while
@@ -35,7 +35,7 @@ Measured on a FRESHLY WIPED install with no ingested corpus, so the store rows a
 than working sets — postgres, nebula-storaged and qdrant all grow with the data. Re-measure under
 your own load before trusting them.
 
-What this table is currently telling you: **the ceilings total 17.81 GiB and the measured working
+What this table is currently telling you: **the ceilings total 18.31 GiB and the measured working
 set is 5.6 GiB.** The stack fits an 8 GiB VM in practice and does not fit on paper, which is exactly
 the condition where the kernel, not Docker, decides what dies. `setup` exits after start-up.
 
@@ -57,7 +57,8 @@ Every ceiling above is a default. Override any of them in `.env`, then run `dock
 | `EXTRACTION_WORKER_MEM_LIMIT` | 1664m | extraction-worker |
 | `EMBEDDING_WORKER_MEM_LIMIT` | 2304m | embedding-worker |
 | `MAINTENANCE_WORKER_MEM_LIMIT` | 832m | maintenance-worker |
-| `POSTGRES_MEM_LIMIT`, `QDRANT_MEM_LIMIT` | 1024m | postgres, qdrant |
+| `POSTGRES_MEM_LIMIT` | 1024m | postgres |
+| `QDRANT_MEM_LIMIT` | 1536m | qdrant |
 | `NEBULAGRAPH_MEM_LIMIT`, `NEBULA_STORAGED_MEM_LIMIT`, `NEBULA_METAD_MEM_LIMIT` | 1024m, 2048m, 512m | the graph store |
 | `WEB_MEM_LIMIT`, `MCP_MEM_LIMIT`, `REDIS_MEM_LIMIT` | 512m, 192m, 192m | web, mcp, redis |
 | `SETUP_MEM_LIMIT` | 768m | the one-shot setup |

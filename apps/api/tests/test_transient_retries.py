@@ -20,6 +20,10 @@ def test_store_hiccups_are_transient():
     assert is_transient(GraphStoreOperationError("[nebulagraph] Storage Error: RPC failure, probably timeout."))
     assert is_transient(GraphStoreConnectionError("cannot open NebulaGraph session pool"))
     assert is_transient(ConnectionResetError())
+    # The graph service under memory pressure, and a vector store restarting, recover on their own.
+    assert is_transient(GraphStoreOperationError("Used memory hits the high watermark(0.800000) of total system memory."))
+    assert is_transient(GraphStoreOperationError("GraphMemoryExceeded: (-2600)"))
+    assert is_transient(RuntimeError("Qdrant request failed: [Errno 111] Connection refused"))
 
 
 def test_faults_of_the_file_are_not():

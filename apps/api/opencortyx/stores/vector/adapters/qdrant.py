@@ -37,6 +37,12 @@ def _chunks(items, size):
         yield items[i:i + size]
 
 
+
+def _quantization(m):
+    """int8 scalar quantization kept in memory: a quarter of the dense vectors' size."""
+    return m.ScalarQuantization(scalar=m.ScalarQuantizationConfig(type=m.ScalarType.INT8, quantile=0.99,
+                                                                   always_ram=True))
+
 class QdrantVectorStore(VectorStore):
     provider_name = "qdrant"
 
@@ -72,12 +78,26 @@ class QdrantVectorStore(VectorStore):
                     f"Qdrant collection '{self.collection}' does not hold {self.dimension}-dimension "
                     f"'{DENSE}' vectors; set QDRANT_COLLECTION to a new name or re-index after changing "
                     "the embedding model", provider=self.provider_name)
+            if not (dense.on_disk and info.config.quantization_config):
+                # A collection from before: its originals move to disk, an int8 copy stays in memory.
+                client.update_collection(
+                    self.collection, vectors_config={DENSE: m.VectorParamsDiff(on_disk=True)},
+                    sparse_vectors_config={SPARSE: m.SparseVectorParams(index=m.SparseIndexParams(on_disk=True))},
+                    hnsw_config=m.HnswConfigDiff(on_disk=True), quantization_config=_quantization(m))
         else:
+            # Originals on disk, a 4x smaller int8 copy of the dense vectors in memory, which a search
+            # reads first and then rescores against the originals. All in memory, 545,000 points of a
+            # thousand-file workspace (384-dimension vectors, BM25, payload indexes) passed Qdrant's
+            # 1 GB and it was killed 18 times in one upload; the vectors alone were ~550 MB.
             client.create_collection(
                 self.collection,
-                vectors_config={DENSE: m.VectorParams(size=self.dimension, distance=m.Distance.COSINE)},
-                sparse_vectors_config={SPARSE: m.SparseVectorParams(modifier=m.Modifier.IDF)},
-                hnsw_config=m.HnswConfigDiff(payload_m=16, m=0),
+                vectors_config={DENSE: m.VectorParams(size=self.dimension, distance=m.Distance.COSINE,
+                                                      on_disk=True)},
+                sparse_vectors_config={SPARSE: m.SparseVectorParams(
+                    modifier=m.Modifier.IDF, index=m.SparseIndexParams(on_disk=True))},
+                hnsw_config=m.HnswConfigDiff(payload_m=16, m=0, on_disk=True),
+                quantization_config=_quantization(m),
+                on_disk_payload=True,
             )
         schema = client.get_collection(self.collection).payload_schema or {}
         if _LEGACY_TENANT in schema:
@@ -88,7 +108,8 @@ class QdrantVectorStore(VectorStore):
                                         m.KeywordIndexParams(type=m.KeywordIndexType.KEYWORD, is_tenant=True))
         for name in _KEYWORD_FIELDS:
             if name not in schema:
-                client.create_payload_index(self.collection, name, m.PayloadSchemaType.KEYWORD)
+                client.create_payload_index(self.collection, name,
+                                            m.KeywordIndexParams(type=m.KeywordIndexType.KEYWORD, on_disk=True))
         for name in _BOOL_FIELDS:
             if name not in schema:
                 client.create_payload_index(self.collection, name, m.PayloadSchemaType.BOOL)
@@ -98,7 +119,7 @@ class QdrantVectorStore(VectorStore):
             if name not in schema:
                 client.create_payload_index(self.collection, name, m.TextIndexParams(
                     type=m.TextIndexType.TEXT, tokenizer=m.TokenizerType.WORD, lowercase=True,
-                    phrase_matching=True, min_token_len=1))
+                    phrase_matching=True, min_token_len=1, on_disk=True))
 
     def _rename_tenant_field(self, client) -> None:
         """Rename an older collection's `org_id` payload field to `workspace_id`.

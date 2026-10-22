@@ -262,14 +262,11 @@ def check_uploads() -> str:
 
 
 async def check_search_index() -> str:
-    """Recent nodes that still have no vectors: findable by keywords only. The embedding sweep runs
-    every 10 minutes and fills them; a count that stays is a stuck embedding worker."""
-    from datetime import datetime, timedelta, timezone
-
+    """Nodes that still have no vectors: findable by keywords only. Right after an upload these are
+    the ones being embedded; the embedding sweep runs every 10 minutes and fills any left behind, so a
+    count that stays is a stuck embedding worker."""
     from opencortyx.core.substrate import NodeRepo
-    from opencortyx.tasks.graph import SWEEP_SETTLE_MINUTES, SWEEP_WINDOW_HOURS
-    now = datetime.now(timezone.utc)
-    settled = now - timedelta(minutes=SWEEP_SETTLE_MINUTES)
+    from opencortyx.tasks.graph import SWEEP_SCAN
     repo, total = NodeRepo(), 0
     from sqlalchemy import text
 
@@ -278,13 +275,12 @@ async def check_search_index() -> str:
     async with V2Session() as db:
         workspaces = [w for (w,) in (await db.execute(text(f"SELECT workspace_id FROM {V2_SCHEMA}.workspace"))).all()]
     for oid in workspaces:
-        total += len(await repo.unembedded_ids(oid, created_after=now - timedelta(hours=SWEEP_WINDOW_HOURS),
-                                               created_before=settled))
+        total += len(await repo.keyword_only_ids(oid, limit=SWEEP_SCAN))
     if total:
-        _line(WARN, "search index", f"{total} recent node(s) without vectors (keyword search only); the "
+        _line(WARN, "search index", f"{total} node(s) without vectors (keyword search only); the "
                                     "embedding sweep fills them within 10 minutes")
         return WARN
-    _line(OK, "search index", "every recent node has vectors")
+    _line(OK, "search index", "every node has vectors")
     return OK
 
 

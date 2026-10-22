@@ -33,5 +33,7 @@ def v2_resolve_asset(self, workspace_id: str, source_id: str, backstop: bool = F
         if not wait:
             return async_to_sync(resolve_asset)(oid, sid)
     except Exception as exc:
-        raise self.retry(exc=exc, countdown=30)
+        from opencortyx.tasks._shared import retry_policy
+        _max, _delay = retry_policy(self, exc, 3)
+        raise self.retry(exc=exc, countdown=_delay, max_retries=_max)
     raise self.retry(args=(workspace_id, source_id), kwargs={"backstop": True}, countdown=BACKSTOP_SECONDS)

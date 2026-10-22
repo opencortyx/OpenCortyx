@@ -653,6 +653,15 @@ class NodeRepo:
         current = await self.vectors.embedded_nodes(as_uuid(workspace_id), [n.id for n in nodes])
         return [n for n in nodes if str(n.id) not in current]
 
+    async def keyword_only_ids(self, workspace_id, *, limit: int) -> list[str]:
+        """Nodes whose keyword point is written but whose vectors are not, from the vector store alone.
+
+        Every node gets its keyword point when it is written and is marked embedded when its vectors
+        land, so these are exactly what embedding still owes, with no read of the graph."""
+        rows = await self.vectors.scroll(VectorFilter(workspace_id=as_uuid(workspace_id), attrs=[DOCUMENT_ATTR],
+                                                      embedded=False), limit=limit, fields=["node_id"])
+        return [str(r["node_id"]) for r in rows if r.get("node_id")]
+
     async def unembedded_ids(self, workspace_id, *, created_after=None, created_before=None) -> list[str]:
         """Ids of the nodes created in the window that have no embeddings, found from ids alone.
 

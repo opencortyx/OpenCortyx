@@ -60,3 +60,18 @@ async def test_a_run_embeds_its_own_sources(dispatched):
 async def test_a_result_without_sources_falls_back_to_the_run_window(dispatched):
     await progress.ProgressReporter(uuid.uuid4())._index_new_attributes({"rows": 3})
     assert dispatched == [("window", "2026-10-22T00:00:00+00:00")]
+
+
+async def test_what_embedding_owes_is_read_from_the_vector_store():
+    """The sweep's work list: nodes whose keyword point is written but not marked embedded, found
+    without reading the graph."""
+    from opencortyx.core.substrate import NodeRepo
+    from opencortyx.stores.graph import Node
+    from opencortyx.stores.vector.adapters.memory import MemoryVectorStore
+    from opencortyx.stores.vector.models import document_point
+    ws, vectors = uuid.uuid4(), MemoryVectorStore()
+    owed, done = (Node(id=uuid.uuid4(), workspace_id=ws, type="Text", label=x) for x in ("owed", "done"))
+    other = Node(id=uuid.uuid4(), workspace_id=uuid.uuid4(), type="Text", label="elsewhere")
+    await vectors.upsert([document_point(owed, None), document_point(done, None, embedded=True),
+                          document_point(other, None)])
+    assert await NodeRepo(vectors=vectors).keyword_only_ids(ws, limit=100) == [str(owed.id)]

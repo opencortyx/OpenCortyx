@@ -121,8 +121,10 @@ services:
     image: qdrant/qdrant:v1.19.1
     restart: unless-stopped
     logging: *logging
-    mem_limit: ${QDRANT_MEM_LIMIT:-1024m}
-    memswap_limit: ${QDRANT_MEM_LIMIT:-1024m}
+    # Vectors live on disk with an int8 copy in memory: ~450 MB at rest for a thousand files (544,000
+    # points). Rewriting a collection into that layout peaked at 1.33 GB and stalled at a 1 GB limit.
+    mem_limit: ${QDRANT_MEM_LIMIT:-1536m}
+    memswap_limit: ${QDRANT_MEM_LIMIT:-1536m}
     ports:
       - "127.0.0.1:${OPENCORTYX_QDRANT_PORT:-6333}:6333"
     volumes:

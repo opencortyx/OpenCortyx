@@ -96,7 +96,11 @@ def v2_embed_source(self, workspace_id: str, source_id: str):
     try:
         return async_to_sync(_run)()
     except Exception as exc:
-        raise self.retry(exc=exc, countdown=30, max_retries=3)
+        # A store restarting is waited out (~16 minutes, as ingest does): 3 tries 30 s apart lost 50
+        # files' vectors for good while Qdrant restarted during a thousand-file upload.
+        from opencortyx.tasks._shared import retry_policy
+        _max, _delay = retry_policy(self, exc, 3)
+        raise self.retry(exc=exc, countdown=_delay, max_retries=_max)
 
 
 @celery_app.task(bind=True, queue="embedding",
@@ -129,7 +133,11 @@ def v2_index_node_attrs(self, workspace_id: str, since_iso: str = None, limit: i
     try:
         return async_to_sync(_run)()
     except Exception as exc:
-        raise self.retry(exc=exc, countdown=30, max_retries=3)
+        # A store restarting is waited out (~16 minutes, as ingest does): 3 tries 30 s apart lost 50
+        # files' vectors for good while Qdrant restarted during a thousand-file upload.
+        from opencortyx.tasks._shared import retry_policy
+        _max, _delay = retry_policy(self, exc, 3)
+        raise self.retry(exc=exc, countdown=_delay, max_retries=_max)
 
 
 @celery_app.task(bind=True, queue="embedding", name="opencortyx.embed_node", max_retries=3)
@@ -152,37 +160,46 @@ def v2_embed_node(self, workspace_id: str, node_id: str):
 
 #: Nodes loaded and embedded at a time by the passes that find their work by id.
 PAGE = 500
-#: Nodes younger than this are left to the job that is embedding them right now.
-SWEEP_SETTLE_MINUTES = 10
-#: How far back the sweep looks. Older gaps are a backfill (`index_node_attrs` with backfill=True).
-SWEEP_WINDOW_HOURS = 24
+#: Most nodes without vectors one sweep looks at; the rest are found by the next.
+SWEEP_SCAN = 200_000
 
 
 @celery_app.task(bind=True, queue="embedding", name="opencortyx.sweep_unembedded", max_retries=0)
 def v2_sweep_unembedded(self):
-    """Embed recent nodes that still have no vectors, in every workspace.
+    """Embed nodes that still have no vectors, in every workspace.
 
-    The safety net under `embed_source`: a job lost in flight (a worker stopped or killed mid-way)
-    left an upload findable by keywords only, with nothing to notice. Run on a schedule; a node is
-    only taken once it is SWEEP_SETTLE_MINUTES old, so it never races the job that is embedding it.
+    The safety net under `embed_source`: a job lost in flight (a worker stopped, a store restarting
+    past its retries) left an upload findable by keywords only, with nothing to notice. What is
+    owed is read from the vector store (`keyword_only_ids`), not found by scanning the graph: a
+    scan of the last day's nodes read all of a thousand-file upload every 10 minutes. A node is
+    taken only when the previous sweep also found it, so it never races the job embedding it now.
     Idempotent and cheap when there is nothing to do.
     """
     async def _run():
-        from datetime import datetime, timedelta, timezone
-
         from sqlalchemy import select
 
+        from opencortyx.core.config import settings
         from opencortyx.core.db import V2Session
         from opencortyx.domain.control import Workspace
 
-        now = datetime.now(timezone.utc)
-        settled = now - timedelta(minutes=SWEEP_SETTLE_MINUTES)
         async with V2Session() as db:
             workspaces = [w for (w,) in (await db.execute(select(Workspace.workspace_id))).all()]
+        try:
+            import redis as _redis
+            r = _redis.Redis.from_url(settings.CELERY_BROKER_URL)
+        except Exception:                                          # noqa: BLE001 — no Redis: no settling
+            r = None
         repo, done = NodeRepo(), {}
         for oid in workspaces:
-            pending = await repo.unembedded_ids(oid, created_after=now - timedelta(hours=SWEEP_WINDOW_HOURS),
-                                                created_before=settled)
+            owed = await repo.keyword_only_ids(oid, limit=SWEEP_SCAN)
+            key = f"v2:sweep_owed:{oid}"
+            seen = {m.decode() for m in r.smembers(key)} if r is not None else None
+            if r is not None:
+                r.delete(key)
+                if owed:
+                    r.sadd(key, *owed)
+                    r.expire(key, 3600)
+            pending = [i for i in owed if seen is None or i in seen]
             for start in range(0, len(pending), PAGE):
                 await repo.index_embeddings(oid, await repo.get_many(oid, pending[start:start + PAGE]),
                                             embed_batch)
