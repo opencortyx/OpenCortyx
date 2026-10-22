@@ -63,7 +63,7 @@ jobs:
         working-directory: apps/api
     steps:
       - uses: actions/checkout@v7
-      # The API's dependencies (torch, LibreOffice) nearly fill the runner's disk, and the audit step
+      # The API's dependencies (torch above all) nearly fill the runner's disk, and the audit step
       # then fails with "No space left on device". Drop preinstalled toolchains this job never uses.
       - name: Free disk space
         working-directory: .
@@ -87,7 +87,9 @@ jobs:
         run: |
           poetry export --with dev --without-hashes -f requirements.txt -o /tmp/requirements-audit.txt
           pip install pip-audit
-          pip-audit -r /tmp/requirements-audit.txt --no-deps --disable-pip
+          # Accepted advisories, each with its reason and when to drop it: pip-audit-ignore.txt.
+          pip-audit -r /tmp/requirements-audit.txt --no-deps --disable-pip \
+            $(grep -vE '^\s*(#|$)' pip-audit-ignore.txt | sed 's/^/--ignore-vuln /')
 
   mcp:
     runs-on: ubuntu-latest

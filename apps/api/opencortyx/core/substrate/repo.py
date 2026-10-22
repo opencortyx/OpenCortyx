@@ -621,7 +621,7 @@ class NodeRepo:
                 if windowed:
                     # Too long to be one surface: a passage is embedded window by window instead.
                     for part, window in enumerate(text_windows(
-                            long_text, _rc.chunk_window_chars(), _rc.chunk_overlap_chars())[:TEXT_MAX_WINDOWS]):
+                            str(long_text), _rc.chunk_window_chars(), _rc.chunk_overlap_chars())[:TEXT_MAX_WINDOWS]):
                         surfaces.append((node, "text", attr_search_text("text", window), part))
                     counts["text"] = counts.get("text", 0) + 1
             vectors = await embed_batch([text for _, _, text, _ in surfaces]) if surfaces else []
