@@ -224,6 +224,9 @@ class NodeRepo:
         the whole graph (`GraphStore.node_outlines`)."""
         return await self.graph.node_outlines(as_uuid(workspace_id))
 
+    async def incident_edge_counts(self, workspace_id, node_ids: Sequence) -> dict[str, int]:
+        return await self.graph.incident_edge_counts(as_uuid(workspace_id), node_ids)
+
     async def edge_ends(self, workspace_id, exclude_types: Sequence[str] = ()) -> list[tuple[str, str]]:
         return await self.graph.edge_ends(as_uuid(workspace_id), exclude_types)
 

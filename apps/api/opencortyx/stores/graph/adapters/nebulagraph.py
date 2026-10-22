@@ -112,6 +112,8 @@ def _list(values) -> str:
     return "[" + ", ".join(_lit(v) for v in values) + "]"
 
 
+#: Edges counted per node by `incident_edge_counts`; a hub's relation mix is clear well before this.
+_INCIDENT_CAP = 5000
 #: Values per lookup when matching one of several values on an index.
 _ANY_CHUNK = 100
 
@@ -692,6 +694,23 @@ class NebulaGraphStore(GraphStore):
         return [Node(id=uuid.UUID(vid), workspace_id=org, type=t, label=label, source_ref=q.as_uuid(ref),
                      properties={"__base_type": base or t, "__status": st or "active"})
                 for vid, t, base, label, ref, st in rows]
+
+    async def incident_edge_counts(self, workspace_id, node_ids: Sequence) -> dict[str, int]:
+        # From each node, both directions, its edges' types only, capped per node in storage: an edge
+        # between two of the nodes is met from each end, which is the count the contract asks for.
+        # Reading the edges in full fetched every neighbour's properties, so a large document or the
+        # day's Date node as a question's seed ran the graph service out of memory.
+        org = _lit(str(workspace_id))
+        counts: dict[str, int] = {}
+        unique = list(dict.fromkeys(str(i) for i in node_ids if i is not None))
+        for batch in _chunks(unique, _IN_CHUNK):
+            rows = await self._rows("GO 1 STEPS FROM " + ", ".join(_vid(i) for i in batch)
+                                    + f" OVER rel BIDIRECT WHERE rel.workspace_id == {org} "
+                                    f"YIELD rel.type AS t LIMIT [{_INCIDENT_CAP}] "
+                                    "| GROUP BY $-.t YIELD $-.t AS t, count(*) AS n;")
+            for t, n in rows:
+                counts[t] = counts.get(t, 0) + int(n)
+        return counts
 
     async def edge_ends(self, workspace_id, exclude_types: Sequence[str] = ()) -> list[tuple[str, str]]:
         # Each edge once, from its source node, a slice of nodes at a time: no answer holds all edges.

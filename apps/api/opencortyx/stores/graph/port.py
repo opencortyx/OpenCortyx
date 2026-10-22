@@ -65,6 +65,16 @@ class GraphStore(ABC):
                                         "__status": node_status(n)}))
         return out
 
+    async def incident_edge_counts(self, workspace_id, node_ids: Sequence) -> dict[str, int]:
+        """How many edges of each type touch these nodes, an edge counted once per end among them.
+        Only the counts: no edge or node is read in full. A store may cap a node with very many edges
+        (a day's Date node, a large document) at a few thousand of them."""
+        seeds = {str(n) for n in node_ids}
+        counts: dict[str, int] = {}
+        for e in await self.find_edges(workspace_id, EdgeQuery(node_ids=list(seeds))):
+            counts[e.type] = counts.get(e.type, 0) + (str(e.source_id) in seeds) + (str(e.target_id) in seeds)
+        return counts
+
     async def edge_ends(self, workspace_id, exclude_types: Sequence[str] = ()) -> list[tuple[str, str]]:
         """(source id, target id) of every edge whose type is not excluded, without the edges'
         properties."""

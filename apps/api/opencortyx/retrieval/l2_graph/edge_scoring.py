@@ -99,12 +99,7 @@ async def profile_relations_for(workspace_id: uuid.UUID, node_ids: list[str]) ->
     """
     if not node_ids:
         return {}
-    seeds = {str(n) for n in node_ids}
-    counts: dict[str, int] = {}
-    for edge in await NodeRepo().edges(workspace_id, node_ids=list(seeds)):
-        hits = (str(edge.source_id) in seeds) + (str(edge.target_id) in seeds)
-        counts[edge.type] = counts.get(edge.type, 0) + hits
-    return _profiles(counts)
+    return _profiles(await NodeRepo().incident_edge_counts(workspace_id, [str(n) for n in node_ids]))
 
 
 async def profile_relations(workspace_id: uuid.UUID) -> dict[str, RelationProfile]:

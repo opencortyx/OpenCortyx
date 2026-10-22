@@ -180,6 +180,18 @@ async def test_whole_workspace_reads_are_complete_when_read_in_slices(store, org
     assert sorted(window) == sorted(str(n.id) for n in nodes[2:5])
 
 
+async def test_incident_edge_counts_count_each_end_among_the_nodes(store, org, clean):
+    a, b, c, d = (_node(org, "Text", x) for x in "abcd")
+    await store.upsert_nodes([a, b, c, d])
+    await store.upsert_edges([Edge(workspace_id=org, source_id=a.id, target_id=b.id, type="NEXT"),
+                              Edge(workspace_id=org, source_id=b.id, target_id=c.id, type="NEXT"),
+                              Edge(workspace_id=org, source_id=a.id, target_id=d.id, type="CONTAINS"),
+                              Edge(workspace_id=org, source_id=c.id, target_id=d.id, type="CONTAINS")])
+    # a-b is met from both a and b; b-c and a-d from one end; c-d not at all.
+    assert await store.incident_edge_counts(org, [a.id, b.id]) == {"NEXT": 3, "CONTAINS": 1}
+    assert await store.incident_edge_counts(org, []) == {}
+
+
 async def test_parallel_edges_differ_by_relation(store, org, clean):
     dog, max_ = _node(org, "Entity", "dog"), _node(org, "Entity", "Max")
     await store.upsert_nodes([dog, max_])
