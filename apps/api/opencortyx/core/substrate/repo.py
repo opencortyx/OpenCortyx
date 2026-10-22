@@ -658,7 +658,7 @@ class NodeRepo:
 
         Every node gets its keyword point when it is written and is marked embedded when its vectors
         land, so these are exactly what embedding still owes, with no read of the graph."""
-        rows = await self.vectors.scroll(VectorFilter(workspace_id=as_uuid(workspace_id), attrs=[DOCUMENT_ATTR],
+        rows = await self.vectors.scroll(VectorFilter(workspace_id=require_uuid(workspace_id, "workspace_id"), attrs=[DOCUMENT_ATTR],
                                                       embedded=False), limit=limit, fields=["node_id"])
         return [str(r["node_id"]) for r in rows if r.get("node_id")]
 
