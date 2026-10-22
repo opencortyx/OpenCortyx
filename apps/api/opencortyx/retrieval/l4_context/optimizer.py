@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 import re
+from functools import lru_cache
 from typing import Iterable, Optional
 
 from opencortyx.retrieval import experiments
@@ -88,8 +89,16 @@ def _substance(text: str) -> str:
     return _ANNOTATION.sub("", text or "")
 
 
+@lru_cache(maxsize=8192)
+def _statement_tokens(text: str) -> frozenset:
+    """The words of a block's statement, computed once per text. Merging compares every block with
+    every block kept so far: 578 blocks meant ~167,000 comparisons, each tokenising both texts again,
+    3.2 s of a question's 7 s."""
+    return frozenset(_tokens(_substance(text)))
+
+
 def _similarity(a: str, b: str) -> float:
-    ta, tb = _tokens(_substance(a)), _tokens(_substance(b))
+    ta, tb = _statement_tokens(a), _statement_tokens(b)
     if not ta or not tb:
         return 0.0
     return len(ta & tb) / len(ta | tb)
@@ -107,7 +116,7 @@ def _redundancy(a: str, b: str) -> float:
     content, which is the property that actually matters - and it therefore works identically on
     a corpus whose types are named differently.
     """
-    ta, tb = _tokens(_substance(a)), _tokens(_substance(b))
+    ta, tb = _statement_tokens(a), _statement_tokens(b)
     if not ta or not tb:
         return 0.0
     inter = len(ta & tb)
@@ -154,7 +163,7 @@ def semantic_redundancy(b, kept) -> float:
 
 
 def _substance_len(b) -> int:
-    return len(_tokens(_substance(getattr(b, "text", "") or "")))
+    return len(_statement_tokens(getattr(b, "text", "") or ""))
 
 
 def dedupe(blocks: Iterable[ContextBlock]) -> list[ContextBlock]:

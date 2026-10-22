@@ -49,6 +49,13 @@ missed, and `opencortyx doctor` shows it.
   graph, the whole of a large upload, and failed on the graph service's memory. It reads what is
   still owed from the vector store instead (each node's keyword entry says whether its vectors
   landed), and takes a node only when the previous sweep also found it.
+- One question could take the graph service down: expanding from a node read all of its neighbours,
+  with their properties, before keeping the first few, and the day's Date node has one edge per
+  node written that day (185,000 after a thousand files). The cap is applied per node in storage
+  now: 0.03 s instead of running out of memory.
+- Questions took about 7.7 s, half of it fitting the results into the context: each candidate was
+  compared with every other, and both texts were split into words again for each comparison (578
+  candidates, ~167,000 comparisons). Each text is split once now: about 2.6 s a question.
 - Embedding padded short texts to the longest in their batch: a node's label ran at the length of
   a 2,000-character passage. Texts are sorted by length first now, about twice as fast.
 - Reading a document wrote its graph one element at a time, about 17 round trips to the graph store

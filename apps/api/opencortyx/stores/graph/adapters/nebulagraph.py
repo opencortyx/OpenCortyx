@@ -805,11 +805,15 @@ class NebulaGraphStore(GraphStore):
         seen: set[tuple[str, str]] = set()
         unique = list(dict.fromkeys(str(i) for i in ids if i is not None))
         for batch in _chunks(unique, _IN_CHUNK):
-            stmt = ("GO FROM " + ", ".join(_vid(i) for i in batch) + f" OVER rel{step} WHERE {where} "
+            stmt = ("GO 1 STEPS FROM " + ", ".join(_vid(i) for i in batch) + f" OVER rel{step} WHERE {where} "
                     "YIELD src(edge) AS s, dst(edge) AS d, properties(edge) AS ep, id($$) AS far, "
                     "properties($$) AS np")
             if limit is not None:
-                stmt += f" | LIMIT {int(limit) - len(out)}"
+                # `LIMIT [n]` caps each vertex's edges in storage. `| LIMIT n` applies after GO has
+                # fetched every neighbour with its properties: from a day's Date node (one edge per
+                # node written that day, 185,000 after a thousand files) that ran the graph service
+                # out of memory on a single question.
+                stmt += f" LIMIT [{int(limit) - len(out)}]"
             for s, d, ep, far, np in await self._rows(stmt + ";"):
                 edge = _edge_from(s, d, ep)
                 node = _node_from(far, np) if np else None
