@@ -1,7 +1,7 @@
 # Advisories the dependency audit (CI `api` job) accepts, each with its reason. One ID per line;
 # comments and blank lines are ignored. Review every entry when its dependency can move.
 #
-# Pillow 12.3.0, fixed in 13.0.0 (accepted 2026-10-22; the 966xx IDs published later that day). fastembed, the in-process embedder, requires
+# Pillow 12.3.0, fixed in 13.0.0 (accepted 2026-10-22; the 966xx IDs and GHSA-78g4-xqwv-q3g8 published later). fastembed, the in-process embedder, requires
 # Pillow < 13 in every release (0.8.0 and 0.9.0, the latest), so the fix cannot be installed yet.
 # No untrusted image reaches Pillow: uploaded images and PDFs are decoded by LiteParse (Rust);
 # fastembed uses Pillow only for image embeddings, which OpenCortyx does not use; python-pptx uses
@@ -41,3 +41,4 @@ CVE-2026-96642
 CVE-2026-96643
 CVE-2026-96644
 CVE-2026-96778
+GHSA-78g4-xqwv-q3g8
