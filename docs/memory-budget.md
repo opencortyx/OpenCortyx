@@ -11,9 +11,9 @@ Check it against your Docker VM:
 
 | Service | last measured | ceiling | notes |
 |---|---|---|---|
-| api | 1136 MiB | 3072m | embedding model plus retrieval working memory; 2048m was OOM-killed under load |
+| api | 1136 MiB | 4096m | embedding model, retrieval working memory, and the built-in generation model (Qwen3-0.6B, ~1.2 GiB) once loaded; 2048m was OOM-killed under load |
 | embedding-worker | 1616 MiB | 2304m | embedding model, in one prefork child (1517 MiB after re-embedding 1042 nodes; recycled past 1.5 GB) |
-| extraction-worker | 1041 MiB | 1664m | entity resolution loads the embedding model; 768m was OOM-killed |
+| extraction-worker | 1041 MiB | 3200m | entity resolution loads the embedding model, extraction the generation model (~1.2 GiB); 768m was OOM-killed |
 | worker | 234 MiB | 3072m | reads uploaded files with the layout readers (LiteParse for PDFs, LibreOffice for legacy office files) |
 | maintenance-worker | 200 MiB | 832m | one child up to 293 MiB, plus the 512 MiB headroom rule below |
 | postgres | 74 MiB | 1024m | control plane + ontology only since ADR-004 |
@@ -25,7 +25,7 @@ Check it against your Docker VM:
 | mcp | 65 MiB | 192m | |
 | redis | 20 MiB | 192m | |
 | setup | exits | 768m | one-shot: graph `ADD HOSTS` + schema, vector collection, database migrations |
-| **sum** | **5.6 GiB** | **18.81 GiB** | |
+| **sum** | **5.6 GiB** | **21.31 GiB** | |
 
 The graph and vector stores were missing from this table until 2026-09-19: it still described the
 single-Postgres world from ADR-001, which is why the documented ceiling total read 13.25 GiB while
@@ -35,7 +35,7 @@ Measured on a FRESHLY WIPED install with no ingested corpus, so the store rows a
 than working sets — postgres, nebula-storaged and qdrant all grow with the data. Re-measure under
 your own load before trusting them.
 
-What this table is currently telling you: **the ceilings total 18.81 GiB and the measured working
+What this table is currently telling you: **the ceilings total 21.31 GiB and the measured working
 set is 5.6 GiB.** The stack fits an 8 GiB VM in practice and does not fit on paper, which is exactly
 the condition where the kernel, not Docker, decides what dies. `setup` exits after start-up.
 
@@ -52,9 +52,9 @@ Every ceiling above is a default. Override any of them in `.env`, then run `dock
 
 | Variable | Default | Sets |
 |---|---|---|
-| `API_MEM_LIMIT` | 3072m | api |
+| `API_MEM_LIMIT` | 4096m | api |
 | `WORKER_MEM_LIMIT` | 3072m | worker (file reading) |
-| `EXTRACTION_WORKER_MEM_LIMIT` | 1664m | extraction-worker |
+| `EXTRACTION_WORKER_MEM_LIMIT` | 3200m | extraction-worker |
 | `EMBEDDING_WORKER_MEM_LIMIT` | 2304m | embedding-worker |
 | `MAINTENANCE_WORKER_MEM_LIMIT` | 832m | maintenance-worker |
 | `POSTGRES_MEM_LIMIT` | 1024m | postgres |
@@ -63,7 +63,7 @@ Every ceiling above is a default. Override any of them in `.env`, then run `dock
 | `WEB_MEM_LIMIT`, `MCP_MEM_LIMIT`, `REDIS_MEM_LIMIT` | 512m, 192m, 192m | web, mcp, redis |
 | `SETUP_MEM_LIMIT` | 768m | the one-shot setup |
 | `CELERY_WORKER_MAX_MEMORY_KB` | 1500000 | worker, per child |
-| `EXTRACTION_WORKER_MAX_MEMORY_KB` | 1000000 | extraction-worker, per child |
+| `EXTRACTION_WORKER_MAX_MEMORY_KB` | 2500000 | extraction-worker, per child (above the generation model, or every task would reload it) |
 | `EMBEDDING_WORKER_MAX_MEMORY_KB` | 1500000 | embedding-worker, per child |
 | `MAINTENANCE_WORKER_MAX_MEMORY_KB` | 300000 | maintenance-worker, per child |
 

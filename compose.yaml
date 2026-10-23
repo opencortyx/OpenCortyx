@@ -260,8 +260,8 @@ services:
     restart: unless-stopped
     logging: *logging
     # Embedding model plus retrieval working memory reach ~1.8 GiB under load.
-    mem_limit: ${API_MEM_LIMIT:-3072m}
-    memswap_limit: ${API_MEM_LIMIT:-3072m}
+    mem_limit: ${API_MEM_LIMIT:-4096m}
+    memswap_limit: ${API_MEM_LIMIT:-4096m}
     command: uvicorn opencortyx.main:app --host 0.0.0.0 --port 8000 --loop asyncio
     ports:
       - "${OPENCORTYX_BIND:-127.0.0.1}:${OPENCORTYX_API_PORT:-8000}:8000"
@@ -323,9 +323,9 @@ services:
     stop_grace_period: 30s
     logging: *logging
     # Entity resolution embeds in-process, so extraction holds the embedding model (~1.2 GiB peak).
-    mem_limit: ${EXTRACTION_WORKER_MEM_LIMIT:-1664m}
-    memswap_limit: ${EXTRACTION_WORKER_MEM_LIMIT:-1664m}
-    command: sh -c 'exec celery -A opencortyx.core.worker.celery_app worker --loglevel=info --concurrency=${EXTRACTION_WORKER_CONCURRENCY:-1} --queues=extraction --max-memory-per-child=${EXTRACTION_WORKER_MAX_MEMORY_KB:-1000000} --max-tasks-per-child=200'
+    mem_limit: ${EXTRACTION_WORKER_MEM_LIMIT:-3200m}
+    memswap_limit: ${EXTRACTION_WORKER_MEM_LIMIT:-3200m}
+    command: sh -c 'exec celery -A opencortyx.core.worker.celery_app worker --loglevel=info --concurrency=${EXTRACTION_WORKER_CONCURRENCY:-1} --queues=extraction --max-memory-per-child=${EXTRACTION_WORKER_MAX_MEMORY_KB:-2500000} --max-tasks-per-child=200'
     healthcheck: *worker-healthcheck
     env_file: .env
     environment:

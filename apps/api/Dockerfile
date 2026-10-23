@@ -60,6 +60,10 @@ from fastembed.rerank.cross_encoder import TextCrossEncoder; \
 TextEmbedding('sentence-transformers/all-MiniLM-L6-v2', cache_dir='/cache', lazy_load=True); \
 SparseTextEmbedding('Qdrant/bm25', cache_dir='/cache', lazy_load=True); \
 TextCrossEncoder('Xenova/ms-marco-MiniLM-L-12-v2', cache_dir='/cache', lazy_load=True)"
+# The generation model a new workspace starts with (core/config/env.py: BUILTIN_GENERATION_MODEL),
+# in the Hugging Face cache on the same volume, where the Models page downloads models
+# (core/inference/hf_hub.py: config, tokenizer and safetensors only).
+RUN HF_HOME=/cache/huggingface python -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-0.6B', allow_patterns=['*.json', '*.safetensors', '*.txt', '*.model', '*.tiktoken', '*.jinja'])"
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     if [ "$INSTALL_RERANK" = "1" ]; then \

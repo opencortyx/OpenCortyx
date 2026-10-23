@@ -10,7 +10,7 @@ import re
 
 import pytest
 
-from opencortyx.core.config import BUILTIN_RERANK_MODEL, SPARSE_MODEL
+from opencortyx.core.config import BUILTIN_GENERATION_MODEL, BUILTIN_RERANK_MODEL, SPARSE_MODEL
 from opencortyx.core.config.env import BUILTIN_EMBED_MODELS
 
 DOCKERFILE = Path(__file__).resolve().parents[1] / "Dockerfile"
@@ -24,5 +24,5 @@ def test_dockerfile_bakes_the_default_models():
         pytest.skip("runs from a checkout of the repository")
     width = int(re.search(r"^EMBED_DIMENSIONS=(\d+)", example.read_text(encoding="utf-8"), re.M)[1])
     text = DOCKERFILE.read_text(encoding="utf-8")
-    for name in (BUILTIN_EMBED_MODELS[width], SPARSE_MODEL, BUILTIN_RERANK_MODEL):
+    for name in (BUILTIN_EMBED_MODELS[width], SPARSE_MODEL, BUILTIN_RERANK_MODEL, BUILTIN_GENERATION_MODEL):
         assert f"'{name}'" in text, f"the Dockerfile does not bake {name}"

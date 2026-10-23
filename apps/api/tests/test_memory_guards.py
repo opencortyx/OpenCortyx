@@ -62,6 +62,12 @@ def test_swap_is_pinned_to_the_limit(services):
     assert not bad, "memswap_limit != mem_limit on: %s" % ", ".join(sorted(bad))
 
 
+#: A worker child may grow to this before it is recycled. 1.5 GiB everywhere, except where a child
+#: holds the built-in generation model (Qwen3-0.6B, ~1.2 GiB) beside the embedder: recycled at
+#: 1.5 GiB it would reload the model after every task.
+CHILD_CAP_KIB = {"extraction-worker": 2_500_000}
+
+
 def test_every_celery_worker_bounds_its_children(services):
     """`--max-memory-per-child` is what makes a 4.5 GiB child unreachable rather than unlikely."""
     seen = 0
@@ -75,7 +81,7 @@ def test_every_celery_worker_bounds_its_children(services):
         m = re.search(r"--max-memory-per-child=(\d+)", cmd)
         assert m, "%s runs a Celery worker with no --max-memory-per-child" % name
         kib = int(m.group(1))
-        assert kib <= 1_500_000, \
+        assert kib <= CHILD_CAP_KIB.get(name, 1_500_000), \
             "%s allows a %.2f GiB child — the size that took the VM down" % (name, kib / 1024 ** 2)
 
         conc = re.search(r"--concurrency[= ](\d+)", cmd)

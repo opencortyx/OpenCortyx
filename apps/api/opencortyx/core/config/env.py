@@ -250,6 +250,12 @@ BUILTIN_EMBED_MODEL = BUILTIN_EMBED_MODELS.get(settings.EMBED_DIMENSIONS, BUILTI
 #: INSTALL_RERANK=1 image can run, so on a release install every question skipped the reranker.
 BUILTIN_RERANK_PROVIDER = "fastembed"
 BUILTIN_RERANK_MODEL = "Xenova/ms-marco-MiniLM-L-12-v2"
+#: The generation model a new workspace's registry is seeded with: small enough to run inside the
+#: API and the extraction worker on CPU (about 1.2 GB each, bf16), carried in the image so nothing is
+#: downloaded on first use. Answers and extraction use it until a larger model
+#: (a server, or another download) is chosen on the Models page.
+BUILTIN_GENERATION_PROVIDER = "transformers"
+BUILTIN_GENERATION_MODEL = "Qwen/Qwen3-0.6B"
 #: The keyword (BM25) model the vector store's sparse vectors come from.
 SPARSE_MODEL = "Qdrant/bm25"
 PROFILE_RERANK = {

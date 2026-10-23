@@ -16,7 +16,8 @@ path doesn't hit the DB per call.
 import uuid
 
 from opencortyx.core.config import (
-    BUILTIN_EMBED_MODEL, BUILTIN_EMBED_PROVIDER, BUILTIN_RERANK_MODEL, BUILTIN_RERANK_PROVIDER,
+    BUILTIN_EMBED_MODEL, BUILTIN_EMBED_PROVIDER, BUILTIN_GENERATION_MODEL, BUILTIN_GENERATION_PROVIDER,
+    BUILTIN_RERANK_MODEL, BUILTIN_RERANK_PROVIDER,
     LOCAL_LLM_PROVIDERS,
     OPENAI_COMPATIBLE_PROVIDERS,
 )
@@ -63,10 +64,13 @@ KNOWN_PROVIDERS = OPENAI_COMPATIBLE_PROVIDERS | IN_PROCESS_PROVIDERS | {"anthrop
 
 
 def _builtin_rows() -> list[dict]:
-    """What a new workspace's registry starts with: the two models that run inside the API itself, as
-    ordinary rows the Models page shows and can change or delete. No generation model — that is a
-    server the workspace connects, by its address."""
+    """What a new workspace's registry starts with: the models that run inside OpenCortyx itself and
+    ship in the image (an embedder, a reranker, a small generation model), as ordinary rows the
+    Models page shows and can change or delete."""
     return [
+        {"role": "generation", "name": BUILTIN_GENERATION_MODEL.split("/")[-1],
+         "provider": BUILTIN_GENERATION_PROVIDER, "model_id": BUILTIN_GENERATION_MODEL,
+         "base_url": None, "params": {}},
         {"role": "embedding", "name": BUILTIN_EMBED_MODEL.split("/")[-1],
          "provider": BUILTIN_EMBED_PROVIDER, "model_id": BUILTIN_EMBED_MODEL,
          "base_url": None, "params": {}},

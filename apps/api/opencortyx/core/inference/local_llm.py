@@ -55,8 +55,11 @@ def _encode(tok, prompt: str, system: str | None):
     messages = ([{"role": "system", "content": system}] if system else []) + [
         {"role": "user", "content": prompt}]
     if getattr(tok, "chat_template", None):
+        # `enable_thinking=False`: Qwen3's template otherwise writes a hidden <think> passage before
+        # every answer, most of a small CPU model's time, and it leaks into the output. Templates
+        # without the switch ignore it.
         return tok.apply_chat_template(messages, add_generation_prompt=True, return_tensors="pt",
-                                       return_dict=True)
+                                       return_dict=True, enable_thinking=False)
     return tok((system + "\n\n" if system else "") + prompt, return_tensors="pt")
 
 

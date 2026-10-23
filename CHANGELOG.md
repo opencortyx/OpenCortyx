@@ -31,6 +31,10 @@ missed, and `opencortyx doctor` shows it.
   `EMBED_DIMENSIONS=384` to `.env`, pick all-MiniLM-L6-v2 on the Models page and re-index.
 - Files read after the update are cut at the new chunk size (800 characters): a longer paragraph
   becomes several nodes. Files already read keep their nodes.
+- A workspace created after the update starts with a generation model, Qwen3-0.6B, running inside
+  OpenCortyx; existing workspaces keep the models they have and can add it on the Models page. The
+  image is about 1.2 GB larger, and the API and extraction worker ceilings rise to 4 GB and 3.2 GB
+  (`API_MEM_LIMIT`, `EXTRACTION_WORKER_MEM_LIMIT`, `EXTRACTION_WORKER_MAX_MEMORY_KB` 2500000).
 
 ### Fixed
 - The graph store scanned a workspace's whole index for every lookup of "one of these ids": an
@@ -167,6 +171,11 @@ missed, and `opencortyx doctor` shows it.
   instead of nomic-embed-text-v1.5. Measured on this release's thousand-file corpus on CPU: 10x the
   speed (186 against 18.6 texts a second) at under a third of the memory (458 MB against 1.66 GB).
   nomic-embed-text and others stay one Download away on the Models page.
+- **A new workspace answers without a model server**: it starts with Qwen3-0.6B, which the image
+  carries and which runs inside the API and the extraction worker on CPU (Transformers, about 1.2 GB
+  each). Before, a new workspace had no generation model until one was connected by its address.
+  Its hidden reasoning passage is turned off, so answers come back without a `<think>` block. A
+  larger model is one Download or one server address away on the Models page.
 - **Chunk size 800 characters**, within what all-MiniLM-L6-v2 reads (256 tokens). A paragraph, list
   item or caption longer than that becomes several nodes, cut at sentence ends and linked in reading
   order; a table or code block stays one node, searched by windows of that size.
