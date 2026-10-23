@@ -153,6 +153,9 @@ class FakeStore:
         self.statements_for.append(src)
         return {"checked": 0, "applied": 0}
 
+    async def document(self, org, src):           # no identifiers or references: nothing to link
+        return None
+
     async def mark_resolved(self, org, src, summary):
         self.resolved = (src, summary)
 

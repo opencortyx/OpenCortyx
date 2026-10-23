@@ -128,6 +128,16 @@ missed, and `opencortyx doctor` shows it.
   4,000 characters by default, the fastest measured).
 
 ### Changed
+- **A document's metadata is read from its header**: the `Key: value` block many documents open with
+  (an RFC's or a PEP's header, front matter, an HTML definition list, a PDF's header table). Its
+  title, identifiers ("rfc 9304", read from the filename and the header), publication date and
+  fields (status, category, authors, ...) are stored on the document's Source, and a document without
+  text of its own shows them in an answer's context. Identifiers and title are names, so a question
+  that names a document ("RFC 9304") finds it by exact match.
+- **Documents are linked to the documents they name.** A header value made of identifiers
+  ("Obsoletes: 8113", "Requires: 703") is a reference; the resolution engine matches it to the
+  document holding that identifier and adds an edge named by the key (`OBSOLETES`, `REQUIRES`),
+  whichever of the two was read first.
 - **A new installation embeds with all-MiniLM-L6-v2** (384 dimensions), which the image carries,
   instead of nomic-embed-text-v1.5. Measured on this release's thousand-file corpus on CPU: 10x the
   speed (186 against 18.6 texts a second) at under a third of the memory (458 MB against 1.66 GB).

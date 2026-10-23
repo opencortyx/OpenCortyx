@@ -19,8 +19,10 @@ _POINT_NS = uuid.uuid5(uuid.NAMESPACE_URL, "opencortyx/vector-point")
 DOCUMENT_ATTR = "__doc"
 
 #: Properties that hold other names for a node.
+#: A document's `identifiers` ("rfc 9304") and `title` are names too: a question that names the
+#: document must find it by exact match, not by text that happens to resemble it.
 NAME_KEYS = ("name", "aliases", "alias", "also_known_as", "aka", "synonyms", "other_names",
-             "short_name", "nickname", "abbreviation")
+             "short_name", "nickname", "abbreviation", "identifiers", "title")
 _DOCUMENT_KEYS = ("text", "__context", "__text")
 _MAX_PROP_CHARS = 512
 

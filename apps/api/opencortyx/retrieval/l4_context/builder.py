@@ -120,6 +120,31 @@ def group_provenance(tags) -> list[str]:
     return [f"{s}({','.join(by[s])})" if by[s] else s for s in order]
 
 
+#: Fields of a document's record that describe the stored file, not the document.
+_FILE_FIELDS = frozenset({"filename", "mime", "checksum", "word_count", "language", "native", "reader",
+                          "reader_note", "source_file", "tags"})
+_METADATA_VALUE_MAX = 200
+
+
+def _metadata_text(cand: Candidate) -> str:
+    """A document's own metadata as its block's text, for a node that has no text of its own: its
+    Source carries the title, identifiers, date and header fields read from it, and shown as only its
+    filename, "what is its status" or "when was it published" had no answer in the context."""
+    props = cand.properties or {}
+    if not (props.get("title") or props.get("identifiers")):
+        return ""
+    parts = []
+    for key, value in props.items():
+        if key.startswith("__") or key in _FILE_FIELDS:
+            continue
+        if isinstance(value, list):
+            value = ", ".join(str(v) for v in value if isinstance(v, (str, int, float)))
+        if isinstance(value, (str, int, float)) and str(value).strip() and len(str(value)) <= _METADATA_VALUE_MAX:
+            parts.append(f"{key}: {str(value).strip()}")
+    head = (cand.label or "").strip()
+    return f"{head} — {'; '.join(parts)}" if head and parts else "; ".join(parts)
+
+
 def _block_text(cand: Candidate, plan: Optional[QueryPlan]) -> str:
     """What the block says.
 
@@ -128,7 +153,7 @@ def _block_text(cand: Candidate, plan: Optional[QueryPlan]) -> str:
     `date_time` matched arrives showing only its prose, and the very thing that made it relevant
     is invisible to the reader.
     """
-    base = (cand.text or cand.label or "").strip()
+    base = (cand.text or "").strip() or _metadata_text(cand) or (cand.label or "").strip()
     extras: list[str] = []
     wanted = (plan.answer_type_hint if plan else "") or ""
     for ev in cand.evidence:

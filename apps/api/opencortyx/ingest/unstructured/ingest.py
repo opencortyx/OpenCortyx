@@ -711,6 +711,7 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
         if assembler.engine == "fallback":
             log.warning("document.layout_fallback", filename=filename,
                         reason=assembler.fallback_reason)
+        await _record_document_metadata(workspace_id, source_id, assembler, filename, src_props)
         ast_nodes = assembler.nodes
         created_nodes = {}
         # READING UNITS: sections, not elements. Each heading starts a unit and the content under it
@@ -996,6 +997,27 @@ def _element_label(text: str, limit: int = 80) -> str:
         return t
     cut = t[:limit].rsplit(" ", 1)[0] or t[:limit]
     return cut + "…"
+
+
+#: Where a document's references to other documents wait for the resolution engine to link them.
+REFERENCES_KEY = "__references"
+
+
+async def _record_document_metadata(workspace_id, source_id, assembler, filename: str, src_props: dict) -> None:
+    """Store what the document says about itself on its Source: its title, identifiers, publication
+    date and header fields, and the documents it refers to (`REFERENCES_KEY`), which the resolution
+    engine links once both are in the graph. A field never replaces one the Source already has."""
+    from opencortyx.ingest.formats.unstructured.layout.metadata import document_metadata
+    meta = document_metadata([n.text for n in assembler.nodes], [n.label for n in assembler.nodes], filename)
+    values = {k: v for k, v in meta["fields"].items() if k not in src_props}
+    for key in ("title", "identifiers", "published"):
+        if meta[key] and key not in src_props:
+            values[key] = meta[key]
+    if meta["references"]:
+        values[REFERENCES_KEY] = meta["references"]
+    if values:
+        src_props.update(values)
+        await _repo.patch_properties(workspace_id, [source_id], values, bump_version=False)
 
 
 def _reader_fields(layout_reader: dict) -> dict:

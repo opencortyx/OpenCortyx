@@ -17,6 +17,7 @@ from collections import defaultdict
 
 from opencortyx.core.observability import get_logger
 from opencortyx.resolution import records
+from opencortyx.resolution.normalize import identity_key
 from opencortyx.resolution.spec import load_specs
 
 log = get_logger(__name__)
@@ -24,6 +25,11 @@ _CHUNK = 1000
 #: Set on an asset whose resolution found embeddings still missing; the embedding job that finishes
 #: them queues the resolution again when it sees it, and resolving clears it.
 RESOLVE_WAITING = "__resolve_waiting"
+#: The identity index's namespaces for documents: a document's own identifiers ("rfc 9304"), and
+#: what it refers to under each relation ("doc:ref:OBSOLETES" -> "rfc 8113").
+DOC_ID, DOC_REF = "doc:id", "doc:ref:"
+#: Where reading left a document's references (`ingest.unstructured.ingest.REFERENCES_KEY`).
+REFERENCES = "__references"
 
 
 class Store:
@@ -109,6 +115,41 @@ class Store:
                                  .on_conflict_do_nothing())
             await db.commit()
 
+    async def document(self, workspace_id, source_id):
+        return await self.repo.get(workspace_id, source_id)
+
+    async def index(self, workspace_id, rows: list) -> None:
+        """Add (namespace, key, node id) rows to the identity index; existing rows are kept."""
+        from sqlalchemy.dialects.postgresql import insert
+        from opencortyx.core.db import V2Session
+        from opencortyx.domain.resolution import ResolutionKey
+        if not rows:
+            return
+        async with V2Session() as db:
+            values = [{"workspace_id": workspace_id, "node_type": t, "key_hash": k, "node_id": n} for t, k, n in rows]
+            for i in range(0, len(values), _CHUNK):
+                await db.execute(insert(ResolutionKey).values(values[i:i + _CHUNK]).on_conflict_do_nothing())
+            await db.commit()
+
+    async def referrers(self, workspace_id, keys, exclude) -> list:
+        """(relation, node id) of documents whose references name one of `keys`."""
+        from sqlalchemy import select
+        from opencortyx.core.db import V2Session
+        from opencortyx.domain.resolution import ResolutionKey as K
+        keys, out = list(keys), []
+        async with V2Session() as db:
+            for i in range(0, len(keys), _CHUNK):
+                out += [(t[len(DOC_REF):], n) for t, n in (await db.execute(select(K.node_type, K.node_id).where(
+                    K.workspace_id == workspace_id, K.node_type.like(DOC_REF + "%"),
+                    K.key_hash.in_(keys[i:i + _CHUNK]), K.node_id.notin_(list(exclude))))).all()]
+        return out
+
+    async def link(self, workspace_id, links: list) -> None:
+        if links:
+            await self.repo.add_edges(workspace_id=workspace_id, edges=[
+                {"source_id": a, "target_id": b, "type": rel, "properties": {"__by": "resolution"}}
+                for a, rel, b in links])
+
     async def pending_embeddings(self, workspace_id, source_id) -> bool:
         """Whether any of the asset's nodes still wait for their embeddings (structural nodes, which are
         never embedded, do not count)."""
@@ -146,6 +187,32 @@ class Store:
         return await c.resolve_many(workspace_id, ids, cfg=cfg)
 
 
+async def link_document(workspace_id, source_id, store) -> int:
+    """Link a document to the documents it refers to and to those that refer to it.
+
+    Its identifiers go into the identity index under DOC_ID and its references under DOC_REF plus
+    the relation; then each reference is looked up among identifiers (links out), and each identifier
+    among references (links in, from documents resolved before this one). Keys are written before
+    they are looked up, so two documents naming each other link whichever is resolved first.
+    Returns the number of links made."""
+    root = await store.document(workspace_id, source_id)
+    props = (root.properties or {}) if root else {}
+    ids = [i for i in (props.get("identifiers") or []) if isinstance(i, str) and i]
+    refs = [(r[0], r[1]) for r in (props.get(REFERENCES) or []) if isinstance(r, (list, tuple)) and len(r) == 2]
+    if not ids and not refs:
+        return 0
+    own = {identity_key([i]) for i in ids} - {None}
+    out = [(rel, identity_key([ref])) for rel, ref in refs]
+    await store.index(workspace_id, [(DOC_ID, k, source_id) for k in own]
+                      + [(DOC_REF + rel, k, source_id) for rel, k in out if k])
+    targets = await store.lookup(workspace_id, DOC_ID, {k for _, k in out if k}, exclude={source_id})
+    links = [(source_id, rel, targets[k]) for rel, k in out if k in targets]
+    links += [(referrer, rel, source_id) for rel, referrer in await store.referrers(workspace_id, own, {source_id})]
+    links = list(dict.fromkeys(links))
+    await store.link(workspace_id, links)
+    return len(links)
+
+
 async def resolve_asset(workspace_id, source_id, *, store=None) -> dict:
     workspace_id, source_id = uuid.UUID(str(workspace_id)), uuid.UUID(str(source_id))
     store = store or Store()
@@ -178,6 +245,7 @@ async def resolve_asset(workspace_id, source_id, *, store=None) -> dict:
             plan = records.decide(workspace_id, source_id, node_type, spec, nodes, existing, known, pool)
             await store.apply(workspace_id, node_type, plan, {**known, **{n.id: n for n in nodes}})
             out["types"][node_type] = plan.summary()
+    out["documents"] = await link_document(workspace_id, source_id, store)
     out["statements"] = await store.statements(workspace_id, source_id)
     await store.mark_resolved(workspace_id, source_id, out["types"])
     log.info("resolution.asset", workspace_id=str(workspace_id), source_id=str(source_id), types=out["types"])

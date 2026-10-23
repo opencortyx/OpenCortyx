@@ -144,8 +144,16 @@ def _blocks(text: str, *, markdown: bool, rst: bool) -> list[tuple[str, str, obj
     return out
 
 
+#: A field line: "Status: Final", "Request for Comments: 9304   A. Author".
+_FIELD_LINE = re.compile(r"^\s*[A-Za-z][A-Za-z0-9]{0,24}(?:[ -][A-Za-z][A-Za-z0-9]{0,24}){0,3}:\s+\S")
+
+
 def _looks_preformatted(lines: list[str]) -> bool:
-    """Code or an ASCII figure: keep its line breaks rather than reflowing it into one paragraph."""
+    """Code, an ASCII figure, or a block of `Key: value` fields (an RFC's or a PEP's header): keep
+    its line breaks rather than reflowing it into one paragraph. Reflowed, a header's keys ran into
+    each other's values ("Type: Standards Track Requires: 703")."""
     indented = sum(1 for ln in lines if ln.startswith(("    ", "\t")))
     symbols = sum(1 for ln in lines if re.search(r"[{};=<>|+]{2,}|^\s*[+|]-", ln))
-    return len(lines) > 1 and (indented == len(lines) and symbols > 0 or symbols >= len(lines) / 2)
+    fields = sum(1 for ln in lines if _FIELD_LINE.match(ln))
+    return len(lines) > 1 and (indented == len(lines) and symbols > 0 or symbols >= len(lines) / 2
+                               or fields >= 2 and fields >= len(lines) / 2)
