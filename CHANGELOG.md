@@ -1,11 +1,11 @@
 # Changelog
 
-## 0.1.0-beta.7 - 2026-10-22
+## 0.1.0-beta.7 - 2026-10-23
 
 A new installation handles a large first upload: a thousand files dropped on Add data at once are
-all accepted and read, and the models search needs are already there. Before, uploads after the
-30th were refused, a few hundred queued files could take the job queue down with them, and the
-first upload waited on a 600 MB model download. Measured on a 16-CPU PC: 1,004 files (PDF,
+all accepted and read, and the models it needs, for search and for answers, are already there.
+Before, uploads after the 30th were refused, a few hundred queued files could take the job queue
+down with them, and the first upload waited on a 600 MB model download. Measured on a 16-CPU PC: 1,004 files (PDF,
 HTML, Markdown, reStructuredText, text; 75 MB) sent from Add data in about a minute and a half,
 all read in 26 minutes, none failed.
 
