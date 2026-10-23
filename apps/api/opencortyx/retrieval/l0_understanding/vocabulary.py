@@ -60,9 +60,12 @@ W_COVERAGE = 0.85
 
 W_HEAD = 1.0
 
-#: Vocabulary changes at ingest speed and is read once per query, so it is cached briefly. Short
-#: enough that a new ingest becomes scoreable within a minute without a restart.
-_CACHE_TTL_SECONDS = 60.0
+#: How long a workspace's vocabulary is used before it is refreshed. Reading it counts every node and
+#: every edge by type, which on a thousand-file workspace took 5-13 s and a few hundred MB of the
+#: graph service each time; at a minute, one question in fifteen paid that. The counts only weight how
+#: rare a type is, so a vocabulary minutes old answers as well, and a stale one is refreshed in the
+#: background rather than by the question that finds it stale. New types are seen within this time.
+_CACHE_TTL_SECONDS = 900.0
 
 #: Interrogative frames that introduce the answer's own noun.
 _HEAD_FRAMES = (
@@ -126,21 +129,43 @@ def _profiles(rows) -> dict[str, TypeProfile]:
 
 
 _vocab_cache: dict[str, TypeVocabulary] = {}
+#: Workspaces whose vocabulary is being refreshed in the background (one refresh at a time each).
+_refreshing: set[str] = set()
+
+
+async def _read_vocabulary(workspace_id: uuid.UUID) -> TypeVocabulary:
+    repo = NodeRepo()
+    node_rows = list((await repo.count_by_type(workspace_id)).items())
+    edge_rows = list((await repo.count_edges_by_type(workspace_id)).items())
+    return TypeVocabulary(node_types=_profiles(node_rows), edge_types=_profiles(edge_rows),
+                          workspace_id=str(workspace_id), loaded_at=time.monotonic())
+
+
+async def _refresh(workspace_id: uuid.UUID, key: str) -> None:
+    try:
+        _vocab_cache[key] = await _read_vocabulary(workspace_id)
+    except Exception:                                   # noqa: BLE001 — the stale one keeps serving
+        pass
+    finally:
+        _refreshing.discard(key)
 
 
 async def load_vocabulary(workspace_id: uuid.UUID, *, use_cache: bool = True) -> TypeVocabulary:
     """The corpus's node and edge type names with counts. The only I/O in L0, so `build_plan`
-    stays pure and testable without a store."""
+    stays pure and testable without a store.
+
+    Read once per workspace and process; afterwards a vocabulary older than the TTL is still
+    returned while one background task reads a fresh one (stale-while-revalidate)."""
     key = str(workspace_id)
     if use_cache:
         hit = _vocab_cache.get(key)
-        if hit is not None and (time.monotonic() - hit.loaded_at) < _CACHE_TTL_SECONDS:
+        if hit is not None:
+            if time.monotonic() - hit.loaded_at >= _CACHE_TTL_SECONDS and key not in _refreshing:
+                import asyncio
+                _refreshing.add(key)
+                asyncio.get_running_loop().create_task(_refresh(workspace_id, key))
             return hit
-    repo = NodeRepo()
-    node_rows = list((await repo.count_by_type(workspace_id)).items())
-    edge_rows = list((await repo.count_edges_by_type(workspace_id)).items())
-    vocab = TypeVocabulary(node_types=_profiles(node_rows), edge_types=_profiles(edge_rows),
-                           workspace_id=key, loaded_at=time.monotonic())
+    vocab = await _read_vocabulary(workspace_id)
     if use_cache:
         _vocab_cache[key] = vocab
     return vocab
@@ -149,6 +174,7 @@ async def load_vocabulary(workspace_id: uuid.UUID, *, use_cache: bool = True) ->
 def clear_vocabulary_cache() -> None:
     """Drop the per-org cache. For tests, and for a forced reload after an ingest."""
     _vocab_cache.clear()
+    _refreshing.clear()
 
 
 # ── question side ────────────────────────────────────────────────────────────────────────────

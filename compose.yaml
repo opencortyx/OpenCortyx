@@ -197,8 +197,10 @@ services:
     image: vesoft/nebula-graphd:v3.8.0
     restart: unless-stopped
     logging: *logging
-    mem_limit: ${NEBULAGRAPH_MEM_LIMIT:-1024m}
-    memswap_limit: ${NEBULAGRAPH_MEM_LIMIT:-1024m}
+    # The query service refuses work at 80% of this. Retrieval's queries come and go in bursts of a
+    # few hundred MB, and two at once passed 800 MB of a 1 GB limit while scoring 1000 questions.
+    mem_limit: ${NEBULAGRAPH_MEM_LIMIT:-1536m}
+    memswap_limit: ${NEBULAGRAPH_MEM_LIMIT:-1536m}
     depends_on:
       nebula-metad:
         condition: service_healthy

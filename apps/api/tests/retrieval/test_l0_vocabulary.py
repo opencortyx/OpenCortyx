@@ -309,3 +309,31 @@ async def test_the_real_corpus_does_not_manufacture_relations_for_an_unsupported
     for unrelated in ("HAS_INCIDENT", "HAS_CONSUMER", "HAS_ATTENDEE"):
         assert unrelated not in grounded.edge_types, \
             f"{unrelated} scored on a question that never mentioned it"
+
+
+async def test_a_stale_vocabulary_is_served_while_one_refresh_runs(monkeypatch):
+    """Counting every node and edge by type took seconds on a large workspace; a question must not
+    wait for it once a vocabulary exists, and only one refresh runs at a time."""
+    import asyncio
+    import uuid as _uuid
+
+    from opencortyx.retrieval.l0_understanding import vocabulary as V
+    V.clear_vocabulary_cache()
+    reads = []
+
+    async def read(ws):
+        reads.append(ws)
+        await asyncio.sleep(0)
+        return V.TypeVocabulary(node_types={"Text": V.TypeProfile(name="Text", count=len(reads), rarity=0.5, text="text")},
+                                workspace_id=str(ws), loaded_at=V.time.monotonic())
+    monkeypatch.setattr(V, "_read_vocabulary", read)
+    ws = _uuid.uuid4()
+    first = await V.load_vocabulary(ws)
+    assert len(reads) == 1 and await V.load_vocabulary(ws) is first          # fresh: no read
+    first.loaded_at -= V._CACHE_TTL_SECONDS + 1                               # now stale
+    served = [await V.load_vocabulary(ws) for _ in range(3)]
+    assert all(v is first for v in served)                                    # nobody waits
+    await asyncio.sleep(0.01)
+    assert len(reads) == 2                                                    # one refresh, not three
+    assert (await V.load_vocabulary(ws)).node_types["Text"].count == 2
+    V.clear_vocabulary_cache()

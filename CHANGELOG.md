@@ -51,6 +51,11 @@ missed, and `opencortyx doctor` shows it.
   graph, the whole of a large upload, and failed on the graph service's memory. It reads what is
   still owed from the vector store instead (each node's keyword entry says whether its vectors
   landed), and takes a node only when the previous sweep also found it.
+- Questions could fail all at once while others were being answered: every minute, one of them
+  counted every node and edge by type for the question vocabulary (5-13 s and a few hundred MB of
+  the graph service on a thousand files), and two such bursts at once passed the graph service's
+  memory limit. The vocabulary is kept 15 minutes and refreshed in the background, and the graph
+  service has 1.5 GB (`NEBULAGRAPH_MEM_LIMIT`).
 - One question could take the graph service down: expanding from a node read all of its neighbours,
   with their properties, before keeping the first few, and the day's Date node has one edge per
   node written that day (185,000 after a thousand files). The cap is applied per node in storage
