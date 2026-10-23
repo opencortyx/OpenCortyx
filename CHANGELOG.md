@@ -141,8 +141,14 @@ missed, and `opencortyx doctor` shows it.
   matter (no longer read as the first paragraph), an RST field list, RTF's info group, a workbook's
   properties, a PDF's document information. Merged with the header block: the document's own title
   and date win over a file's stored ones, which are often stale.
-- **A mapping's chunk size decides the paragraph split** for the documents it reads; the Chunk size
-  setting applies otherwise.
+- **The Mapper sets how documents are read and linked.** A document mapping's reading card can set
+  the paragraph split size for its documents (unset, the Chunk size setting applies; the card's size
+  was never applied before, not even to sliding windows), and a new card decides what happens to the
+  header: link the documents it names or not, rename fields (a renamed field renames its relation),
+  drop fields.
+- **A join edge in a semi-structured mapping can name a type already in the graph** ("Already in the
+  graph"), matched on any of its attributes: the foreign key links records ingested before, when the
+  mapping is saved, and new ones as they arrive.
 - **Foreign keys are declared, not guessed.** A semi-structured file's `*_id` values were linked as
   REFERENCES to whatever node in the same file had that id. Links now come only from a mapping's join
   edges ("`customer_id` names a Customer's `id`"), which become reference rules of the resolution

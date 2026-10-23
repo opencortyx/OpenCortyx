@@ -409,10 +409,18 @@ async def resolve_step1_chunk_config(workspace_id, pipeline, filename: str | Non
             step1 = translate_document_editor(editor).get("step1") or {}
         step1 = step1 or {}
         merged = dict(cfg)
-        for block in (step1, editor.get("chunking") or {}):
+        chunking = editor.get("chunking") or {}
+        for block in (step1, chunking):
             for k, v in block.items():
                 if v is not None and not (k == "node_type" and step1.get("node_type")):
                     merged[k] = v
+        # The reading card's size: a sliding window's size, and for layout reading the longest
+        # paragraph kept as one node, but only when the author set it ("custom"); otherwise the
+        # Chunk size setting applies. The card stores it as `size`, which nothing read before.
+        if chunking.get("size") and (chunking.get("custom") or str(merged.get("strategy") or "").startswith("sliding")):
+            merged["chunk_size"] = int(chunking["size"])
+        if isinstance(editor.get("metadata"), dict):
+            merged["metadata"] = editor["metadata"]
         if step1.get("node_type"):
             merged["node_type"] = step1["node_type"]
         return merged
@@ -713,7 +721,8 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
         if assembler.engine == "fallback":
             log.warning("document.layout_fallback", filename=filename,
                         reason=assembler.fallback_reason)
-        await _record_document_metadata(workspace_id, source_id, assembler, filename, src_props)
+        await _record_document_metadata(workspace_id, source_id, assembler, filename, src_props,
+                                        rules=step1.get("metadata"))
         ast_nodes = assembler.nodes
         created_nodes = {}
         # READING UNITS: sections, not elements. Each heading starts a unit and the content under it
@@ -1005,13 +1014,18 @@ def _element_label(text: str, limit: int = 80) -> str:
 REFERENCES_KEY = "__references"
 
 
-async def _record_document_metadata(workspace_id, source_id, assembler, filename: str, src_props: dict) -> None:
+async def _record_document_metadata(workspace_id, source_id, assembler, filename: str, src_props: dict,
+                                    rules: dict | None = None) -> None:
     """Store what the document says about itself on its Source: its title, identifiers, publication
     date and header fields, and the documents it refers to (`REFERENCES_KEY`), which the resolution
-    engine links once both are in the graph. A field never replaces one the Source already has."""
-    from opencortyx.ingest.formats.unstructured.layout.metadata import document_metadata
-    meta = document_metadata([n.text for n in assembler.nodes], [n.label for n in assembler.nodes], filename,
-                             native=getattr(assembler, "metadata", None))
+    engine links once both are in the graph. A field never replaces one the Source already has.
+
+    `rules` is the mapping's metadata card: `rename` {field: new name} (a reference's relation is
+    renamed with its field), `drop` [fields] (and the references they make), `header_references`
+    false to link nothing the header names."""
+    from opencortyx.ingest.formats.unstructured.layout.metadata import apply_rules, document_metadata
+    meta = apply_rules(document_metadata([n.text for n in assembler.nodes], [n.label for n in assembler.nodes],
+                                         filename, native=getattr(assembler, "metadata", None)), rules)
     values = {k: v for k, v in meta["fields"].items() if k not in src_props}
     for key in ("title", "identifiers", "published"):
         if meta[key] and key not in src_props:

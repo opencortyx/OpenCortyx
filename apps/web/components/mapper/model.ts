@@ -74,6 +74,7 @@ export interface EditorModel {
   /** unstructured only */
   chunking?: ChunkCfg;
   elements?: Record<string, boolean>;
+  metadata?: DocMetadataRules;
   tableRules?: any[];
 
   reading?: Record<string, any>;
@@ -106,14 +107,15 @@ export function normalizeChunk(raw: any): ChunkCfg {
   // fixed-size chunks with no titles, sections, lists or tables.
   const strategy: ChunkCfg["strategy"] =
     !s || s.startsWith("layout") || s.includes("docling") ? "layout" : "sliding";
-  const size = Number(r.size ?? r.chunk_size ?? r.target_size ?? 1200);
-  const overlap = Number(r.overlap ?? 150);
+  const size = Number(r.size ?? r.chunk_size ?? r.target_size ?? 800);
+  const overlap = Number(r.overlap ?? 80);
   return {
     strategy,
     mode: r.mode === "extract" || r.save_chunks === false ? "extract" : "save",
-    size: Number.isFinite(size) && size > 0 ? size : 1200,
-    overlap: Number.isFinite(overlap) && overlap >= 0 ? overlap : 150,
+    size: Number.isFinite(size) && size > 0 ? size : 800,
+    overlap: Number.isFinite(overlap) && overlap >= 0 ? overlap : 80,
     node: String(r.node || r.node_type || "Chunk"),
+    custom: r.custom === true,
   };
 }
 
@@ -123,6 +125,18 @@ export interface ChunkCfg {
   size: number;
   overlap: number;
   node: string;
+  /** Layout reading: `size` is this mapping's paragraph split. Unset, the workspace's Chunk size applies. */
+  custom?: boolean;
+}
+
+/** What a document mapping does with the header block a document opens with. */
+export interface DocMetadataRules {
+  /** Link documents the header names ("Obsoletes: 8113"). On unless turned off. */
+  header_references?: boolean;
+  /** Header field → the name it is stored under; a reference's relation is renamed with it. */
+  rename?: Record<string, string>;
+  /** Header fields not stored (and not linked). */
+  drop?: string[];
 }
 
 /* ─────────────────────────────────────────────── paths (the WALKER's grammar) */

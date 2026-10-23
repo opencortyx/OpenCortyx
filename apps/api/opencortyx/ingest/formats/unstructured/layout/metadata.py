@@ -187,3 +187,19 @@ def document_metadata(texts: list[str], labels: list[str], filename: str, native
             "fields": {**{k: v for k, v in native.items() if k not in ("title", "identifier")},
                        **{snake(k): v for k, v in fields.items() if snake(k)}},
             "references": references}
+
+
+def apply_rules(meta: dict, rules: dict | None) -> dict:
+    """A mapping's metadata card applied to `document_metadata`'s result: `rename` {field: name}
+    renames a field and the relation its references make ("obsoletes" -> "replaces": REPLACES),
+    `drop` [field] removes a field and its references, `header_references: false` keeps the fields
+    but links nothing."""
+    if not rules:
+        return meta
+    rename = {snake(k): snake(v) for k, v in (rules.get("rename") or {}).items() if snake(k) and snake(v)}
+    drop = {snake(k) for k in (rules.get("drop") or []) if snake(k)}
+    fields = {rename.get(k, k): v for k, v in meta["fields"].items() if k not in drop}
+    refs = [] if rules.get("header_references") is False else [
+        [relation(rename.get(snake(rel), snake(rel))), ref] for rel, ref in meta["references"]
+        if snake(rel) not in drop]
+    return {**meta, "fields": fields, "references": refs}

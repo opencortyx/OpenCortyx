@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import Button from "@/components/ui/Button";
 import {
-  ChunkCfg, EdgeRule, EditorModel, GNode, KeyRow, Materialized, Paradigm, RefKind,
+  ChunkCfg, DocMetadataRules, EdgeRule, EditorModel, GNode, KeyRow, Materialized, Paradigm, RefKind,
   chunkText, fieldsOf, valueOf, walk,
 } from "./model";
 
@@ -452,8 +452,11 @@ export function NodeForm({ row, rows, paradigm, sample, paths, readers, onPatch,
   );
 }
 
-function Endpoint({ side, edge, types, fieldsHere, targetFields, paradigm, onPatch }: {
-  side: "from" | "to"; edge: EdgeRule; types: string[];
+/** A node type already in the workspace's graph, with the attributes known for it. */
+export interface ExistingType { name: string; attributes: string[] }
+
+function Endpoint({ side, edge, types, existing, fieldsHere, targetFields, paradigm, onPatch }: {
+  side: "from" | "to"; edge: EdgeRule; types: string[]; existing: ExistingType[];
   fieldsHere: string[]; targetFields: (t: string) => string[];
   paradigm: Paradigm; onPatch: (p: Partial<EdgeRule>) => void;
 }) {
@@ -463,6 +466,10 @@ function Endpoint({ side, edge, types, fieldsHere, targetFields, paradigm, onPat
   const col = isFrom ? edge.fromKey : edge.toKey;
   const on = isFrom ? edge.fromOn : edge.toOn;
   const kind: RefKind = col ? "join" : "self";
+  const inFile = Array.from(new Set([nodeType].concat(types).filter((t) => t && (types.includes(t) || !existing.some((e) => e.name === t)))));
+  const graphOnly = existing.map((e) => e.name).filter((n) => !types.includes(n));
+  const inGraph = !types.includes(nodeType) && existing.some((e) => e.name === nodeType);
+  const matchable = Array.from(new Set(targetFields(nodeType).concat(existing.find((e) => e.name === nodeType)?.attributes || [])));
 
   const setKind = (k: RefKind) => {
     if (k === "join") {
@@ -493,7 +500,14 @@ function Endpoint({ side, edge, types, fieldsHere, targetFields, paradigm, onPat
       </div>
       <select className={`${inputCls} ${monoCls}`} value={nodeType}
         onChange={(e) => onPatch(isFrom ? { fromNode: e.target.value } : { toNode: e.target.value })}>
-        {Array.from(new Set([nodeType].concat(types))).filter(Boolean).map((t) => <option key={t} value={t}>{t}</option>)}
+        <optgroup label="In this file">
+          {inFile.map((t) => <option key={t} value={t}>{t}</option>)}
+        </optgroup>
+        {kind === "join" && graphOnly.length > 0 && (
+          <optgroup label="Already in the graph">
+            {graphOnly.map((t) => <option key={t} value={t}>{t}</option>)}
+          </optgroup>
+        )}
       </select>
       {kind === "join" && (
         <div className="mt-2 grid grid-cols-2 gap-2">
@@ -506,15 +520,23 @@ function Endpoint({ side, edge, types, fieldsHere, targetFields, paradigm, onPat
           </div>
           <div>
             <Label>matched on</Label>
-            <select className={`${inputCls} ${monoCls}`} value={on || ""}
-              onChange={(e) => onPatch(isFrom ? { fromOn: e.target.value } : { toOn: e.target.value })}>
-              <option value="">(that type’s key)</option>
-              {targetFields(nodeType).map((f) => <option key={f} value={f}>{f}</option>)}
-            </select>
+            <input className={`${inputCls} ${monoCls}`} value={on || ""} list={`on-${side}-${edge.id}`}
+              placeholder={inGraph ? "id" : "(that type’s key)"}
+              onChange={(e) => onPatch(isFrom ? { fromOn: e.target.value } : { toOn: e.target.value })} />
+            <datalist id={`on-${side}-${edge.id}`}>
+              {matchable.map((f) => <option key={f} value={f} />)}
+            </datalist>
           </div>
         </div>
       )}
       {kind === "self" && <Hint>The node this rule’s path already produced.</Hint>}
+      {kind === "join" && paradigm !== "unstructured" && (
+        <Hint>
+          {inGraph
+            ? <>A foreign key to <b>{nodeType}</b> records already in the graph: they are linked when you save, and new ones as they arrive, from any file.</>
+            : <>Matched in this file as it is read, and across files by the resolution engine, whichever arrives first.</>}
+        </Hint>
+      )}
       {kind === "join" && paradigm === "unstructured" && (
         <Hint>This is entity resolution: the extracted value is matched against the identity index.</Hint>
       )}
@@ -522,8 +544,10 @@ function Endpoint({ side, edge, types, fieldsHere, targetFields, paradigm, onPat
   );
 }
 
-export function EdgeForm({ edge, rows, paradigm, sample, onPatch, onDelete }: {
+export function EdgeForm({ edge, rows, paradigm, sample, existing = [], onPatch, onDelete }: {
   edge: EdgeRule; rows: KeyRow[]; paradigm: Paradigm; sample: any;
+  /** Node types already in the graph, which a join may name as its foreign key's target. */
+  existing?: ExistingType[];
   onPatch: (p: Partial<EdgeRule>) => void; onDelete: () => void;
 }) {
   const nodeRows = rows.filter((r) => r.kind === "node" && r.node_type);
@@ -567,9 +591,9 @@ export function EdgeForm({ edge, rows, paradigm, sample, onPatch, onDelete }: {
       </div>
 
       <div className="grid grid-cols-2 gap-2.5 mb-3.5">
-        <Endpoint side="from" edge={edge} types={types} fieldsHere={fieldsHere}
+        <Endpoint side="from" edge={edge} types={types} existing={existing} fieldsHere={fieldsHere}
           targetFields={targetFields} paradigm={paradigm} onPatch={onPatch} />
-        <Endpoint side="to" edge={edge} types={types} fieldsHere={fieldsHere}
+        <Endpoint side="to" edge={edge} types={types} existing={existing} fieldsHere={fieldsHere}
           targetFields={targetFields} paradigm={paradigm} onPatch={onPatch} />
       </div>
 
@@ -787,13 +811,32 @@ export function ChunkingPanel({ cfg, sample, onCfg, onSample }: {
           </div>
         </div>
         {cfg.strategy === "layout" ? (
-          <div className="rounded-lg border border-teal-200 bg-teal-50/60 p-3 text-[12px] text-teal-900 leading-relaxed mb-3">
-            <div className="font-semibold text-teal-800 mb-1 flex items-center gap-1.5">
-              <Sparkles className="w-3.5 h-3.5 text-teal-600" />
-              Layout reading active
+          <>
+            <div className="rounded-lg border border-teal-200 bg-teal-50/60 p-3 text-[12px] text-teal-900 leading-relaxed mb-3">
+              <div className="font-semibold text-teal-800 mb-1 flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-teal-600" />
+                Layout reading active
+              </div>
+              Extracts native layout blocks dynamically (<b>SectionHeader</b>, <b>Paragraph</b>, <b>Table</b> 2D grids, <b>Picture</b>) and connects them via hierarchical containment and sequential <b>NEXT</b> reading order edges.
             </div>
-            Extracts native layout blocks dynamically (<b>SectionHeader</b>, <b>Paragraph</b>, <b>Table</b> 2D grids, <b>Picture</b>) and connects them via hierarchical containment and sequential <b>NEXT</b> reading order edges.
-          </div>
+            <div className="mb-3">
+              <label className="flex items-center gap-2 text-[12.5px] text-stone-700 cursor-pointer">
+                <input type="checkbox" checked={!!cfg.custom} className="accent-[hsl(var(--primary))]"
+                  onChange={(e) => onCfg({ custom: e.target.checked, size: cfg.size || 800 })} />
+                Set the paragraph split size for these documents
+              </label>
+              {cfg.custom ? (
+                <div className="mt-2">
+                  <Label>Longest paragraph as one node · {cfg.size} ch</Label>
+                  <input type="range" min={200} max={8000} step={100} value={cfg.size} className="w-full accent-[hsl(var(--primary))]"
+                    onChange={(e) => onCfg({ size: Number(e.target.value), custom: true })} />
+                  <Hint>A longer paragraph, list item or caption becomes several nodes, cut at sentence ends. Tables and code stay whole.</Hint>
+                </div>
+              ) : (
+                <Hint>Uses the workspace&apos;s Chunk size (Settings → Chunking). A longer paragraph becomes several nodes.</Hint>
+              )}
+            </div>
+          </>
         ) : (
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -907,3 +950,60 @@ export const PARADIGM_META: Record<Paradigm, { label: string; sub: string; icon:
   structured: { label: "Structured", sub: "SQL tables, CSV, warehouses", icon: TableIcon },
   unstructured: { label: "Unstructured", sub: "PDFs, docs, prose", icon: FileText },
 };
+
+
+/* ─────────────────────────────────────────────── document metadata (unstructured) */
+
+/** What this mapping does with the `Key: value` header a document opens with (an RFC's or a PEP's
+ *  header, front matter): whether documents it names are linked, and fields renamed or dropped. */
+export function DocumentMetadataPanel({ rules, onRules }: {
+  rules: DocMetadataRules; onRules: (r: DocMetadataRules) => void;
+}) {
+  const links = rules.header_references !== false;
+  const rename = Object.entries(rules.rename || {});
+  const setRename = (rows: [string, string][]) =>
+    onRules({ ...rules, rename: Object.fromEntries(rows.filter(([a]) => a.trim() !== "")) });
+  return (
+    <div className="p-3.5 space-y-4">
+      <p className="text-[12.5px] text-stone-500">
+        A document&apos;s title, identifiers, date and header fields (<code className="font-mono">Status: Final</code>,{" "}
+        <code className="font-mono">Obsoletes: 8113</code>) are stored on its source node.
+      </p>
+      <label className="flex items-start gap-2 text-[12.5px] text-stone-700 cursor-pointer">
+        <input type="checkbox" checked={links} className="mt-0.5 accent-[hsl(var(--primary))]"
+          onChange={(e) => onRules({ ...rules, header_references: e.target.checked })} />
+        <span>
+          <b className="font-semibold">Link documents the header names</b>
+          <Hint>
+            &ldquo;Obsoletes: 8113&rdquo; links this document to RFC 8113 with an <code className="font-mono">OBSOLETES</code> edge,
+            whichever of the two is read first.
+          </Hint>
+        </span>
+      </label>
+      <div>
+        <Label>Rename header fields</Label>
+        <div className="space-y-1.5">
+          {rename.map(([from, to], i) => (
+            <div key={i} className="grid grid-cols-[1fr_auto_1fr_auto] gap-1.5 items-center">
+              <input className={`${inputCls} ${monoCls}`} value={from} placeholder="obsoletes"
+                onChange={(e) => setRename(rename.map((r, j) => (j === i ? [e.target.value, r[1]] : r)))} />
+              <span className="text-stone-400 text-xs">→</span>
+              <input className={`${inputCls} ${monoCls}`} value={to} placeholder="replaces"
+                onChange={(e) => setRename(rename.map((r, j) => (j === i ? [r[0], e.target.value] : r)))} />
+              <button type="button" aria-label="Remove" className="text-stone-400 hover:text-stone-600 px-1"
+                onClick={() => setRename(rename.filter((_, j) => j !== i))}><Trash2 className="w-3.5 h-3.5" /></button>
+            </div>
+          ))}
+          <Button variant="ghost" size="sm" icon={Plus} onClick={() => setRename([...rename, ["", ""]])}>Add rename</Button>
+        </div>
+        <Hint>A renamed field that links documents names its relation too: obsoletes → replaces links as REPLACES.</Hint>
+      </div>
+      <div>
+        <Label>Drop header fields</Label>
+        <input className={`${inputCls} ${monoCls}`} value={(rules.drop || []).join(", ")} placeholder="issn, stream"
+          onChange={(e) => onRules({ ...rules, drop: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} />
+        <Hint>Comma-separated. Dropped fields are not stored and link nothing.</Hint>
+      </div>
+    </div>
+  );
+}

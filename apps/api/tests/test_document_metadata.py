@@ -316,3 +316,45 @@ async def test_a_mapping_replaces_only_its_own_reference_rules():
         async with V2Session() as db:
             await db.execute(delete(TypeRegistry).where(TypeRegistry.workspace_id == ws))
             await db.commit()
+
+
+def test_a_mappings_metadata_card_renames_drops_and_switches_links_off():
+    from opencortyx.ingest.formats.unstructured.layout.metadata import apply_rules
+    meta = {"title": "T", "identifiers": ["rfc 9110"], "published": None,
+            "fields": {"obsoletes": "2818", "updates": "3864", "issn": "2070-1721"},
+            "references": [["OBSOLETES", "rfc 2818"], ["UPDATES", "rfc 3864"]]}
+    out = apply_rules(meta, {"rename": {"Obsoletes": "replaces"}, "drop": ["issn", "updates"]})
+    assert out["fields"] == {"replaces": "2818"} and out["references"] == [["REPLACES", "rfc 2818"]]
+    off = apply_rules(meta, {"header_references": False})
+    assert off["references"] == [] and off["fields"] == meta["fields"]
+    assert apply_rules(meta, None) is meta
+
+
+async def test_a_document_mappings_custom_size_and_metadata_reach_the_reading_rules():
+    from sqlalchemy import delete
+    from opencortyx.core.db import V2Session
+    from opencortyx.domain import SchemaMapping
+    from opencortyx.ingest.unstructured.ingest import resolve_step1_chunk_config
+    ws = uuid.uuid4()
+    editors = {"custom": {"chunking": {"strategy": "layout", "size": 500, "custom": True},
+                          "metadata": {"header_references": False}},
+               "default": {"chunking": {"strategy": "layout", "size": 1200}}}
+    ids = {}
+    try:
+        async with V2Session() as db:
+            for name, editor in editors.items():
+                m = SchemaMapping(workspace_id=ws, name=name, paradigm="unstructured", source_type="",
+                                  payload={"editor": editor}, summary={}, status="active")
+                db.add(m)
+                await db.flush()
+                ids[name] = str(m.id)
+            await db.commit()
+        stage = lambda i: [{"type": "chunking", "config": {"mapping_ids": [i]}}]  # noqa: E731
+        custom = await resolve_step1_chunk_config(ws, stage(ids["custom"]))
+        assert custom["chunk_size"] == 500 and custom["metadata"] == {"header_references": False}
+        default = await resolve_step1_chunk_config(ws, stage(ids["default"]))
+        assert "chunk_size" not in default                    # an untouched 1200: the workspace setting applies
+    finally:
+        async with V2Session() as db:
+            await db.execute(delete(SchemaMapping).where(SchemaMapping.workspace_id == ws))
+            await db.commit()

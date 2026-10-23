@@ -34,8 +34,9 @@ import {
   type SqlTable,
 } from "@/components/mapper/model";
 import {
-  ChunkingPanel, DOC_ELEMENTS, DocSource, EdgeForm, ElementsPanel, JsonSource,
+  ChunkingPanel, DOC_ELEMENTS, DocSource, DocumentMetadataPanel, EdgeForm, ElementsPanel, JsonSource,
   KindLegend, Label, NodeForm, PARADIGM_META, Panel, RuleList, TableSource, UploadBar,
+  type ExistingType,
 } from "@/components/mapper/panels";
 import ConformancePanel from "@/components/mapper/conformance";
 import { SqlConnectBar, SqlSchemaSource, type SqlOrigin } from "@/components/mapper/sqlsource";
@@ -140,6 +141,23 @@ export default function MapperBuilderPage() {
         }
         setModels(byRole);
       } catch { setModels({}); }
+    })();
+  }, [paradigm]);
+
+  // node types already in the graph: a join edge may name one as its foreign key's target
+  const [existing, setExisting] = useState<ExistingType[]>([]);
+  useEffect(() => {
+    if (paradigm === "unstructured") return;
+    (async () => {
+      try {
+        const res: any = await contextV2Api.ontology();
+        setExisting((res?.types || [])
+          .filter((t: any) => t.kind === "node" || t.kind === "entity")
+          .map((t: any) => ({
+            name: String(t.name),
+            attributes: (t.attributes || []).map((a: any) => String(typeof a === "string" ? a : a?.name || "")).filter(Boolean),
+          })));
+      } catch { setExisting([]); }
     })();
   }, [paradigm]);
 
@@ -334,7 +352,7 @@ export default function MapperBuilderPage() {
     setSaving(true); setErr(""); setOk("");
     try {
       const editor: EditorModel = { ...ed, __touched: true };
-      if (paradigm === "unstructured") { editor.chunking = chunk; editor.elements = elements; }
+      if (paradigm === "unstructured") { editor.chunking = chunk; editor.elements = elements; editor.metadata = ed.metadata || {}; }
       const payload: any = { ...(rec?.payload || {}), editor };
       if (sample) payload.sample = sample;
       const saved = await contextV2Api.updateSchemaMapping(String(id), { name, payload });
@@ -463,6 +481,10 @@ export default function MapperBuilderPage() {
               onCfg={(c) => patchEditor({ chunking: { ...chunk, ...c } })}
               onSample={setChunkSample} />
           </Panel>
+          <Panel title="Document metadata & links"
+                 count={ed.metadata?.header_references === false ? "links off" : "links on"}>
+            <DocumentMetadataPanel rules={ed.metadata || {}} onRules={(r) => patchEditor({ metadata: r })} />
+          </Panel>
         </div>
       )}
 
@@ -517,7 +539,7 @@ export default function MapperBuilderPage() {
               onPatch={(p, a) => patchRow(sel.index, p, a)}
               onDelete={() => removeNode(sel.index)} />
           ) : currentEdge ? (
-            <EdgeForm edge={currentEdge} rows={ed.keyRows} paradigm={paradigm} sample={sample}
+            <EdgeForm edge={currentEdge} rows={ed.keyRows} paradigm={paradigm} sample={sample} existing={existing}
               onPatch={(p) => patchEdge(sel.index, p)}
               onDelete={() => removeEdge(sel.index)} />
           ) : (
