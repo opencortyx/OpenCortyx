@@ -37,3 +37,16 @@ def v2_resolve_asset(self, workspace_id: str, source_id: str, backstop: bool = F
         _max, _delay = retry_policy(self, exc, 3)
         raise self.retry(exc=exc, countdown=_delay, max_retries=_max)
     raise self.retry(args=(workspace_id, source_id), kwargs={"backstop": True}, countdown=BACKSTOP_SECONDS)
+
+
+@celery_app.task(bind=True, queue="resolution", name="opencortyx.link_existing", acks_late=True, max_retries=6)
+def v2_link_existing(self, workspace_id: str, types: list):
+    """Apply new reference rules to the nodes already in the graph (`engine.link_existing`): queued
+    when a mapping declares foreign keys, so data read before them is linked too."""
+    from opencortyx.resolution.engine import Store, link_existing
+    try:
+        return {"links": async_to_sync(link_existing)(workspace_id, list(types or []), Store())}
+    except Exception as exc:
+        from opencortyx.tasks._shared import retry_policy
+        _max, _delay = retry_policy(self, exc, 3)
+        raise self.retry(exc=exc, countdown=_delay, max_retries=_max)

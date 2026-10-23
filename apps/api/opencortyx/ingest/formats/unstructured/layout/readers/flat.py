@@ -30,7 +30,11 @@ class FlatReader:
     def read(self, content: bytes, filename: str, asm: LayoutAssembler,
              max_pages: Optional[int] = None) -> None:
         text = content.decode("utf-8-sig", errors="ignore")
-        self.read_text(text, asm, markdown=False, rst=filename.lower().endswith(".rst"))
+        rst = filename.lower().endswith(".rst")
+        if rst:
+            from .native import rst_docinfo
+            asm.metadata.update(rst_docinfo(text))
+        self.read_text(text, asm, markdown=False, rst=rst)
 
     def read_text(self, text: str, asm: LayoutAssembler, *, markdown: bool, rst: bool = False,
                   page_no: int = 1) -> None:

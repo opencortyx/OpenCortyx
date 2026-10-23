@@ -194,6 +194,7 @@ celery_app.conf.update(
         # an asset's resolution has its own queue: a long one never holds up embeddings, another asset's
         # resolution or the next ingest (the task itself waits for the asset's embeddings)
         "opencortyx.resolve_asset": {"queue": "resolution"},
+        "opencortyx.link_existing": {"queue": "resolution"},
         "opencortyx.extract_document": {"queue": "extraction"},
         "opencortyx.run_document_pipeline": {"queue": "extraction"},   # a pipeline's deferred stages
         "opencortyx.*": {"queue": "graphrag"},

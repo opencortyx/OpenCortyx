@@ -60,7 +60,20 @@ def read_paged(content: bytes, filename: str, asm: LayoutAssembler, *, max_pages
             os.unlink(path)
         except OSError:
             pass
+    _record_meta(result, asm)
     _emit(result.pages or [], asm)
+
+
+def _record_meta(result, asm: LayoutAssembler) -> None:
+    """The PDF's document information, when it has any (title, author, dates). The creating tool
+    (`creator`, `producer`) says nothing about the document and is not kept."""
+    from .native import put
+    info = getattr(result, "doc_meta", None)
+    if info is None:
+        return
+    for attr, name in (("title", "title"), ("author", "author"), ("subject", "subject"),
+                       ("keywords", "keywords"), ("creation_date", "created"), ("mod_date", "modified")):
+        put(asm.metadata, name, getattr(info, attr, None))
 
 
 def _norm(text: str) -> str:

@@ -21,6 +21,8 @@ missed, and `opencortyx doctor` shows it.
   node types. The two Docling-only settings (PDF table structure, PDF page window) are gone, and a
   saved value for them is ignored.
 - A database migration (`0031_ingest_run_batch`) runs on `opencortyx update`.
+- Semi-structured files are no longer linked by guessing from `*_id` fields (REFERENCES edges). To
+  link records, add a join edge in the file's mapping; saving it links what is already ingested.
 - A new volume, `uploads`, holds uploaded files until their worker has read them.
 - New settings, all optional: `UPLOAD_RETENTION_HOURS` (168), `RATELIMIT_UPLOAD_PER_MIN` (600),
   `REDIS_MAXMEMORY` (128mb), `EMBEDDING_WORKER_MAX_MEMORY_KB` (1500000) and the database ports below.
@@ -134,6 +136,18 @@ missed, and `opencortyx doctor` shows it.
   fields (status, category, authors, ...) are stored on the document's Source, and a document without
   text of its own shows them in an answer's context. Identifiers and title are names, so a question
   that names a document ("RFC 9304") finds it by exact match.
+- **Readers record what a format carries outside the text**: Word and PowerPoint core properties,
+  HTML `<title>` and `<meta>`, an e-book's package metadata, a notebook's metadata, Markdown front
+  matter (no longer read as the first paragraph), an RST field list, RTF's info group, a workbook's
+  properties, a PDF's document information. Merged with the header block: the document's own title
+  and date win over a file's stored ones, which are often stale.
+- **A mapping's chunk size decides the paragraph split** for the documents it reads; the Chunk size
+  setting applies otherwise.
+- **Foreign keys are declared, not guessed.** A semi-structured file's `*_id` values were linked as
+  REFERENCES to whatever node in the same file had that id. Links now come only from a mapping's join
+  edges ("`customer_id` names a Customer's `id`"), which become reference rules of the resolution
+  engine when the mapping is saved: records are linked across files, in either order, and the ones
+  already in the graph are linked when the rule is added. Deleting the mapping removes its rules.
 - **Documents are linked to the documents they name.** A header value made of identifiers
   ("Obsoletes: 8113", "Requires: 703") is a reference; the resolution engine matches it to the
   document holding that identifier and adds an edge named by the key (`OBSOLETES`, `REQUIRES`),

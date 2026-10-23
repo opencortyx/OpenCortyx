@@ -4,7 +4,7 @@ import uuid
 from opencortyx.ingest.formats.unstructured.layout.metadata import document_metadata, header_fields
 from opencortyx.ingest.formats.unstructured.layout.readers.flat import FlatReader
 from opencortyx.ingest.formats.unstructured.layout.assembler import LayoutAssembler
-from opencortyx.resolution.engine import DOC_ID, DOC_REF, link_document
+from opencortyx.resolution.engine import link_references
 
 
 def _read_text(text: str, filename: str) -> dict:
@@ -82,12 +82,12 @@ def test_one_field_is_prose_and_no_header_means_no_metadata_fields():
 
 
 class _Store:
-    """The identity index and the graph's documents, in memory."""
-    def __init__(self, docs):
-        self.docs, self.rows, self.edges = docs, set(), []
+    """The identity index and the graph's nodes, in memory."""
+    def __init__(self, nodes):
+        self.nodes, self.rows, self.edges, self.spec_map = {n.id: n for n in nodes}, set(), [], {}
 
     async def document(self, ws, sid):
-        return self.docs.get(sid)
+        return self.nodes.get(sid)
 
     async def index(self, ws, rows):
         self.rows |= set(rows)
@@ -95,27 +95,67 @@ class _Store:
     async def lookup(self, ws, node_type, keys, exclude):
         return {k: n for t, k, n in sorted(self.rows, key=str) if t == node_type and k in keys and n not in exclude}
 
-    async def referrers(self, ws, keys, exclude):
-        return [(t[len(DOC_REF):], n) for t, k, n in self.rows if t.startswith(DOC_REF) and k in keys and n not in exclude]
+    async def referrers(self, ws, prefix, keys, exclude):
+        return [(t[len(prefix):], n, k) for t, k, n in self.rows if t.startswith(prefix) and k in keys and n not in exclude]
 
     async def link(self, ws, links):
-        self.edges += links
+        new = [x for x in links if x not in self.edges]
+        self.edges += new
+        return len(new)
+
+    async def specs(self, ws):
+        return self.spec_map
+
+    async def node_ids(self, ws, type_name):
+        return [i for i, n in self.nodes.items() if n.type == type_name]
+
+    async def nodes_by_id(self, ws, ids):
+        return {i: self.nodes[i] for i in ids}
 
 
-class _Doc:
-    def __init__(self, props):
-        self.properties = props
+def _node(type_, props=None, label="", base=None):
+    from opencortyx.stores.graph import Node
+    p = dict(props or {})
+    if base:
+        p["__base_type"] = base
+    return Node(id=uuid.uuid4(), workspace_id=uuid.uuid4(), type=type_, label=label, properties=p)
 
 
 async def test_documents_are_linked_whichever_is_resolved_first():
-    ws, new, old = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
-    docs = {new: _Doc({"identifiers": ["rfc 9304"], "__references": [["OBSOLETES", "rfc 8113"]]}),
-            old: _Doc({"identifiers": ["rfc 8113"]})}
+    new = _node("Source", {"identifiers": ["rfc 9304"], "__references": [["OBSOLETES", "rfc 8113"]]})
+    old = _node("Contract", {"identifiers": ["rfc 8113"]}, base="Source")     # a mapped root type
     for order in ([new, old], [old, new]):
-        store = _Store(docs)
-        made = [await link_document(ws, sid, store) for sid in order]
-        assert store.edges == [(new, "OBSOLETES", old)] and sum(made) == 1
-        assert any(t == DOC_ID for t, _, _ in store.rows)
+        store = _Store([new, old])
+        made = [await link_references(uuid.uuid4(), n.id, {}, [], store) for n in order]
+        assert store.edges == [(new.id, "OBSOLETES", old.id)] and sum(made) == 1
+
+
+async def test_a_foreign_key_links_records_across_files_in_either_order():
+    from opencortyx.resolution.spec import ResolutionSpec
+    specs = {"Order": ResolutionSpec.parse({"references": [{"attribute": "customer_id", "target_type": "Customer",
+                                                            "target_attribute": "id", "relation": "placed by"}]})}
+    assert specs["Order"].links and not specs["Order"].active   # no identity fields: links only
+    orders_file, customers_file = _node("Source"), _node("Source")
+    order = _node("Order", {"customer_id": "C-7"})
+    customer, other = _node("Customer", {"id": "C-7"}), _node("Customer", {"id": "C-8"})
+    files = {orders_file.id: [order], customers_file.id: [customer, other]}
+    for order_first in (True, False):
+        store = _Store([orders_file, customers_file, order, customer, other])
+        sequence = [orders_file, customers_file] if order_first else [customers_file, orders_file]
+        for f in sequence:
+            await link_references(uuid.uuid4(), f.id, specs, files[f.id], store)
+        assert store.edges == [(order.id, "PLACED_BY", customer.id)]
+
+
+async def test_header_references_can_be_switched_off():
+    from opencortyx.resolution.spec import ResolutionSpec
+    new = _node("Source", {"identifiers": ["pep 809"], "__references": [["REQUIRES", "pep 703"]]})
+    old = _node("Source", {"identifiers": ["pep 703"]})
+    store = _Store([new, old])
+    specs = {"Source": ResolutionSpec.parse({"header_references": False})}
+    for n in (old, new):
+        await link_references(uuid.uuid4(), n.id, specs, [], store)
+    assert store.edges == []
 
 
 def test_a_document_without_text_shows_its_metadata_in_the_context():
@@ -130,3 +170,149 @@ def test_a_document_without_text_shows_its_metadata_in_the_context():
     assert "checksum" not in text and "__references" not in text
     plain = Candidate(node_id=uuid.uuid4(), node_type="Person", label="Ada", text="", properties={"role": "x"})
     assert _block_text(plain, None) == "Ada"                 # nodes without document metadata are unchanged
+
+
+# ── what each format carries outside its text ──────────────────────────────────────────────────────
+
+def _convert(content: bytes, filename: str):
+    from opencortyx.ingest.formats.unstructured.layout import LayoutEngine
+    return LayoutEngine.convert(content, filename=filename, doc_id="d")
+
+
+def test_word_core_properties_are_read():
+    import io
+    import docx
+    d = docx.Document()
+    d.core_properties.title, d.core_properties.author = "Leave Policy", "People Team"
+    d.core_properties.keywords = "leave, holidays"
+    d.add_paragraph("Employees get 25 days.")
+    buf = io.BytesIO(); d.save(buf)
+    asm = _convert(buf.getvalue(), "policy.docx")
+    assert asm.metadata["title"] == "Leave Policy" and asm.metadata["author"] == "People Team"
+    assert asm.metadata["keywords"] == "leave, holidays"
+
+
+def test_html_meta_front_matter_rst_fields_notebook_and_rtf_are_read():
+    html = (b"<html><head><title>JSON tools</title><meta name='author' content='Ada'>"
+            b"<meta name='viewport' content='width=device-width'><meta name='DC.date' content='2024-05-01'>"
+            b"</head><body><h1>json</h1><p>Encoders.</p></body></html>")
+    meta = _convert(html, "page.html").metadata
+    assert meta["title"] == "JSON tools" and meta["author"] == "Ada" and meta["date"] == "2024-05-01"
+    assert "viewport" not in meta
+
+    md = b"---\ntitle: Release Notes\nauthor: Ops\ntags: [a, b]\n---\n# Notes\n\nShipped.\n"
+    asm = _convert(md, "notes.md")
+    assert asm.metadata == {"title": "Release Notes", "author": "Ops", "tags": "a, b"}
+    assert "title: Release Notes" not in " ".join(n.text for n in asm.nodes)   # not read as text
+
+    rst = b":Author: Grace\n:Date: 2023-02-01\n\nIntro\n=====\n\nBody text.\n"
+    assert _convert(rst, "guide.rst").metadata == {"author": "Grace", "date": "2023-02-01"}
+
+    nb = b'{"metadata": {"title": "Churn", "kernelspec": {"display_name": "Python 3"}}, "cells": [{"cell_type": "markdown", "source": "# Churn"}]}'
+    assert _convert(nb, "churn.ipynb").metadata == {"title": "Churn", "kernel": "Python 3"}
+
+    rtf = rb"{\rtf1\ansi{\info{\title Board Minutes}{\author Secretary}}Minutes of the meeting.}"
+    assert _convert(rtf, "minutes.rtf").metadata == {"title": "Board Minutes", "author": "Secretary"}
+
+
+def test_an_epub_package_is_read():
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("META-INF/container.xml", '<container><rootfiles><rootfile full-path="OEBPS/book.opf"/></rootfiles></container>')
+        z.writestr("OEBPS/book.opf", '<package><metadata><dc:title>The Guide</dc:title><dc:creator>Lin</dc:creator>'
+                   '<dc:identifier>urn:isbn:9780000000001</dc:identifier></metadata>'
+                   '<manifest><item id="c1" href="c1.xhtml"/></manifest><spine><itemref idref="c1"/></spine></package>')
+        z.writestr("OEBPS/c1.xhtml", "<html><head><title>Chapter 1</title></head><body><h1>Start</h1><p>Text.</p></body></html>")
+    meta = _convert(buf.getvalue(), "guide.epub").metadata
+    assert meta["title"] == "The Guide" and meta["author"] == "Lin"         # not the chapter's <title>
+    assert meta["identifier"] == "urn:isbn:9780000000001"
+
+
+def test_native_fields_fill_gaps_and_never_override_the_documents_own_text():
+    md = document_metadata(["Leave Policy", "Employees get 25 days."], ["title", "text"], "policy.docx",
+                           native={"title": "Document1", "author": "People Team", "created": "2024-01-02T09:00:00",
+                                   "identifier": "HR-2024-07"})
+    assert md["title"] == "Leave Policy"                     # the document's own title, not "Document1"
+    assert md["fields"]["author"] == "People Team" and md["published"] == "2024-01-02"
+    assert "hr-2024-07" in md["identifiers"]
+
+
+def test_a_mappings_chunk_size_decides_the_paragraph_split():
+    from opencortyx.ingest.formats.unstructured.layout import LayoutEngine
+    text = (" ".join(f"Sentence {i} explains one part of the policy." for i in range(30))).encode()
+    small = LayoutEngine.convert(text, filename="p.txt", doc_id="d", max_chars=300)
+    default = LayoutEngine.convert(text, filename="p.txt", doc_id="d")
+    assert len(small.nodes) > len(default.nodes) and all(len(n.text) <= 300 for n in small.nodes)
+
+
+# ── foreign keys declared in a mapping ─────────────────────────────────────────────────────────────
+
+def _orders_mapping(direction="out"):
+    """A semi-structured mapping's compiled join edge: Order.customer_id names Customer.id."""
+    join = {"kind": "join", "type": "Customer", "field": "customer_id", "on": "id"}
+    me = {"kind": "self", "type": "Order"}
+    rule = {"type": "PLACED_BY", "path": "", "from": me, "to": join} if direction == "out" else \
+        {"type": "PLACED", "path": "", "from": {**join, "field": "customer_id"}, "to": me}
+    return {"structures": [{"name": "orders", "edge_rules": [rule]}]}
+
+
+def test_a_mappings_join_edges_become_reference_rules():
+    from opencortyx.resolution.spec import Reference, references_from_mapping
+    assert references_from_mapping(_orders_mapping(), "mapping:1") == {
+        "Order": [Reference("customer_id", "Customer", "id", "PLACED_BY", False, "mapping:1")]}
+    # Drawn from the Customer into the Order that holds the key: the same rule, reversed.
+    assert references_from_mapping(_orders_mapping("in"), "mapping:1") == {
+        "Order": [Reference("customer_id", "Customer", "id", "PLACED", True, "mapping:1")]}
+    assert references_from_mapping({"structures": [{"edge_rules": [
+        {"type": "X", "from": {"kind": "self", "type": "A"}, "to": {"kind": "self", "type": "B"}}]}]}, "m") == {}
+
+
+async def test_a_reversed_rule_is_drawn_into_the_record_and_existing_nodes_are_linked():
+    from opencortyx.resolution.engine import link_existing
+    from opencortyx.resolution.spec import ResolutionSpec, references_from_mapping
+    refs = references_from_mapping(_orders_mapping("in"), "mapping:1")
+    order, customer = _node("Order", {"customer_id": "C-7"}), _node("Customer", {"id": "C-7"})
+    store = _Store([order, customer])
+    store.spec_map = {t: ResolutionSpec(references=tuple(r)) for t, r in refs.items()}
+    # The rule arrives after both records were read: linking what is already in the graph.
+    made = await link_existing(uuid.uuid4(), ["Order"], _Existing(store))
+    assert made == 1 and store.edges == [(customer.id, "PLACED", order.id)]
+
+
+class _Existing:
+    """`link_existing`'s view of the store: the engine Store's names over the in-memory one."""
+    def __init__(self, store):
+        self.s = store
+
+    def __getattr__(self, name):
+        return getattr(self.s, name)
+
+    async def nodes(self, ws, ids):
+        return await self.s.nodes_by_id(ws, ids)
+
+
+async def test_a_mapping_replaces_only_its_own_reference_rules():
+    from sqlalchemy import delete
+    from opencortyx.core.db import V2Session
+    from opencortyx.domain.ontology import TypeRegistry
+    from opencortyx.resolution.spec import Reference, get_spec, save_references
+    ws = uuid.uuid4()
+    a = Reference("customer_id", "Customer", "id", "PLACED_BY", source="mapping:a")
+    b = Reference("store_id", "Store", "id", "SOLD_AT", source="mapping:b")
+    try:
+        async with V2Session() as db:
+            assert await save_references(db, ws, "mapping:a", {"Order": [a]}) == ["Order"]
+            await save_references(db, ws, "mapping:b", {"Order": [b]})
+            await db.commit()
+        async with V2Session() as db:
+            assert set((await get_spec(db, ws, "Order")).references) == {a, b}
+            assert await save_references(db, ws, "mapping:a", {}) == ["Order"]   # a dropped its rule
+            await db.commit()
+        async with V2Session() as db:
+            assert (await get_spec(db, ws, "Order")).references == (b,)
+    finally:
+        async with V2Session() as db:
+            await db.execute(delete(TypeRegistry).where(TypeRegistry.workspace_id == ws))
+            await db.commit()

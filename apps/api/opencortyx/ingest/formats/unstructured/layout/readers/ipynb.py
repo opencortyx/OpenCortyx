@@ -15,6 +15,8 @@ class IPYNBReader:
     def read(self, content: bytes, filename: str, asm: LayoutAssembler,
              max_pages: Optional[int] = None) -> None:
         nb = json.loads(content.decode("utf-8-sig", errors="ignore"))
+        from .native import notebook_meta
+        asm.metadata.update(notebook_meta(nb))
         flat = FlatReader()
         for cell in nb.get("cells") or []:
             source = cell.get("source") or ""

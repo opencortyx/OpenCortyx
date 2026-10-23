@@ -28,11 +28,13 @@ class LayoutEngine:
 
     @classmethod
     def convert(cls, content: bytes | str, filename: str = "document.md", doc_id: Optional[str] = None,
-                max_pages: Optional[int] = None) -> LayoutAssembler:
+                max_pages: Optional[int] = None, max_chars: Optional[int] = None) -> LayoutAssembler:
         """Read `content` with the reader for `filename`'s format.
 
         `max_pages` reads only the first pages of a paged format, for a preview, which must not cost
-        what reading a 300-page PDF costs. Ingestion leaves it unset and reads everything."""
+        what reading a 300-page PDF costs. Ingestion leaves it unset and reads everything.
+        `max_chars` is the longest paragraph kept as one node: a mapping's chunk size, else the
+        Chunk size setting."""
         import hashlib
 
         from .readers import reader_for
@@ -41,7 +43,8 @@ class LayoutEngine:
             doc_id = f"doc_{hashlib.sha256(raw).hexdigest()[:12]}"
         filename = effective_filename(content, filename)
         reader = reader_for(filename)
-        assembler = LayoutAssembler(doc_id=doc_id, max_chars=_max_chars())
+        size = max(200, int(max_chars)) if max_chars else _max_chars()
+        assembler = LayoutAssembler(doc_id=doc_id, max_chars=size)
         try:
             reader.read(_as_bytes(content), filename, assembler, max_pages=max_pages)
             if not assembler.nodes and not isinstance(content, str) and _looks_binary(_as_bytes(content)):
@@ -52,7 +55,7 @@ class LayoutEngine:
             log.warning("layout.reader_failed_falling_back", filename=filename, reader=reader.name,
                         error=f"{type(exc).__name__}: {exc}"[:300])
             from .readers.flat import FlatReader
-            fallback = LayoutAssembler(doc_id=doc_id, max_chars=_max_chars())
+            fallback = LayoutAssembler(doc_id=doc_id, max_chars=size)
             fallback.fallback_reason = f"{reader.name}: {type(exc).__name__}: {exc}"[:300]
             text = content if isinstance(content, str) else _readable_text(content, filename, reader.name)
             FlatReader().read_text(text, fallback, markdown=True)

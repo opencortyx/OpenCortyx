@@ -177,3 +177,24 @@ def mapping_refs(stages, mapping_id: str) -> bool:
         if mapping_id in ids:
             return True
     return False
+
+
+async def save_mapping_references(db, workspace_id, mapping_id, payload: dict | None) -> list[str]:
+    """Save a mapping's declared join edges as reference rules on their types (the resolution engine
+    links by them across files), replacing what this mapping declared before. Returns the types whose
+    rules changed. The caller commits."""
+    from opencortyx.resolution.spec import references_from_mapping, save_references
+    source = f"mapping:{mapping_id}"
+    return await save_references(db, workspace_id, source, references_from_mapping(payload or {}, source))
+
+
+def link_existing_later(workspace_id, types: list[str]) -> None:
+    """Queue linking the nodes already in the graph by the changed rules. Best-effort: rules apply to
+    every file read from now on whatever happens here."""
+    if not types:
+        return
+    try:
+        from opencortyx.tasks.resolution import v2_link_existing
+        v2_link_existing.delay(str(workspace_id), list(types))
+    except Exception as e:                              # noqa: BLE001 — never fail a mapping save
+        log.warning("schema_mapping.link_existing_not_queued", error=str(e))

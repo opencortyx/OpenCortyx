@@ -25,6 +25,10 @@ class HTMLTagReader:
     def read_html(self, html: bytes | str, asm: LayoutAssembler, page_no: int = 1) -> None:
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(html, "lxml")
+        if page_no == 1:                                # an e-book's chapters do not rename the book
+            from .native import html_meta
+            for k, v in html_meta(soup).items():
+                asm.metadata.setdefault(k, v)
         root = soup.body or soup
         _walk(root, asm, page_no)
 

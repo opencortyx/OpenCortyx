@@ -705,8 +705,10 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
         from opencortyx.ingest.formats.unstructured.layout import LayoutEngine
         # In a thread: layout analysis is seconds of CPU per page, and run inline it froze this
         # worker's event loop — every other coroutine on it (progress writes, heartbeats) stalled.
+        # A mapping's chunk size, when it sets one, decides how long a paragraph may be as one node.
         assembler = await asyncio.to_thread(
-            LayoutEngine.convert, content, filename=filename, doc_id=str(source_id))
+            LayoutEngine.convert, content, filename=filename, doc_id=str(source_id),
+            max_chars=int(step1["chunk_size"]) if step1.get("chunk_size") else None)
         layout_reader = {"engine": assembler.engine, "fallback_reason": assembler.fallback_reason}
         if assembler.engine == "fallback":
             log.warning("document.layout_fallback", filename=filename,
@@ -1008,7 +1010,8 @@ async def _record_document_metadata(workspace_id, source_id, assembler, filename
     date and header fields, and the documents it refers to (`REFERENCES_KEY`), which the resolution
     engine links once both are in the graph. A field never replaces one the Source already has."""
     from opencortyx.ingest.formats.unstructured.layout.metadata import document_metadata
-    meta = document_metadata([n.text for n in assembler.nodes], [n.label for n in assembler.nodes], filename)
+    meta = document_metadata([n.text for n in assembler.nodes], [n.label for n in assembler.nodes], filename,
+                             native=getattr(assembler, "metadata", None))
     values = {k: v for k, v in meta["fields"].items() if k not in src_props}
     for key in ("title", "identifiers", "published"):
         if meta[key] and key not in src_props:

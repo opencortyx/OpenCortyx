@@ -282,7 +282,7 @@ def v2_ingest_json_stream(self, workspace_id: str, host_path: str, opts_json: st
     APIs. The file (a top-level array of records) is iterated with ijson at CONSTANT memory (never loaded
     whole) and walked record-by-record. Nothing is uploaded through the API/broker; the worker reads the
     file directly. Gated by Settings → 'Allow local file access'. `opts_json` carries collection_id /
-    root_type / max_* / resolve_refs / source_label / pipeline_id.
+    root_type / max_* / source_label / pipeline_id.
 
     Two modes, selected by `opts.pipeline_id`:
       • plain: walk the JSON into a hierarchical node/edge graph (ingest_json_stream).
@@ -345,8 +345,7 @@ def v2_ingest_json_stream(self, workspace_id: str, host_path: str, opts_json: st
                 uuid.UUID(workspace_id), path, source_label=label, collection_id=coll,
                 root_type=opts.get("root_type"), max_depth=int(opts.get("max_depth", 6)),
                 max_array=int(opts.get("max_array", 500)), max_records=int(opts.get("max_records", 10**9)),
-                embed_nodes=bool(opts.get("embed_nodes", False)),
-                resolve_refs=bool(opts.get("resolve_refs", False)), reporter=rep)
+                embed_nodes=bool(opts.get("embed_nodes", False)), reporter=rep)
             await _apply_anchors(workspace_id, res, _rules, _apath, coll)
             _queue_embed_pass(workspace_id, res)
             _queue_extract_pass(workspace_id, res)

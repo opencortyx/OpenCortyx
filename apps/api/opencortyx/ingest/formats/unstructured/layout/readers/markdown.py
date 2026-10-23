@@ -13,4 +13,7 @@ class MarkdownReader:
 
     def read(self, content: bytes, filename: str, asm: LayoutAssembler,
              max_pages: Optional[int] = None) -> None:
-        FlatReader().read_text(content.decode("utf-8-sig", errors="ignore"), asm, markdown=True)
+        from .native import front_matter
+        meta, body = front_matter(content.decode("utf-8-sig", errors="ignore"))
+        asm.metadata.update(meta)                       # front matter is metadata, not the first paragraph
+        FlatReader().read_text(body, asm, markdown=True)

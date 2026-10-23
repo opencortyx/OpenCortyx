@@ -19,6 +19,7 @@ class PandasExcelReader:
     def read(self, content: bytes, filename: str, asm: LayoutAssembler,
              max_pages: Optional[int] = None) -> None:
         import pandas as pd
+        asm.metadata.update(_workbook_meta(content, filename))
         sheets = pd.read_excel(io.BytesIO(content), sheet_name=None, header=None, dtype=str, nrows=MAX_ROWS)
         for page_no, (name, frame) in enumerate(sheets.items(), start=1):
             if max_pages and page_no > max_pages:
@@ -29,3 +30,20 @@ class PandasExcelReader:
             asm.add_element(raw_label="section_header", text=str(name), page_no=page_no, level=1)
             grid = [[str(v).strip() for v in row] for row in frame.values.tolist()]
             asm.add_element(raw_label="table", text=grid_text(grid), page_no=page_no, grid=grid)
+
+
+def _workbook_meta(content: bytes, filename: str) -> dict:
+    """An .xlsx workbook's properties (title, creator, dates); nothing for older formats."""
+    if not filename.lower().endswith((".xlsx", ".xlsm")):
+        return {}
+    try:
+        import openpyxl
+        from .native import put
+        props = openpyxl.load_workbook(io.BytesIO(content), read_only=True).properties
+        meta: dict = {}
+        for attr, name in (("title", "title"), ("creator", "author"), ("subject", "subject"),
+                           ("keywords", "keywords"), ("created", "created"), ("modified", "modified")):
+            put(meta, name, getattr(props, attr, None))
+        return meta
+    except Exception:                                   # noqa: BLE001 — properties are optional
+        return {}

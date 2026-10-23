@@ -23,6 +23,8 @@ class DocxReader:
         from docx.table import Table
         from docx.text.paragraph import Paragraph
         doc = docx.Document(io.BytesIO(content))
+        from .native import office_core
+        asm.metadata.update(office_core(doc.core_properties))
 
         seen: set[str] = set()
         for section in doc.sections:                    # running headers, once each

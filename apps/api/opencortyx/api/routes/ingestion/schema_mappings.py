@@ -16,6 +16,8 @@ from opencortyx.api.services.ingestion.schema_mappings import (
     mapping_view,
     prepare_mapping_payload,
     register_mapping_types,
+    link_existing_later,
+    save_mapping_references,
 )
 from opencortyx.core.security.auth import CurrentUser, require_auth, require_write
 from opencortyx.core.db import V2Session
@@ -71,15 +73,18 @@ async def create_schema_mapping(spec: SchemaMappingSpec, user: CurrentUser = Dep
                           source_type=spec.source_type or "", payload=payload,
                           summary=summary, status=spec.status or "active")
         db.add(m)
+        await db.flush()                                # its id names the reference rules it declares
         # a mapping's node/edge types ARE its schema — publish so extractors can bind and the
         # ontology/lineage views show what was declared, for EVERY paradigm.
         if paradigm == "semistructured":
             await register_semistructured_types(
                 db, user.workspace_id, [{"type": "json_structures", "config": payload}])
         await register_mapping_types(db, user.workspace_id, paradigm, spec.name.strip(), payload)
+        linked = await save_mapping_references(db, user.workspace_id, m.id, payload)
         await db.commit()
         await db.refresh(m)
-        return mapping_view(m)
+    link_existing_later(user.workspace_id, linked)
+    return mapping_view(m)
 
 
 @router.get("/schema-mappings/{mapping_id}")
@@ -106,8 +111,10 @@ async def update_schema_mapping(mapping_id: str, patch: SchemaMappingPatch,
             m.source_type = patch.source_type
         if patch.status is not None:
             m.status = patch.status
+        linked: list[str] = []
         if patch.payload is not None:
             m.payload = prepare_mapping_payload(m.paradigm, m.name, patch.payload)
+            linked = await save_mapping_references(db, m.workspace_id, m.id, m.payload)
             m.summary = mapping_summary(m.paradigm, m.payload, patch.summary or m.summary)
             if m.paradigm == "semistructured":
                 await register_semistructured_types(
@@ -117,7 +124,8 @@ async def update_schema_mapping(mapping_id: str, patch: SchemaMappingPatch,
             m.summary = patch.summary
         await db.commit()
         await db.refresh(m)
-        return mapping_view(m)
+    link_existing_later(user.workspace_id, linked)
+    return mapping_view(m)
 
 
 @router.get("/schema-mappings/{mapping_id}/usage")
@@ -174,6 +182,7 @@ async def delete_schema_mapping(mapping_id: str, user: CurrentUser = Depends(req
         if not m or m.workspace_id != user.workspace_id:
             raise HTTPException(status_code=404, detail="Mapping not found")
         name = m.name
+        await save_mapping_references(db, user.workspace_id, m.id, {})    # its reference rules go with it
         res = await db.execute(delete(SchemaMapping).where(
             SchemaMapping.id == uuid.UUID(mapping_id), SchemaMapping.workspace_id == user.workspace_id))
         await db.commit()

@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 class JsonStreamSpec(BaseModel):
     path: str                             # host path to a .json file (a top-level ARRAY of records)
     source_label: Optional[str] = None
-    options: dict = Field(default_factory=dict)   # collection_id / root_type / max_* / resolve_refs
+    options: dict = Field(default_factory=dict)   # collection_id / root_type / max_*
 
 
 class JsonInlineSpec(BaseModel):

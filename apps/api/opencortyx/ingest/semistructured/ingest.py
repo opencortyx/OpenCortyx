@@ -19,8 +19,9 @@ NodeRepo — no per-schema code. The mapping rules:
   {role, content,…}    → recognised as a Turn (chat/message shape), with a NEXT chain
   id-like field        → the node's DETERMINISTIC id (idempotent re-ingest = update, not duplicate)
 
-A light second pass adds REFERENCES edges where an `*_id` value matches another node's id. Bounded by
-`max_depth` / `max_array`. Each node stores a `text` summary (so lexical retrieval works); embeddings
+Links between records are declared, never guessed: a mapping's join edges ("`customer_id` names a
+Customer's `id`") are drawn while the file is walked when both ends are in it, and saved as reference
+rules the resolution engine applies across files. Bounded by `max_depth` / `max_array`. Each node stores a `text` summary (so lexical retrieval works); embeddings
 are optional (`embed_nodes`) since a big payload would otherwise make one embed call per node.
 """
 import os
@@ -501,16 +502,12 @@ class _SiblingPairs:
 
 
 class _Walker:
-    def __init__(self, workspace_id, collection_id, *, max_depth, max_array, embed_nodes, index_ids=True,
-                 spec=None):
+    def __init__(self, workspace_id, collection_id, *, max_depth, max_array, embed_nodes, spec=None):
         self.org = workspace_id
         self.coll = collection_id
         self.max_depth = max_depth
         self.max_array = max_array
         self.embed_nodes = embed_nodes
-        # index_ids off = don't build the id→node index / cross-record REFERENCES. Keeps memory CONSTANT
-        # when streaming GB-scale input (the index would otherwise grow with the whole dataset).
-        self.index_ids = index_ids
         # WALK SPEC (schema.compile_walk_spec) — declared structure cards made authoritative: per-PATH
         # node-type renames, edge-type/direction overrides, skips, promotions. Empty = pure auto mode.
         self.spec = spec or {}
@@ -544,11 +541,6 @@ class _Walker:
         self._afilters = self.spec.get("array_filters") or {}
         # EDGE ATTRIBUTES: properties that belong on the RELATIONSHIP, readable only while it is drawn.
         self._eattrs = self.spec.get("edge_attributes") or {}
-        self.id_index: dict = {}          # id-value → node_id  (for REFERENCES)
-        #: id-values claimed by the record that DECLARES them (`vendor_id` on a Vendor). A mere
-        #: mention (`vendor_id` on an Incident) must never displace the declaration — see `_node`.
-        self._id_owner: set = set()
-        self.refs: list = []              # (src_node_id, referenced_id_value)
         self._edge_rules = [r for r in (self.spec.get("edge_rules") or [])
                             if isinstance(r, dict) and r.get("type") and r.get("from") and r.get("to")]
         #: (node_type, field, value) → node_id. Bounded on purpose: only the (type, field) pairs some
@@ -563,7 +555,7 @@ class _Walker:
                                             str(_ref.get("on") or _ref.get("field") or "id")))
         self.pending_edges: list = []     # declared edges, resolved once every node exists
         self.unresolved_joins: list = []  # declared joins that matched nothing — reported, never dropped
-        self.counts = {"nodes": 0, "edges": 0, "references": 0, "declared_edges": 0}
+        self.counts = {"nodes": 0, "edges": 0, "declared_edges": 0}
         self.created: dict = {}           # type → [node ids]; filled only when collect_ids is on
 
     def _discriminated(self, obj: dict, default: str) -> str:
@@ -748,16 +740,6 @@ class _Walker:
             for k, v in (attrs or {}).items():
                 if (type, k) in self._join_targets and isinstance(v, (str, int, float)):
                     self.typed_index.setdefault((type, k, str(v)), nid)
-        if self.index_ids:
-            for k, v in (attrs or {}).items():    # index id-like values for REFERENCES resolution
-                if self._is_idkey(k) and isinstance(v, (str, int)):
-                    declares = _singular(_tokens(k)[0] if _tokens(k) else "") == \
-                        _singular((semantic or type or "").lower())
-                    if declares:
-                        self.id_index[str(v)] = nid
-                        self._id_owner.add(str(v))
-                    elif str(v) not in self._id_owner:
-                        self.id_index.setdefault(str(v), nid)
         return nid
 
     async def _edge(self, src, dst, etype, props=None):
@@ -848,10 +830,6 @@ class _Walker:
         if parent_id and edge_type:
             await self._link(parent_id, nid, path, edge_type, rec=obj)
         self._queue_declared_edges(nid, type_, path, attrs)
-        if self.index_ids:                         # queue cross-references (foreign-key-like fields)
-            for k, v in attrs.items():
-                if self._is_idkey(k) and k.lower() not in ("id", "uuid", "@id", "key"):
-                    self.refs.append((nid, str(v)))
         for k, v in text_scalars.items():          # long prose → its own Document node (HAS_DOCUMENT)
             if self._undeclared(_jp(path, k)):
                 continue
@@ -912,10 +890,7 @@ class _Walker:
         list_attrs = {}
         for k, v in leftover.items():
             if self._is_idkey(k) and v and all(isinstance(x, str) for x in v):
-                list_attrs[k] = v
-                for val in v[: self.max_array]:
-                    if val not in (None, ""):
-                        self.refs.append((parent_id, str(val)))
+                list_attrs[k] = v                    # ids stay values; a mapping's join rule links them
             elif v and all(isinstance(x, str) for x in v):
                 kpath = _jp(path, k) + "[]"
                 isem = _type_of(k)
@@ -932,9 +907,6 @@ class _Walker:
                 list_attrs[k] = v
         if list_attrs:                              # numbers/bools → list attributes on the parent
             await _repo.patch_properties(self.org, [parent_id], list_attrs, bump_version=False)
-            for k, v in list_attrs.items():
-                if self._is_idkey(k):
-                    self.refs += [(parent_id, str(rv)) for rv in v if _is_scalar(rv)]
 
     async def _walk_primary(self, key, arr, satellites, *, parent_id, depth, det_prefix, date_hint=None,
                             path=""):
@@ -1136,18 +1108,6 @@ class _Walker:
                             self.counts["declared_edges"] += 1
                             self.counts["edges"] += 1
 
-    async def resolve_references(self):
-        if "REFERENCES" in self._suppressed:
-            self.refs = []
-            return
-        pending, self.refs = self.refs, []
-        for src, val in pending:
-            dst = self.id_index.get(val)
-            if dst and dst != src:
-                if await _repo.add_edge(workspace_id=self.org, source_id=src, target_id=dst,
-                                        type="REFERENCES"):
-                    self.counts["references"] += 1
-                    self.counts["edges"] += 1
 
 
 def _plain(spec: dict, mapping, root_type) -> bool:
@@ -1228,8 +1188,7 @@ async def ingest_json(workspace_id: uuid.UUID, data: Any, *, source_label: str =
                                  edge_type="HAS_RECORD", depth=1, det_prefix=source_label,
                                  field_map=mapping, type_override=rtype)
         records = 1
-    await walker.resolve_declared_edges()   # declared rules first — they are not guesses
-    await walker.resolve_references()       # then cross-record *_id references
+    await walker.resolve_declared_edges()   # declared join rules within this file
     if checksum:
         # Stamped LAST: a crash before this point leaves no `__ingested_ok`, so the next upload
         # re-walks instead of being skipped forever as an unchanged duplicate.
@@ -1249,15 +1208,12 @@ async def ingest_json_stream(workspace_id: uuid.UUID, source, *, source_label: s
                              collection_id=None, root_type: Optional[str] = None,
                              max_depth: int = 6, max_array: int = 500, max_records: int = 100000,
                              embed_nodes: bool = False, mapping: Optional[dict] = None,
-                             collect_ids: bool = False,
-                             resolve_refs: bool = False, reporter=None,
+                             collect_ids: bool = False, reporter=None,
                              walk_spec: Optional[dict] = None, auto_zip: bool = True) -> dict:
     """STREAMING ingest for large JSON — constant memory. `source` is a filesystem path or a binary
     file-like; the top-level ARRAY is iterated one record at a time with ijson (never loaded whole).
 
-    `resolve_refs` is OFF by default here: cross-record *_id → REFERENCES needs a full id index that
-    grows with the data, which defeats streaming. A top-level OBJECT (not an array) has nothing to
-    stream → falls back to the in-memory `ingest_json`."""
+    A top-level OBJECT (not an array) has nothing to stream → falls back to the in-memory `ingest_json`."""
     import ijson
 
     opened = None
@@ -1270,7 +1226,7 @@ async def ingest_json_stream(workspace_id: uuid.UUID, source, *, source_label: s
     spec = walk_spec or {}
     plain = _plain(spec, mapping, root_type)
     walker = _Walker(workspace_id, collection_id, max_depth=max_depth, max_array=max_array,
-                     embed_nodes=embed_nodes, index_ids=resolve_refs, spec=spec)
+                     embed_nodes=embed_nodes, spec=spec)
     simple = SemiStructuredWalker(workspace_id=workspace_id, repo=_repo, max_depth=max_depth, max_array=max_array,
                                   default_node_type=_KEYNODE)
     try:
@@ -1304,11 +1260,7 @@ async def ingest_json_stream(workspace_id: uuid.UUID, source, *, source_label: s
                 n += 1
                 if reporter is not None and n % 500 == 0:
                     await reporter.step(1, f"Streamed {n} records", "running", walker.counts["nodes"])
-        # Declared edges are RULES, not inference, so they run whether or not the caller opted
-        # into cross-record reference guessing (`resolve_refs`, off by default on this path).
-        await walker.resolve_declared_edges()
-        if resolve_refs:
-            await walker.resolve_references()
+        await walker.resolve_declared_edges()   # declared join rules within this file
     finally:
         if opened is not None:
             opened.close()

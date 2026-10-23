@@ -19,6 +19,8 @@ class PptxReader:
         from pptx import Presentation
         from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
         prs = Presentation(io.BytesIO(content))
+        from .native import office_core
+        asm.metadata.update(office_core(prs.core_properties))
         for page_no, slide in enumerate(prs.slides, start=1):
             if max_pages and page_no > max_pages:
                 break

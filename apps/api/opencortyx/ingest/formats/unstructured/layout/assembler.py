@@ -36,6 +36,9 @@ class LayoutAssembler:
         #: can be traced to what read it.
         self.engine: str = ""
         self.fallback_reason: str = ""
+        #: What the file format carries about the document outside its text (readers/native.py):
+        #: Office core properties, HTML <meta>, front matter. Merged with the header block it opens with.
+        self.metadata: dict = {}
 
     def _next_id(self, page_no: int) -> str:
         self._seq += 1

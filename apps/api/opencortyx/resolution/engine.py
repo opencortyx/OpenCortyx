@@ -25,10 +25,12 @@ _CHUNK = 1000
 #: Set on an asset whose resolution found embeddings still missing; the embedding job that finishes
 #: them queues the resolution again when it sees it, and resolving clears it.
 RESOLVE_WAITING = "__resolve_waiting"
-#: The identity index's namespaces for documents: a document's own identifiers ("rfc 9304"), and
-#: what it refers to under each relation ("doc:ref:OBSOLETES" -> "rfc 8113").
-DOC_ID, DOC_REF = "doc:id", "doc:ref:"
-#: Where reading left a document's references (`ingest.unstructured.ingest.REFERENCES_KEY`).
+#: The identity index's namespaces for links: the values a reference may name ("val:Customer.id",
+#: "val:Source.identifiers"), and the values nodes refer to under each relation
+#: ("ref:Customer.id:PLACED_BY", "ref:Source.identifiers:OBSOLETES").
+VAL, REF = "val:", "ref:"
+#: A document's identifiers are what its header references name.
+DOCUMENT_TARGET = ("Source", "identifiers")
 REFERENCES = "__references"
 
 
@@ -118,6 +120,10 @@ class Store:
     async def document(self, workspace_id, source_id):
         return await self.repo.get(workspace_id, source_id)
 
+    async def node_ids(self, workspace_id, type_name: str) -> list:
+        from opencortyx.stores.graph import NodeQuery
+        return await self.repo.graph.find_node_ids(workspace_id, NodeQuery(exact_types=[type_name]))
+
     async def index(self, workspace_id, rows: list) -> None:
         """Add (namespace, key, node id) rows to the identity index; existing rows are kept."""
         from sqlalchemy.dialects.postgresql import insert
@@ -131,24 +137,32 @@ class Store:
                 await db.execute(insert(ResolutionKey).values(values[i:i + _CHUNK]).on_conflict_do_nothing())
             await db.commit()
 
-    async def referrers(self, workspace_id, keys, exclude) -> list:
-        """(relation, node id) of documents whose references name one of `keys`."""
+    async def referrers(self, workspace_id, prefix: str, keys, exclude) -> list:
+        """(relation, node id, key) of nodes whose references under `prefix` name one of `keys`."""
         from sqlalchemy import select
         from opencortyx.core.db import V2Session
         from opencortyx.domain.resolution import ResolutionKey as K
         keys, out = list(keys), []
         async with V2Session() as db:
             for i in range(0, len(keys), _CHUNK):
-                out += [(t[len(DOC_REF):], n) for t, n in (await db.execute(select(K.node_type, K.node_id).where(
-                    K.workspace_id == workspace_id, K.node_type.like(DOC_REF + "%"),
+                out += [(t[len(prefix):], n, k) for t, n, k in (await db.execute(select(K.node_type, K.node_id, K.key_hash).where(
+                    K.workspace_id == workspace_id, K.node_type.like(prefix + "%"),
                     K.key_hash.in_(keys[i:i + _CHUNK]), K.node_id.notin_(list(exclude))))).all()]
         return out
 
-    async def link(self, workspace_id, links: list) -> None:
-        if links:
+    async def link(self, workspace_id, links: list) -> int:
+        """Add the (from, relation, to) edges that are not there yet. A mapping's join edge in the same
+        file was made while it was read; it is not made twice. Returns how many were added."""
+        if not links:
+            return 0
+        from opencortyx.stores.graph import EdgeQuery
+        have = {(str(e.source_id), e.type, str(e.target_id)) for e in await self.repo.edges(
+            workspace_id, EdgeQuery(source_ids=list({a for a, _, _ in links}), types=list({r for _, r, _ in links})))}
+        new = [(a, r, b) for a, r, b in links if (str(a), r, str(b)) not in have]
+        if new:
             await self.repo.add_edges(workspace_id=workspace_id, edges=[
-                {"source_id": a, "target_id": b, "type": rel, "properties": {"__by": "resolution"}}
-                for a, rel, b in links])
+                {"source_id": a, "target_id": b, "type": r, "properties": {"__by": "resolution"}} for a, r, b in new])
+        return len(new)
 
     async def pending_embeddings(self, workspace_id, source_id) -> bool:
         """Whether any of the asset's nodes still wait for their embeddings (structural nodes, which are
@@ -187,30 +201,91 @@ class Store:
         return await c.resolve_many(workspace_id, ids, cfg=cfg)
 
 
-async def link_document(workspace_id, source_id, store) -> int:
-    """Link a document to the documents it refers to and to those that refer to it.
+def _values(node, attribute: str) -> list:
+    """The values of one attribute of a node, as identity keys: a list gives one each."""
+    raw = node.label if attribute == "label" else (node.properties or {}).get(attribute)
+    items = raw if isinstance(raw, list) else [raw]
+    return [k for k in (identity_key([v]) for v in items if isinstance(v, (str, int, float)) and str(v).strip()) if k]
 
-    Its identifiers go into the identity index under DOC_ID and its references under DOC_REF plus
-    the relation; then each reference is looked up among identifiers (links out), and each identifier
-    among references (links in, from documents resolved before this one). Keys are written before
-    they are looked up, so two documents naming each other link whichever is resolved first.
-    Returns the number of links made."""
-    root = await store.document(workspace_id, source_id)
-    props = (root.properties or {}) if root else {}
-    ids = [i for i in (props.get("identifiers") or []) if isinstance(i, str) and i]
-    refs = [(r[0], r[1]) for r in (props.get(REFERENCES) or []) if isinstance(r, (list, tuple)) and len(r) == 2]
-    if not ids and not refs:
+
+def _types(node) -> set:
+    from opencortyx.domain.ontology import base_type_of
+    return {node.type, base_type_of(node)}
+
+
+async def link_references(workspace_id, source_id, specs: dict, nodes: list, store) -> int:
+    """Link an asset's nodes to the nodes their references name, and the nodes that name them to them.
+
+    References are the specs' declared foreign keys (`Reference`) and a document's header references
+    (`REFERENCES`, unless its spec turns them off). The values a reference may name go into the
+    identity index under VAL, what nodes refer to under REF plus the relation; each reference is then
+    looked up among values (links out) and each value among references (links in, from assets resolved
+    earlier). Keys are written before they are looked up, so two assets naming each other link
+    whichever is resolved first. Returns the number of links made."""
+    rules = [(t, r) for t, spec in specs.items() for r in spec.references if spec.enabled]
+    targets = {(r.target_type, r.target_attribute) for _, r in rules} | {DOCUMENT_TARGET}
+    header_refs = (specs.get(DOCUMENT_TARGET[0]).header_references if specs.get(DOCUMENT_TARGET[0]) else True)
+    root = await store.document(workspace_id, source_id) if source_id else None
+    nodes = ([root] if root else []) + [n for n in nodes if not root or n.id != root.id]
+    mine = {n.id for n in nodes}
+    values: dict = {}                       # VAL namespace -> {key: node id}
+    refs: list = []                         # (REF namespace, relation, key, node id)
+    for node in nodes:
+        types = _types(node)
+        for t, a in targets:
+            if t in types:
+                for k in _values(node, a):
+                    values.setdefault(f"{VAL}{t}.{a}", {})[k] = node.id
+        for t, r in rules:
+            if t in types:
+                # A reversed rule is drawn from the named node into this one; "~" keeps that with the key.
+                rel = ("~" if r.reverse else "") + r.relation
+                refs += [(f"{REF}{r.target_type}.{r.target_attribute}:", rel, k, node.id)
+                         for k in _values(node, r.attribute)]
+        if header_refs and DOCUMENT_TARGET[0] in types:
+            for item in (node.properties or {}).get(REFERENCES) or []:
+                if isinstance(item, (list, tuple)) and len(item) == 2 and identity_key([item[1]]):
+                    refs.append((f"{REF}{DOCUMENT_TARGET[0]}.{DOCUMENT_TARGET[1]}:", str(item[0]),
+                                 identity_key([item[1]]), node.id))
+    if not values and not refs:
         return 0
-    own = {identity_key([i]) for i in ids} - {None}
-    out = [(rel, identity_key([ref])) for rel, ref in refs]
-    await store.index(workspace_id, [(DOC_ID, k, source_id) for k in own]
-                      + [(DOC_REF + rel, k, source_id) for rel, k in out if k])
-    targets = await store.lookup(workspace_id, DOC_ID, {k for _, k in out if k}, exclude={source_id})
-    links = [(source_id, rel, targets[k]) for rel, k in out if k in targets]
-    links += [(referrer, rel, source_id) for rel, referrer in await store.referrers(workspace_id, own, {source_id})]
-    links = list(dict.fromkeys(links))
-    await store.link(workspace_id, links)
-    return len(links)
+    await store.index(workspace_id, [(ns, k, n) for ns, keys in values.items() for k, n in keys.items()]
+                      + [(prefix + rel, k, n) for prefix, rel, k, n in refs])
+    links = []
+    for prefix in {p for p, _, _, _ in refs}:
+        wanted = [(rel, k, n) for p, rel, k, n in refs if p == prefix]
+        found = await store.lookup(workspace_id, VAL + prefix[len(REF):-1], {k for _, k, _ in wanted}, exclude=set())
+        links += [_edge(n, rel, found[k]) for rel, k, n in wanted if k in found and found[k] != n]
+    for ns, keys in values.items():
+        prefix = REF + ns[len(VAL):] + ":"
+        by_key = dict(keys)
+        for rel, referrer, k in await store.referrers(workspace_id, prefix, list(by_key), mine):
+            links.append(_edge(referrer, rel, by_key[k]))
+    return await store.link(workspace_id, list(dict.fromkeys(links)))
+
+
+def _edge(referrer, relation: str, named) -> tuple:
+    """(from, type, to) of a link: from the node holding the reference, unless the rule is reversed."""
+    return (named, relation[1:], referrer) if relation.startswith("~") else (referrer, relation, named)
+
+
+async def link_existing(workspace_id, type_names, store, page: int = 500) -> int:
+    """Apply the reference rules to nodes already in the graph: those of `type_names` and of the
+    types their rules name, a page at a time. Run when a mapping declares new foreign keys, so data
+    read before the rule existed is linked too. Returns the number of links made."""
+    workspace_id = uuid.UUID(str(workspace_id))
+    specs = await store.specs(workspace_id)
+    types = set(type_names)
+    for name in list(types):
+        spec = specs.get(name)
+        types |= {r.target_type for r in (spec.references if spec else ())}
+    made = 0
+    for name in sorted(types):
+        ids = await store.node_ids(workspace_id, name)
+        for i in range(0, len(ids), page):
+            nodes = list((await store.nodes(workspace_id, ids[i:i + page])).values())
+            made += await link_references(workspace_id, None, specs, nodes, store)
+    return made
 
 
 async def resolve_asset(workspace_id, source_id, *, store=None) -> dict:
@@ -222,7 +297,7 @@ async def resolve_asset(workspace_id, source_id, *, store=None) -> dict:
     if specs:
         by_type = defaultdict(list)
         for node in nodes_of_asset:
-            if node.type in specs:
+            if node.type in specs and specs[node.type].active:      # identity fields: matched as records
                 by_type[node.type].append(node)
         for node_type, nodes in by_type.items():
             spec = specs[node_type]
@@ -245,7 +320,7 @@ async def resolve_asset(workspace_id, source_id, *, store=None) -> dict:
             plan = records.decide(workspace_id, source_id, node_type, spec, nodes, existing, known, pool)
             await store.apply(workspace_id, node_type, plan, {**known, **{n.id: n for n in nodes}})
             out["types"][node_type] = plan.summary()
-    out["documents"] = await link_document(workspace_id, source_id, store)
+    out["links"] = await link_references(workspace_id, source_id, specs, nodes_of_asset, store)
     out["statements"] = await store.statements(workspace_id, source_id)
     await store.mark_resolved(workspace_id, source_id, out["types"])
     log.info("resolution.asset", workspace_id=str(workspace_id), source_id=str(source_id), types=out["types"])

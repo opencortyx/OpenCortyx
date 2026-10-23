@@ -20,10 +20,19 @@ class EpubReader:
              max_pages: Optional[int] = None) -> None:
         html = HTMLTagReader()
         with zipfile.ZipFile(io.BytesIO(content)) as z:
+            from .native import opf_meta
+            asm.metadata.update(opf_meta(_opf(z)))
             for page_no, name in enumerate(_spine(z), start=1):
                 if max_pages and page_no > max_pages:
                     break
                 html.read_html(z.read(name), asm, page_no=page_no)
+
+
+def _opf(z: zipfile.ZipFile) -> str:
+    """The package document's text, or "" without one."""
+    container = z.read("META-INF/container.xml").decode("utf-8", "ignore") if "META-INF/container.xml" in z.namelist() else ""
+    m = re.search(r'full-path="([^"]+)"', container)
+    return z.read(m.group(1)).decode("utf-8", "ignore") if m and m.group(1) in z.namelist() else ""
 
 
 def _spine(z: zipfile.ZipFile) -> list[str]:

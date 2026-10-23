@@ -27,7 +27,7 @@ MAX_VALUE = 300
 _MONTHS = ("january|february|march|april|may|june|july|august|september|october|november|december|"
            "jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec")
 #: A date as headers write it: "October 2022", "15 October 2022", "2022-10-15", "15-Oct-2022".
-_DATE = re.compile(r"\b(?:\d{1,2}[ -])?(?:" + _MONTHS + r")[a-z]*\.?[ ,-]*\d{4}\b|\b\d{4}-\d{2}-\d{2}\b",
+_DATE = re.compile(r"\b(?:\d{1,2}[ -])?(?:" + _MONTHS + r")[a-z]*\.?[ ,-]*\d{4}\b|\b\d{4}-\d{2}-\d{2}(?!\d)",
                    re.IGNORECASE)
 #: A header line: a key of one to four words joined by spaces or hyphens ("Superseded-By",
 #: "Request for Comments") at the start of the line, a colon, and a value.
@@ -120,10 +120,13 @@ def _identifiers_in(value: str, scheme: str) -> list[str]:
     return out
 
 
-def document_metadata(texts: list[str], labels: list[str], filename: str) -> dict:
+def document_metadata(texts: list[str], labels: list[str], filename: str, native: dict | None = None) -> dict:
     """{title, identifiers, published, fields, references} of one document.
 
-    `texts`/`labels` are the reader's elements and their labels, in reading order."""
+    `texts`/`labels` are the reader's elements and their labels, in reading order; `native` is what
+    the file format carries (readers/native.py). The document's own text wins for its title and date
+    (a file's stored title is often stale: "Document1"); native fields fill the ones it lacks."""
+    native = {k: v for k, v in (native or {}).items() if k and v}
     texts, labels = list(texts[:HEADER_ELEMENTS]), list(labels[:HEADER_ELEMENTS])
     stem = re.sub(r"\.[A-Za-z0-9]{1,6}$", "", (filename or "").replace("\\", "/").rsplit("/", 1)[-1])
     stem_id = _STEM_ID.match(stem)
@@ -145,6 +148,8 @@ def document_metadata(texts: list[str], labels: list[str], filename: str) -> dic
         if (number and int(only.group(1)) == int(number)) or re.fullmatch(r"[A-Za-z]{2,5}", key.strip()):
             ids.append(identifier(_initials(key), only.group(1)))
             own_keys.add(key)
+    if native.get("identifier") and re.search(r"\d", native["identifier"]) and len(native["identifier"]) <= 80:
+        ids.append(native["identifier"].strip().lower())       # an e-book's ISBN, a report number
     own_scheme = scheme or (ids[0].split()[0] if ids else "")
 
     references: list[list[str]] = []
@@ -168,14 +173,17 @@ def document_metadata(texts: list[str], labels: list[str], filename: str) -> dic
         title = next((t.strip() for t in texts[last + 1:last + 6]
                       if t and 3 < len(t.strip()) <= 150 and not t.strip().endswith(".")
                       and not any(_LINE.match(x) for x in t.splitlines())), None)
+    title = title or native.get("title")
     if not title:
         title = next((t.strip() for t, label in zip(texts, labels)
                       if label == "section_header" and t and t.strip()), None)
 
     published = next((fields[k] for k in fields if snake(k) in _DATE_KEYS), None)
+    published = published or next((native[k] for k in ("published", "date", "created", "issued") if native.get(k)), None)
     date = _DATE.search(published or " ".join(t for t in texts if t)[:HEADER_CHARS])
     return {"title": (title or "")[:MAX_VALUE] or None,
             "identifiers": list(dict.fromkeys(ids)),
             "published": date.group(0) if date else None,
-            "fields": {snake(k): v for k, v in fields.items() if snake(k)},
+            "fields": {**{k: v for k, v in native.items() if k not in ("title", "identifier")},
+                       **{snake(k): v for k, v in fields.items() if snake(k)}},
             "references": references}
