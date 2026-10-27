@@ -193,6 +193,12 @@ def score_tables(schema: Schema, question: str) -> list[tuple[float, Table]]:
         name_words = set(words(t.name)) | set(words(t.view))
         stems = {w.rstrip("s") for w in q} | q
         s += 2.0 * len(stems & (name_words | {w.rstrip("s") for w in name_words}))
+        # The table named outright ("in licences 00", "the orders table"): that one, not a lookalike.
+        for nm in (t.name, t.view):
+            phrase = " ".join(words(nm))
+            if phrase and f" {phrase} " in qtext:
+                s += 10.0
+                break
         for c in t.columns:
             cw = set(words(c.name))
             if cw and cw <= q | {w + "s" for w in q} | {w.rstrip("s") for w in q}:

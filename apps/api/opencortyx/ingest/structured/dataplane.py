@@ -138,21 +138,42 @@ def _is_category(col: dict, prof: dict, total: int) -> bool:
     return prof["distinct_count"] < max(2, total * 0.5)
 
 
+def key_candidates(name: str, columns: list[dict]) -> list[str]:
+    """Columns that may be a table's own key, most likely first: `id`, `<table>_id` (singular, as
+    `licence_id` for licences.csv), then a leading `*_id` column."""
+    stem = re.sub(r"[^a-z]+$", "", re.sub(r"[-_ ]?\d+$", "", str(name or "").lower())).strip("_- ")
+    singular = stem[:-1] if stem.endswith("s") else stem
+    names = [str(c.get("name")) for c in columns]
+    lower = {n.lower(): n for n in names}
+    out = [lower[k] for k in ("id", f"{singular}_id", f"{stem}_id") if k in lower]
+    if names and names[0].lower().endswith("_id") and names[0] not in out:
+        out.append(names[0])
+    return list(dict.fromkeys(out))
+
+
 async def store_file_table(workspace_id, asset_id, *, path: str, filename: str,
                            overrides: Optional[dict], name: str, key_columns: list,
                            columns: list[dict], source_key: str, collection_id=None) -> dict:
-    """A tabular file's rows into its managed Delta table, registered and profiled."""
+    """A tabular file's rows into its managed Delta table, registered and profiled. With no key
+    declared, a natural one is looked for (`key_candidates`, kept only when unique and never empty),
+    so rows, their evidence and their source keys share the table's own ids."""
     import anyio
 
     from opencortyx.core.dataplane import assets
     from opencortyx.ingest.formats.structured import tabular as _T
     from opencortyx.stores.data import AssetRef
 
+    if not key_columns:
+        found = await anyio.to_thread.run_sync(
+            lambda: _T.unique_columns(path, filename, overrides, key_candidates(name, columns)))
+        key_columns = found[:1]
+
     def go():
         res = write_rows(workspace_id, asset_id,
                          lambda: _T.iter_arrow_batches(path, filename, overrides), key_columns)
         ref = AssetRef(asset_id=str(asset_id), name=name, kind=STRUCTURED)
         res["profile"] = profile(workspace_id, ref, columns) if res["rows"] else {}
+        res["key_columns"] = key_columns
         return res
     res = await anyio.to_thread.run_sync(go)
     await assets.register(workspace_id, asset_id, kind=STRUCTURED, name=name, storage="managed",

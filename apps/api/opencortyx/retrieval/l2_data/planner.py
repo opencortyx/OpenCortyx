@@ -132,11 +132,15 @@ def rule_plan(question: str, schema: Schema) -> Optional[Plan]:
     where += _time_filters(question, anchor)
     tables = [anchor]
     joins_sql = ""
-    # A filter value that lives in another table joins it in, when a path exists.
+    # A filter value that lives only in another table joins it in, when a path exists - never one
+    # the anchor can filter on itself ("EXPIRED" in the anchor's own status column).
+    anchor_cols = {c.name.lower() for c in anchor.columns}
     for _, other in ranked[1:3]:
         w2, u2 = _filters(question, [other])
-        if not w2:
+        keep = [(w, u) for w, u in zip(w2, u2) if u.lower() not in anchor_cols]
+        if not keep:
             continue
+        w2, u2 = [w for w, _ in keep], [u for _, u in keep]
         steps = join_path.path(schema, anchor.view, other.view)
         if steps is None:
             continue

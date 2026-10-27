@@ -477,6 +477,26 @@ def iter_row_batches(path: str, filename: str, overrides: Optional[dict] = None,
         con.close()
 
 
+def unique_columns(path: str, filename: str, overrides: Optional[dict], candidates: List[str]) -> List[str]:
+    """Which of `candidates` hold a value on every row and a different one on each - a key."""
+    if not candidates:
+        return []
+    fmt = file_format(filename)
+    con = _con()
+    try:
+        relation, _eff = resolve_csv_settings(con, path, fmt, overrides)
+        out = []
+        for c in candidates:
+            q = '"' + str(c).replace('"', '""') + '"'
+            n, filled, distinct = con.execute(
+                f"SELECT count(*), count({q}), count(DISTINCT {q}) FROM {relation}").fetchone()
+            if n and filled == n and distinct == n:
+                out.append(c)
+        return out
+    finally:
+        con.close()
+
+
 def iter_arrow_batches(path: str, filename: str, overrides: Optional[dict] = None,
                        batch_size: int = 50_000) -> Iterator[Any]:
     """The file's rows as Arrow record batches, every row, typed once - what the data store keeps

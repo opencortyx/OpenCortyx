@@ -50,17 +50,26 @@ def upload_all(api: Api, root: Path, batch: str) -> dict:
 
 
 def wait_batch(api: Api, batch: str, total: int, timeout: float = 7200) -> dict:
+    """Until every run of the batch is completed, failed or canceled (/uploads/batches)."""
     end = time.time() + timeout
     st: dict = {}
     while time.time() < end:
         st = api.call("GET", f"/uploads/batches/{batch}") or {}
-        done = sum(int(st.get(k) or 0) for k in ("completed", "failed", "canceled"))
-        print(f"    batch: {json.dumps({k: st.get(k) for k in ('queued', 'running', 'completed', 'failed')})}",
+        print(f"    batch: done {st.get('done')}/{st.get('total')} {json.dumps(st.get('counts') or {})}",
               flush=True)
-        if done >= total:
+        if int(st.get("done") or 0) >= total:
             return st
         time.sleep(30)
     return st
+
+
+def runs_of(api: Api, batch: str) -> dict:
+    """{filename: (kind, run id, None)} for the newest run of each file in `batch`."""
+    out: dict = {}
+    for r in (api.call("GET", "/progress?limit=2000") or {}).get("items") or []:
+        if r.get("asset") not in out:          # newest first; the run list carries no batch id
+            out[r["asset"]] = (r.get("kind"), r.get("id"), None)
+    return out
 
 
 def main() -> int:
@@ -71,9 +80,10 @@ def main() -> int:
     a.add_argument("--container", default="opencortyx-test-api-1")
     a.add_argument("--out", default="results/e2e300")
     a.add_argument("--skip-upload", action="store_true")
+    a.add_argument("--batch", default="", help="with --skip-upload: the batch already uploaded")
     args = a.parse_args()
     root = Path(args.dir)
-    exp = corpus.write(str(root), args.bench) if not args.skip_upload else json.loads(
+    exp = corpus.write(str(root), args.bench) if not (root / "expected.json").exists() else json.loads(
         (root / "expected.json").read_text(encoding="utf-8"))
     api = Api(args.api)
     me = api.call("GET", "/auth/me") or {}
@@ -86,17 +96,22 @@ def main() -> int:
     api.call("PUT", "/resolution/types/KeyNode", json={"identify_by": ["customer_id", "name"], "enabled": True})
 
     # 2
-    batch = f"e2e300-{int(time.time())}"
+    batch = args.batch or f"e2e300-{int(time.time())}"
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    t0 = time.time()
     if not args.skip_upload:
-        t0 = time.time()
         runs = upload_all(api, root, batch)
         check("300 files accepted by Add data", sum(1 for r in runs.values() if r[1]) == 300,
               f"{sum(1 for r in runs.values() if r[1])} runs")
-        st = wait_batch(api, batch, 300)
-        check("every run finished, none failed", int(st.get("failed") or 0) == 0 and
-              int(st.get("completed") or 0) >= 300, json.dumps(st)[:400])
-        print(f"    read in {time.time() - t0:.0f} s", flush=True)
-        time.sleep(120)       # embeddings and resolution run after each asset
+    st = wait_batch(api, batch, 300)
+    check("every run finished, none failed", not st.get("failed") and int(st.get("done") or 0) >= 300,
+          json.dumps({"done": st.get("done"), "counts": st.get("counts"), "failed": (st.get("failed") or [])[:5]}))
+    print(f"    read in {time.time() - t0:.0f} s", flush=True)
+    if args.skip_upload:
+        runs = runs_of(api, batch)
+    (out / "runs.json").write_text(json.dumps(runs), encoding="utf-8")
+    time.sleep(180)           # embeddings and resolution run after each asset
 
     # 3
     tmp = Path(os.environ.get("TEMP", "/tmp")) / "expected300.json"
@@ -150,12 +165,6 @@ def main() -> int:
     check("a definition that does not run is refused", bool(bad and "422" in bad), (bad or "accepted")[:200])
 
     # 6 - the asset Data tab, one asset of each kind
-    out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
-    runs_file = out / "runs.json"
-    if not args.skip_upload:
-        runs_file.write_text(json.dumps(runs), encoding="utf-8")
-    runs = json.loads(runs_file.read_text(encoding="utf-8")) if runs_file.exists() else {}
 
     def asset_of(fname):
         rid = (runs.get(fname) or [None, None])[1]

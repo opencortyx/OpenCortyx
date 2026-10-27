@@ -799,6 +799,9 @@ async def _ingest_one_table(workspace_id: uuid.UUID, path: str, filename: str, t
     seen_rows: set = set()
     _occ: dict = {}                                   # duplicate rows, for their _row_key
     _keys: list = []                                  # (source id, entity type, node) per batch
+    # The key a row is known by - the declared identity, else the natural key the data store found
+    # (the same one its Delta row is keyed by, so evidence opens the row).
+    _key_cols = [id_col] if id_col else list(stored.get("key_columns") or [])
     while True:
         if max_rows and counts["rows"] >= max_rows:
             truncated = (tbl["row_count"] or 0) > counts["rows"]
@@ -833,14 +836,14 @@ async def _ingest_one_table(workspace_id: uuid.UUID, path: str, filename: str, t
                 _note_duplicate_identity(counts, label)
             # The row this node and its FK edges rest on (core/dataplane/evidence.py); the same key
             # the row has in the asset's Delta table, so the pointer opens it.
-            with _evidence.unit(table_id, "row", _row_key(row, [id_col] if id_col else (), _occ),
+            with _evidence.unit(table_id, "row", _row_key(row, _key_cols, _occ),
                                 quote=str(props[_node_document.STORED_KEY])[:300],
                                 extractor="row mode"):
                 await _put(node_id=rid, workspace_id=workspace_id, type=node_type, label=label,
                            properties=props, source_ref=table_id, collection_id=collection_id)
                 await _uedge(workspace_id=workspace_id, source_id=table_id, target_id=rid, type="CONTAINS")
-                if delta_mode and id_col and row.get(id_col) not in (None, ""):
-                    _keys.append((row[id_col], node_sem or node_type, rid))
+                if delta_mode and _key_cols and row.get(_key_cols[0]) not in (None, ""):
+                    _keys.append((row[_key_cols[0]], node_sem or node_type, rid))
                 seen_rows.add(rid)
                 counts["rows"] += 1
                 # FK columns → edge to the referenced entity (created/deduped by value), honouring
