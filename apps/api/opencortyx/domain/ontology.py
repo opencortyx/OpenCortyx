@@ -29,7 +29,12 @@ from opencortyx.domain.base import V2_SCHEMA, V2Base
 PLATFORM_ORG = uuid.UUID(int=0)
 
 #: Node types that are ingested assets: a file (Source) or a table (Table).
-ASSET_TYPES = ("Table", "Source")
+#: The node an asset is, in the graph. `Source` and `Table` in a workspace whose data lives in the graph;
+#: the three kinds in one whose data lives in Delta tables (docs/knowledge-layer-implementation.md).
+ASSET_TYPES = ("Table", "Source", "StructuredAsset", "SemiStructuredAsset", "UnstructuredAsset")
+#: The asset node type for each kind of asset, when data lives in Delta tables.
+ASSET_TYPE_BY_KIND = {"structured": "StructuredAsset", "semistructured": "SemiStructuredAsset",
+                      "unstructured": "UnstructuredAsset"}
 
 
 def base_type_of(node) -> str:
@@ -115,5 +120,5 @@ async def own_type(db, workspace_id, name: str, kind: str):
     return own
 
 
-__all__ = ["ASSET_TYPES", "PLATFORM_ORG", "TYPE_KEY", "TypeRegistry", "base_type_of", "effective",
+__all__ = ["ASSET_TYPES", "ASSET_TYPE_BY_KIND", "PLATFORM_ORG", "TYPE_KEY", "TypeRegistry", "base_type_of", "effective",
            "find_type", "is_asset_node", "own_type", "visible_to", "visible_types"]

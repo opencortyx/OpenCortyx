@@ -108,6 +108,8 @@ class Store:
                 {"node_id": cid, "type": known[cid].type, "properties": attrs,
                  "confidence": known[cid].confidence, "level": known[cid].level}
                 for cid, attrs in plan.extend.items() if cid in known], date_link=False)
+        if plan.same:
+            await self.share_evidence(workspace_id, plan.same)
         async with V2Session() as db:
             key_rows = [{"workspace_id": workspace_id, "node_type": node_type, "key_hash": k, "node_id": n} for k, n in plan.keys]
             for i in range(0, len(key_rows), _CHUNK):
@@ -116,6 +118,18 @@ class Store:
                 await db.execute(insert(ResolutionDecision).values(plan.decisions[i:i + _CHUNK])
                                  .on_conflict_do_nothing())
             await db.commit()
+
+    async def share_evidence(self, workspace_id, pairs) -> None:
+        """A node found to be the same as a canonical one gives the canonical its evidence too, so the
+        canonical cites every source that states it - both values, when they disagree - and which one
+        wins stays the decision ledger's call, not whichever wrote last."""
+        from opencortyx.core.dataplane import evidence
+        try:
+            found = await evidence.for_targets(workspace_id, [a for a, _ in pairs])
+            items = [(b, found.get(str(a)) or []) for a, b in pairs]
+            await evidence.record(workspace_id, [(t, ps) for t, ps in items if ps])
+        except Exception as e:                                # noqa: BLE001 - never fails a resolution
+            log.warning("resolution.evidence_share_failed", error=str(e)[:200])
 
     async def document(self, workspace_id, source_id):
         return await self.repo.get(workspace_id, source_id)

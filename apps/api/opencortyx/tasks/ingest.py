@@ -15,7 +15,7 @@ from opencortyx.ingest.sources import datalake
 from opencortyx.ingest.pipelines.defaults import resolve_pipeline
 from opencortyx.ingest.extraction.templates import run_relationship_templates_for_source
 from opencortyx.ingest.walkers import walker_for
-from opencortyx.tasks._shared import fail_or_wait, retry_policy, _anchor_opts, _apply_anchors, _apply_anchors_sql, _close_ingestion, _doc_plan_from_features, _merge_mapping_file_settings, _post_ingest, _reporter, _roll_up_anchors
+from opencortyx.tasks._shared import with_evidence, fail_or_wait, retry_policy, _anchor_opts, _apply_anchors, _apply_anchors_sql, _close_ingestion, _doc_plan_from_features, _merge_mapping_file_settings, _post_ingest, _reporter, _roll_up_anchors
 from opencortyx.tasks.graph import _queue_embed_pass
 from opencortyx.tasks.graph_tree import schedule_tree_index
 
@@ -80,7 +80,7 @@ def v2_ingest_document(self, workspace_id: str, content_b64: str, filename: str,
             raise
 
     try:
-        return async_to_sync(_run)()
+        return async_to_sync(with_evidence(workspace_id, _run))()
     except Exception as exc:
         _max, _delay = retry_policy(self, exc, 2)
         raise self.retry(exc=exc, countdown=_delay, max_retries=_max)
@@ -144,7 +144,7 @@ def v2_extract_document(self, workspace_id: str, source_id: str, features: str =
 
     from opencortyx.ingest.runs.progress import mark_deferred_extraction
     try:
-        return async_to_sync(_run)()
+        return async_to_sync(with_evidence(workspace_id, _run))()
     except Exception as exc:
         if self.request.retries >= 2:                  # out of retries: the run says so, not "pending"
             async_to_sync(mark_deferred_extraction)(run_id, "failed", error=f"{type(exc).__name__}: {exc}")
@@ -187,7 +187,7 @@ def v2_run_document_pipeline(self, workspace_id: str, source_id: str, stages_jso
 
     from opencortyx.ingest.runs.progress import mark_deferred_extraction
     try:
-        return async_to_sync(_run)()
+        return async_to_sync(with_evidence(workspace_id, _run))()
     except Exception as exc:
         if self.request.retries >= 2:
             async_to_sync(mark_deferred_extraction)(run_id, "failed", error=f"{type(exc).__name__}: {exc}",
@@ -270,7 +270,7 @@ def v2_ingest_json(self, workspace_id: str, content_b64: str, filename: str,
             raise
 
     try:
-        return async_to_sync(_run)()
+        return async_to_sync(with_evidence(workspace_id, _run))()
     except Exception as exc:
         _max, _delay = retry_policy(self, exc, 2)
         raise self.retry(exc=exc, countdown=_delay, max_retries=_max)
@@ -360,7 +360,7 @@ def v2_ingest_json_stream(self, workspace_id: str, host_path: str, opts_json: st
             raise
 
     try:
-        return async_to_sync(_run)()
+        return async_to_sync(with_evidence(workspace_id, _run))()
     except Exception as exc:
         _max, _delay = retry_policy(self, exc, 1)
         raise self.retry(exc=exc, countdown=_delay, max_retries=_max)
@@ -420,7 +420,7 @@ def v2_ingest_document_flow(self, workspace_id: str, content_b64: str, filename:
             raise
 
     try:
-        return async_to_sync(_run)()
+        return async_to_sync(with_evidence(workspace_id, _run))()
     except Exception as exc:
         _max, _delay = retry_policy(self, exc, 2)
         raise self.retry(exc=exc, countdown=_delay, max_retries=_max)
@@ -509,7 +509,7 @@ def v2_ingest_tabular(self, workspace_id: str, content_b64: str, filename: str,
             raise
 
     try:
-        return async_to_sync(_run)()
+        return async_to_sync(with_evidence(workspace_id, _run))()
     except Exception as exc:
         _max, _delay = retry_policy(self, exc, 2)
         raise self.retry(exc=exc, countdown=_delay, max_retries=_max)
@@ -629,7 +629,7 @@ def v2_ingest_connector_tabular(self, workspace_id: str, connector_id: str, path
         return done
 
     try:
-        return async_to_sync(_run)()
+        return async_to_sync(with_evidence(workspace_id, _run))()
     except Exception as exc:
         _max, _delay = retry_policy(self, exc, 2)
         raise self.retry(exc=exc, countdown=_delay, max_retries=_max)
@@ -655,6 +655,22 @@ def v2_ingest_sql(self, workspace_id: str, dsn: str = None, schema: str = None,
         from datetime import datetime, timezone
         _started = datetime.now(timezone.utc)         # this ingest's writes: what the checks look at
         nonlocal dsn, schema
+        if connector_id and not dsn:
+            # A table-format connector (Delta / Iceberg / Hudi) has tables in a lake, not a DSN.
+            async with V2Session() as _db:
+                _c = await _db.get(Connector, uuid.UUID(connector_id))
+            if _c and ((_c.config or {}).get("kind") or "").lower() in datalake.DATALAKE_FORMATS:
+                from opencortyx.ingest.structured.ingest import ingest_lake_source
+                rep = _reporter(run_id)
+                if rep:
+                    await rep.start(1)
+                res = await ingest_lake_source(oid, connector_id, uuid.UUID(collection_id) if collection_id else None)
+                _queue_embed_pass(workspace_id, res)
+                if rep:
+                    await rep.set_source(res.get("source_key"))
+                    await rep.finish("completed", result=res)
+                await _close_ingestion(ingestion_id, "completed", run_id)
+                return res
         if connector_id and not dsn:                      # resolve credentials in-worker
             from opencortyx.core.security.secrets import resolve_connector_dsn
             async with V2Session() as _db:
@@ -669,13 +685,15 @@ def v2_ingest_sql(self, workspace_id: str, dsn: str = None, schema: str = None,
         try:
             # DAG mode — the Structured Builder sends ordered stages with per-stage Input Source
             if pipeline:
-                res = await run_structured_dag(oid, dsn, schema, pipeline, coll, reporter=rep, prune=prune)
+                res = await run_structured_dag(oid, dsn, schema, pipeline, coll, reporter=rep, prune=prune,
+                                               connector_id=connector_id)
             else:
                 # no pipeline → default full ingest + enrich (raw API call)
                 if rep:
                     await rep.start(2)
                     await rep.step(1, "Introspect & ingest", "running")
-                res = await ingest_sql_source(oid, dsn, schema, coll, enrich=True, prune=prune)
+                res = await ingest_sql_source(oid, dsn, schema, coll, enrich=True, prune=prune,
+                                              connector_id=connector_id)
                 if rep:
                     await rep.set_source(res.get("source_key"))
                     await rep.step(1, "Introspect & ingest", "completed", res.get("tables"))
@@ -708,7 +726,7 @@ def v2_ingest_sql(self, workspace_id: str, dsn: str = None, schema: str = None,
             raise
 
     try:
-        return async_to_sync(_run)()
+        return async_to_sync(with_evidence(workspace_id, _run))()
     except Exception as exc:
         _max, _delay = retry_policy(self, exc, 2)
         raise self.retry(exc=exc, countdown=_delay, max_retries=_max)
@@ -802,7 +820,7 @@ def v2_ingest_lake_files(self, workspace_id: str, connector_id: str, collection_
         return done
 
     try:
-        return async_to_sync(_run)()
+        return async_to_sync(with_evidence(workspace_id, _run))()
     except Exception as exc:
         _max, _delay = retry_policy(self, exc, 1)
         raise self.retry(exc=exc, countdown=_delay, max_retries=_max)

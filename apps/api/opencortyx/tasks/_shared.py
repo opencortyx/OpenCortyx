@@ -11,6 +11,16 @@ from opencortyx.tasks.graph_tree import schedule_tree_index
 log = get_logger(__name__)
 
 
+def with_evidence(workspace_id, run):
+    """`run` (an ingest job's coroutine function) inside an evidence collector: what its extractors
+    write carries evidence, written to the ledger in batches (core/dataplane/evidence.py)."""
+    async def _wrapped():
+        from opencortyx.core.dataplane import evidence
+        async with evidence.collect(workspace_id):
+            return await run()
+    return _wrapped
+
+
 def _fail_run(run_id: str, reason: str) -> None:
     """A task the worker gave up on fails its run with the reason, instead of hanging at 'running'."""
     from opencortyx.ingest.runs.progress import ProgressReporter

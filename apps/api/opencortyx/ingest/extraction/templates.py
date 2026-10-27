@@ -984,7 +984,39 @@ def _apply_from_source(spec, props, ctx):
     return props
 
 
+def _evidence_unit(source_node, tmpl):
+    """The unit an extractor's output rests on, so everything `_apply_emit` writes carries evidence
+    (core/dataplane/evidence.py). An ingest that already declared its unit (the Delta path, which
+    reads chunks, rows and records from memory) keeps it; otherwise the input node is the unit: a
+    chunk, a row or a record node of the asset it came from."""
+    import contextlib
+
+    from opencortyx.core.dataplane import evidence
+    if evidence.current() is not None or source_node is None:
+        return contextlib.nullcontext()
+    props = source_node.properties or {}
+    asset = props.get("__asset_id") or source_node.source_ref or props.get("source_id")
+    if not asset or str(asset) == str(source_node.id):
+        return contextlib.nullcontext()
+    if props.get("__reading_unit") or props.get("text"):
+        kind = "chunk"
+    elif props.get("source_table") or props.get("__row_key"):
+        kind = "row"
+    else:
+        kind = "record"
+    quote = str(props.get("text") or source_node.label or "")[:300] or None
+    return evidence.unit(asset, kind, props.get("__unit_key") or source_node.id, quote=quote,
+                         extractor=getattr(tmpl, "name", None), version_ref=props.get("__version_ref"))
+
+
 async def _apply_emit(db, workspace_id, tmpl, *, source_node, parsed, ctx, collection_id, attrs=None) -> dict:
+    with _evidence_unit(source_node, tmpl):
+        return await _apply_emit_unit(db, workspace_id, tmpl, source_node=source_node, parsed=parsed,
+                                      ctx=ctx, collection_id=collection_id, attrs=attrs)
+
+
+async def _apply_emit_unit(db, workspace_id, tmpl, *, source_node, parsed, ctx, collection_id,
+                           attrs=None) -> dict:
     """`attrs` (optional set) — when provided, only these attribute keys are merged onto the node;
     lets a pipeline stage enable/disable individual attributes an extractor would otherwise emit."""
     counts = {"attributes": 0, "nodes": 0, "edges": 0, "node_types": {}, "edge_types": {}}

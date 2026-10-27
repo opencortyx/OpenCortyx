@@ -728,9 +728,10 @@ class _Walker:
         _has_content = bool(pairs) or bool(text) or (summary or label)[:4000].strip() != head.strip()
         if not _has_content:
             props["__structural"] = True          # why it has no vector, visible rather than implied
-        await _repo.upsert_node(node_id=nid, workspace_id=self.org, type=type,
-                                label=str(label)[:200], properties=props, source_ref=source_ref,
-                                collection_id=self.coll, confidence=0.9)
+        with self._evidence_unit(det_key, _summary, source_ref):
+            await _repo.upsert_node(node_id=nid, workspace_id=self.org, type=type,
+                                    label=str(label)[:200], properties=props, source_ref=source_ref,
+                                    collection_id=self.coll, confidence=0.9)
         self.counts["nodes"] += 1
         # First node of each type in this record — what a declared re-parent resolves against.
         self._record_nodes.setdefault(type, nid)
@@ -742,12 +743,28 @@ class _Walker:
                     self.typed_index.setdefault((type, k, str(v)), nid)
         return nid
 
+    def _evidence_unit(self, det_key, quote, asset=None):
+        """The record a node or edge comes from, as its evidence (core/dataplane/evidence.py). The
+        record's deterministic key is its id in the asset's Delta table too, so a pointer opens it."""
+        import contextlib
+
+        from opencortyx.core.dataplane import evidence
+        if det_key is not None:
+            self._last_unit = (asset, det_key, quote)
+        asset, key, quote = getattr(self, "_last_unit", None) or (None, None, None)
+        if evidence.current() is not None or not asset or key is None:
+            return contextlib.nullcontext()
+        return evidence.unit(asset, "record", key, quote=str(quote or "")[:300] or None,
+                             extractor="semistructured walker")
+
     async def _edge(self, src, dst, etype, props=None):
         if etype in self._suppressed:
             return
-        if src and dst and await _repo.add_edge(workspace_id=self.org, source_id=src,
-                                                target_id=dst, type=etype, properties=props or {},
-                                                dedupe=True):
+        with self._evidence_unit(None, None):
+            created = bool(src and dst and await _repo.add_edge(
+                workspace_id=self.org, source_id=src, target_id=dst, type=etype,
+                properties=props or {}, dedupe=True))
+        if created:
             self.counts["edges"] += 1
 
     async def walk_object(self, obj: dict, *, key, parent_id, edge_type, depth, det_prefix,

@@ -73,6 +73,15 @@ def append(path: str, data, *, partition_by: Optional[list] = None) -> int:
     return version(path) or 0
 
 
+def overwrite(path: str, data) -> int:
+    """Replace the table's rows (and schema) with `data` in one commit. Earlier versions stay
+    readable by time travel until vacuumed - evidence pinned to them still opens."""
+    dl = _dl()
+    os.makedirs(path, exist_ok=True)
+    _retry(lambda: dl.write_deltalake(path, data, mode="overwrite", schema_mode="overwrite"))
+    return version(path) or 0
+
+
 def merge(path: str, data: pa.Table, keys: list[str]) -> int:
     """Upsert by `keys`: matching rows are replaced, new ones inserted. A table that does not exist
     yet is created by the first call."""

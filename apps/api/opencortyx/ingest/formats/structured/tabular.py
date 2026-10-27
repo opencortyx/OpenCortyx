@@ -477,6 +477,19 @@ def iter_row_batches(path: str, filename: str, overrides: Optional[dict] = None,
         con.close()
 
 
+def iter_arrow_batches(path: str, filename: str, overrides: Optional[dict] = None,
+                       batch_size: int = 50_000) -> Iterator[Any]:
+    """The file's rows as Arrow record batches, every row, typed once - what the data store keeps
+    (ingest/structured/dataplane.py). Same relation as the preview and `iter_row_batches`."""
+    fmt = file_format(filename)
+    con = _con()
+    try:
+        relation, _eff = resolve_csv_settings(con, path, fmt, overrides)
+        yield from con.execute(f"SELECT * FROM {relation}").fetch_record_batch(batch_size)
+    finally:
+        con.close()
+
+
 def _jsonable(v: Any) -> Any:
     """Coerce DuckDB/Arrow scalars to JSON-friendly python (dates → iso strings, Decimal → float)."""
     import datetime

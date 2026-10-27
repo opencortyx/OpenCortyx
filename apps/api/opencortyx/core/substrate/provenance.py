@@ -24,6 +24,11 @@ sentence that says it is.
 A node with no asset is not left blank: `origin` says what it is instead (curation, template, memory,
 system). So the rule a caller can rely on is exact: every node has an `asset_id` or an `origin`.
 
+The evidence ledger (core/dataplane/evidence.py) is read FIRST: a node an extractor wrote inside an
+evidence scope has pointers to the exact chunk, row or record it rests on, with the quote, and those
+are its sources - ranked for the question by their quote. The graph walks above answer for nodes
+written before the ledger existed, or by writers that keep no evidence.
+
 Bounded for hub entities: a node mentioned in millions of chunks reads at most LINEAGE_CAP lineage
 edges here and says so (`source_count_capped`); `sources_page()` pages the full list on demand.
 """
@@ -76,6 +81,23 @@ def origin_of(node: Node) -> str:
     if node.type == "Date":
         return "system"
     return "unknown"
+
+
+def _ledger_entry(asset: Node, pointer: dict, score: float) -> dict[str, Any]:
+    return {"asset_id": str(asset.id), "label": asset.label or asset.type, "type": asset.type,
+            "via": pointer.get("unit_key"),
+            "snippet": " ".join(str(pointer.get("quote") or "").split())[:SNIPPET],
+            "score": round(score, 4),
+            "unit": {"kind": pointer.get("unit_kind"), "key": pointer.get("unit_key"),
+                     "version_ref": pointer.get("version_ref"), "property": pointer.get("property")}}
+
+
+async def _ledger(workspace_id, ids: list[str]) -> dict[str, list[dict]]:
+    try:
+        from opencortyx.core.dataplane import evidence
+        return await evidence.for_targets(workspace_id, ids)
+    except Exception:                                         # noqa: BLE001 - the graph walk still answers
+        return {}
 
 
 def _asset_entry(asset: Node, via: Optional[Node], score: float) -> dict[str, Any]:
@@ -222,6 +244,31 @@ async def provenance(workspace_id, node_ids: Sequence, *, query: str = "", store
         return {}
     walker = _Walker(store, workspace_id)
     await walker.load(ids)
+    q = _terms(query)
+    ledger = await _ledger(workspace_id, ids)
+    await walker.load([p["asset_id"] for ps in ledger.values() for p in ps])
+    out: dict[str, dict[str, Any]] = {}
+    for nid, pointers in ledger.items():
+        best_p: dict[str, tuple[float, dict]] = {}
+        for p in pointers:
+            if p["asset_id"] not in walker.nodes:
+                continue
+            words = _terms(str(p.get("quote") or ""))
+            score = (len(q & words) / len(q)) if q else 0.0
+            prev = best_p.get(p["asset_id"])
+            if prev is None or score > prev[0]:
+                best_p[p["asset_id"]] = (score, p)
+        if not best_p:
+            continue
+        ranked_p = sorted(best_p.items(), key=lambda kv: (-kv[1][0], walker.nodes[kv[0]].label or "", kv[0]))
+        sources = [_ledger_entry(walker.nodes[a], p, sc) for a, (sc, p) in ranked_p[:per_node]]
+        out[nid] = {"asset_id": sources[0]["asset_id"], "asset_label": sources[0]["label"],
+                    "asset_type": sources[0]["type"], "origin": "asset", "sources": sources,
+                    "source_count": len(best_p), "source_count_capped": False}
+    ids_left = [i for i in ids if i not in out]
+    if not ids_left:
+        return out
+    ids = ids_left
     lineage = await _lineages(store, workspace_id, ids, lineage_cap)
     lineages = [lineage[i] for i in ids]
 
@@ -233,9 +280,7 @@ async def provenance(workspace_id, node_ids: Sequence, *, query: str = "", store
                and not any(walker.asset_of.get(c) for c in lineage[i])
                and i in walker.nodes and origin_of(walker.nodes[i]) == "unknown"]
     climbed = await walker.climb(orphans) if orphans else {}
-    q = _terms(query)
 
-    out: dict[str, dict[str, Any]] = {}
     for nid in ids:
         node = walker.nodes.get(nid)
         # candidates: (asset id, the chunk that leads there — None when the node's own chain does)

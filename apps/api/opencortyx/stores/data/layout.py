@@ -10,6 +10,8 @@ thousands of tiny tables. Structured and semi-structured assets each bring their
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import uuid
@@ -73,3 +75,18 @@ def view_name(name: str, taken: set[str]) -> str:
         out, n = f"{base}_{n}", n + 1
     taken.add(out)
     return out
+
+
+def row_key(row: dict, key_columns=(), occurrences: dict | None = None) -> str:
+    """A row's `_row_key`: its declared or detected key, else a hash of its content plus how many
+    identical rows came before it - never the row number alone, which changes when a row is
+    inserted above. `occurrences` (one dict per table read) counts the duplicates."""
+    keys = [c for c in (key_columns or ()) if row.get(c) not in (None, "")]
+    if keys:
+        return "|".join(str(row[c]) for c in keys)
+    digest = hashlib.sha1(json.dumps(row, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:20]
+    if occurrences is None:
+        return digest
+    n = occurrences.get(digest, 0)
+    occurrences[digest] = n + 1
+    return f"{digest}:{n}"

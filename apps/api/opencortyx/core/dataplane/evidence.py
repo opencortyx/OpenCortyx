@@ -11,10 +11,12 @@ and the ledger still says where the other came from. A citation reads the ledger
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import uuid
-from dataclasses import asdict, dataclass, field
+from contextvars import ContextVar
+from dataclasses import asdict, dataclass, field, replace as _replace
 from datetime import datetime
 from typing import Iterable, Optional
 
@@ -159,3 +161,110 @@ async def without_evidence(workspace_id, target_ids: Iterable) -> list[str]:
 async def assets_of(workspace_id, target_ids: Iterable) -> dict[str, set[str]]:
     """{target_id: {asset_id, ...}} - which assets support each node (FROM_ASSET)."""
     return {t: {p["asset_id"] for p in ps} for t, ps in (await for_targets(workspace_id, target_ids)).items()}
+
+
+# ── the evidence scope: which unit the code that is writing is reading ──────────────────────────
+#
+#     async with evidence.collect(workspace_id):          # one per ingest job: batches the ledger
+#         for chunk in chunks:
+#             with evidence.unit(asset_id, "chunk", chunk_id, quote=..., extractor=...):
+#                 ...extract and write nodes and edges as before...
+#
+# Every NodeRepo write inside `unit` records a pointer to that unit, so extractors that write through
+# NodeRepo carry evidence without passing it around. Outside any `unit` nothing is recorded.
+
+_unit: ContextVar[Optional[Pointer]] = ContextVar("evidence_unit", default=None)
+_collector: ContextVar[Optional["Collector"]] = ContextVar("evidence_collector", default=None)
+
+#: Written knowledge that is not world knowledge, so carries no evidence: the calendar.
+_NOT_WORLD = {"Date"}
+#: Pointers buffered before a collector writes them out.
+_FLUSH_AT = 2000
+
+
+def edge_id(source_id, edge_type: str, target_id) -> uuid.UUID:
+    """The ledger's id for an edge: edges are keyed by their ends and type, not by an id of their own."""
+    return uuid.uuid5(uuid.NAMESPACE_URL, f"edge:{source_id}:{edge_type}:{target_id}")
+
+
+def current() -> Optional[Pointer]:
+    return _unit.get()
+
+
+@contextlib.contextmanager
+def unit(asset_id, unit_kind: str, unit_key, **fields):
+    """The chunk, row or record the code inside is reading."""
+    token = _unit.set(Pointer(asset_id=str(asset_id), unit_kind=unit_kind, unit_key=str(unit_key), **fields))
+    try:
+        yield _unit.get()
+    finally:
+        _unit.reset(token)
+
+
+class Collector:
+    def __init__(self, workspace_id, from_asset: bool):
+        self.workspace_id = workspace_id
+        self.from_asset = from_asset
+        self.nodes: list[tuple] = []
+        self.edges: list[tuple] = []
+        self.written = 0
+
+    async def flush(self) -> None:
+        nodes, edges, self.nodes, self.edges = self.nodes, self.edges, [], []
+        token = _unit.set(None)                       # what the flush writes is not extraction
+        try:
+            self.written += await record(self.workspace_id, nodes, "node")
+            self.written += await record(self.workspace_id, edges, "edge")
+            if self.from_asset and nodes:
+                # One FROM_ASSET edge per supporting asset - the graph's own view of provenance, so a
+                # fact reaches its document without a chunk node in between.
+                pairs = {(str(t), ps[0].asset_id) for t, ps in nodes if ps and str(t) != ps[0].asset_id}
+                if pairs:
+                    from opencortyx.core.substrate import NodeRepo
+                    await NodeRepo().add_edges(workspace_id=self.workspace_id, edges=[
+                        {"source_id": t, "target_id": a, "type": "FROM_ASSET"} for t, a in sorted(pairs)])
+        finally:
+            _unit.reset(token)
+
+
+@contextlib.asynccontextmanager
+async def collect(workspace_id, *, from_asset: Optional[bool] = None):
+    """Batch the pointers of everything written inside into a few ledger writes. `from_asset`
+    (default: when the workspace's data lives in Delta) also links each node to its assets."""
+    if from_asset is None:
+        try:
+            from opencortyx.knowledge.workspace import data_store
+            from_asset = (await data_store(workspace_id)) == "delta"
+        except Exception:                                    # noqa: BLE001 - a lookup never fails an ingest
+            from_asset = False
+    c = Collector(workspace_id, bool(from_asset))
+    token = _collector.set(c)
+    try:
+        yield c
+    finally:
+        _collector.reset(token)
+        await c.flush()
+
+
+async def note(workspace_id, target_id, *, node_type: Optional[str] = None, target_kind: str = "node",
+               property: Optional[str] = None) -> None:
+    """Called by NodeRepo after a write: record the active unit as the write's evidence."""
+    p = _unit.get()
+    if p is None or not target_id:
+        return
+    if target_kind == "node" and node_type in _NOT_WORLD:
+        return
+    from opencortyx.domain.ontology import ASSET_TYPES
+    if target_kind == "node" and node_type in ASSET_TYPES:
+        return
+    ptr = _replace(p, property=property) if property is not None else p
+    c = _collector.get()
+    if c is not None and str(c.workspace_id) == str(workspace_id):
+        (c.nodes if target_kind == "node" else c.edges).append((target_id, [ptr]))
+        if len(c.nodes) + len(c.edges) >= _FLUSH_AT:
+            await c.flush()
+        return
+    try:
+        await record(workspace_id, [(target_id, [ptr])], target_kind)
+    except Exception:                                        # noqa: BLE001 - the ledger never fails a write
+        pass

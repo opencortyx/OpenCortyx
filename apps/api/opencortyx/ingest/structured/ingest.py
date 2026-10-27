@@ -8,6 +8,7 @@ Relocated + retargeted from v1 (`routers/sql_connector.py` introspection + `work
 enrichment). Node ids are deterministic (uuid5 of org+source+table[/column]) → idempotent re-ingest.
 After this, the structured catalogue no longer needs the v1 mirror.
 """
+import os
 import re
 import uuid
 from typing import Optional
@@ -25,6 +26,9 @@ from opencortyx.ingest.structured.catalog import _put, _uedge, _det_id, _parse_j
 from opencortyx.ingest.formats.structured.tabular import _jsonable
 from opencortyx.ingest.pipelines.mapping_migrate import with_editor
 from opencortyx.core.substrate import document as _node_document
+from opencortyx.core.dataplane import evidence as _evidence
+from opencortyx.ingest.structured import dataplane as _dataplane
+from opencortyx.stores.data.layout import row_key as _row_key
 from opencortyx.core.observability import get_logger
 from opencortyx.domain.control import SchemaMapping
 from opencortyx.ingest.extraction.templates import run_template_by_name
@@ -223,8 +227,12 @@ async def ingest_sql_source(workspace_id: uuid.UUID, dsn: str, schema: Optional[
                             collection_id=None, enrich: bool = True, only_tables=None,
                             prune: bool = True, reading_mode: str = "catalog",
                             row_node_type: str | None = None, row_cols: list | None = None,
-                            step1_cfg: dict | None = None) -> dict:
+                            step1_cfg: dict | None = None, connector_id=None) -> dict:
     """Introspect a SQL source and write its catalogue natively into v2. Idempotent.
+
+    With the workspace's data in Delta and a saved connector, each table is also REGISTERED as a
+    live external asset (ingest/structured/dataplane.py): read in place through DuckDB, never copied,
+    and profiled there instead of keeping sample values in the graph.
 
     `enrich` gates the per-table LLM business-semantics step; `only_tables` (a set/list of table
     names) restricts ingestion to the tables the Structured Pipeline Builder selected. `prune=False`
@@ -265,10 +273,18 @@ async def ingest_sql_source(workspace_id: uuid.UUID, dsn: str, schema: Optional[
         return _det_id(workspace_id, "prop", f"{source_id_key}.{tschema.get(table, '')}.{table}.{col}")
 
     table_ids = {t["table"]: _mid(t["table"]) for t in tables}
+    from opencortyx.core.dataplane.connectors import kind_of as _dsn_kind
+    live_kind = _dsn_kind(dsn) if (connector_id and await _dataplane.uses_delta(workspace_id)) else None
 
     for tbl in tables:
         table_id = table_ids[tbl["table"]]
         meta, colmeta = {}, {}
+        live: dict = {}
+        if live_kind:
+            qualified = f"{tbl['schema']}.{tbl['table']}" if tbl.get("schema") else tbl["table"]
+            live = await _dataplane.register_live_table(
+                workspace_id, table_id, connector_id=connector_id, kind=live_kind, table=qualified,
+                name=tbl["table"], columns=tbl["columns"], source_key=source_id_key)
         pk_field = next((c["name"] for c in tbl["columns"] if c["primary_key"]), "")
         desc = meta.get("description", "")
         domain = meta.get("domain", "")
@@ -281,7 +297,9 @@ async def ingest_sql_source(workspace_id: uuid.UUID, dsn: str, schema: Optional[
                        "synonyms": meta.get("synonyms", []),
                        "sample_questions": meta.get("sample_questions", []),
                        "source_table": f"{tbl['schema'] or ''}.{tbl['table']}".strip("."),
-                       "source_system": "sql", "source_key": source_id_key, "native": True},
+                       "source_system": "sql", "source_key": source_id_key, "native": True,
+                       **({"storage": "external", "asset_kind": "structured", "live": True}
+                          if live_kind else {})},
                    source_ref=None, collection_id=collection_id)
         counts["tables"] += 1
 
@@ -300,7 +318,9 @@ async def ingest_sql_source(workspace_id: uuid.UUID, dsn: str, schema: Optional[
                     "references_table": c["references_table"],
                     "references_column": c["references_column"],
                     "is_pii": is_pii, "nullable": c["nullable"], "null_rate": c["null_rate"],
-                    "sample_values": c["sample_values"], "source_key": source_id_key, "native": True},
+                    "source_key": source_id_key, "native": True,
+                    **(_dataplane.attribute_profile_props((live.get("profile") or {}).get(c["name"]))
+                       if live_kind else {"sample_values": c["sample_values"]})},
                 source_ref=table_id, collection_id=collection_id)
             await _uedge(workspace_id=workspace_id, source_id=table_id, target_id=cid, type="HAS_ATTRIBUTE")
             counts["columns"] += 1
@@ -709,6 +729,20 @@ async def _ingest_one_table(workspace_id: uuid.UUID, path: str, filename: str, t
     node_type = _row_node_type(step1_cfg, tbl["table"])
     node_sem = _row_node_semantic(step1_cfg, tbl["table"])
 
+    # Data in Delta (workspace data_store = delta): EVERY row goes to the asset's Delta table, keyed
+    # the way row mode keys its evidence, whatever the mode - a catalog-only table is still fully
+    # answerable through SQL. The graph below is written exactly as before.
+    delta_mode = await _dataplane.uses_delta(workspace_id)
+    stored: dict = {}
+    if delta_mode:
+        _key = next((c["name"] for c in tbl["columns"]
+                     if roles.get(c["name"], {}).get("role") == "identity"), None)
+        stored = await _dataplane.store_file_table(
+            workspace_id, table_id, path=path, filename=filename, overrides=overrides,
+            name=tbl["table"], key_columns=[_key] if _key else [], columns=tbl["columns"],
+            source_key=source_key, collection_id=collection_id)
+        counts["rows_stored"] = stored.get("rows", 0)
+
     # 2) always write the file's catalog node (Table) + its columns (Attribute) — provenance + schema.
     await _put(node_id=table_id, workspace_id=workspace_id, type="Table", label=tbl["table"],
                # no `schema_name`: a file has no database schema, and an empty one reads as a field
@@ -716,21 +750,28 @@ async def _ingest_one_table(workspace_id: uuid.UUID, path: str, filename: str, t
                properties={"table_name": tbl["table"], "row_count": tbl["row_count"],
                            "column_count": len(tbl["columns"]), "source_system": "file",
                            "source_file": filename, "source_key": source_key,
-                           "reading_mode": mode, "native": True},
+                           "reading_mode": mode, "native": True,
+                           **({"storage": "managed", "asset_kind": "structured",
+                               "rows_stored": stored.get("rows", 0)} if delta_mode else {})},
                source_ref=None, collection_id=collection_id)
     counts["tables"] = 1
     for c in tbl["columns"]:
         r = roles.get(c["name"], {})
         cid = _det_id(workspace_id, "prop", f"{source_key}.{c['name']}")
+        aprops = {"physical_column": c["name"], "physical_table": tbl["table"],
+                  "data_type": c["type"], "raw_data_type": c.get("raw_type"),
+                  "parent_table_id": str(table_id),
+                  "graph_role": r.get("role"), "references_table": r.get("ref"),
+                  "is_primary_key": c["primary_key"], "is_foreign_key": c["foreign_key"],
+                  "null_rate": c["null_rate"], "sample_values": c["sample_values"],
+                  "source_key": source_key, "native": True}
+        if delta_mode:
+            # No sample values in the graph: the rows are in Delta. A category column keeps its
+            # values and counts (value_set), which the SQL planner needs to write a filter that matches.
+            aprops.pop("sample_values", None)
+            aprops.update(_dataplane.attribute_profile_props((stored.get("profile") or {}).get(c["name"])))
         await _put(node_id=cid, workspace_id=workspace_id, type="Attribute", label=c["name"],
-                   properties={"physical_column": c["name"], "physical_table": tbl["table"],
-                               "data_type": c["type"], "raw_data_type": c.get("raw_type"),
-                               "parent_table_id": str(table_id),
-                               "graph_role": r.get("role"), "references_table": r.get("ref"),
-                               "is_primary_key": c["primary_key"], "is_foreign_key": c["foreign_key"],
-                               "null_rate": c["null_rate"], "sample_values": c["sample_values"],
-                               "source_key": source_key, "native": True},
-                   source_ref=table_id, collection_id=collection_id)
+                   properties=aprops, source_ref=table_id, collection_id=collection_id)
         await _uedge(workspace_id=workspace_id, source_id=table_id, target_id=cid, type="HAS_ATTRIBUTE")
         counts["columns"] += 1
     if effective_mode != "row":                       # catalog mode → schema only, done
@@ -756,6 +797,7 @@ async def _ingest_one_table(workspace_id: uuid.UUID, path: str, filename: str, t
     step = 0
     truncated = False
     seen_rows: set = set()
+    _occ: dict = {}                                   # duplicate rows, for their _row_key
     while True:
         if max_rows and counts["rows"] >= max_rows:
             truncated = (tbl["row_count"] or 0) > counts["rows"]
@@ -788,27 +830,32 @@ async def _ingest_one_table(workspace_id: uuid.UUID, path: str, filename: str, t
             props[_node_document.STORED_KEY] = _node_document.document(props, label, node_sem)
             if rid in seen_rows:
                 _note_duplicate_identity(counts, label)
-            await _put(node_id=rid, workspace_id=workspace_id, type=node_type, label=label,
-                       properties=props, source_ref=table_id, collection_id=collection_id)
-            await _uedge(workspace_id=workspace_id, source_id=table_id, target_id=rid, type="CONTAINS")
-            seen_rows.add(rid)
-            counts["rows"] += 1
-            # FK columns → edge to the referenced entity (created/deduped by value), honouring
-            # the card's target type / edge type / direction overrides (incl. per-ROW polymorphic)
-            _poly_rules = (_table_card(step1_cfg or {}, tbl["table"]) or {}).get("polymorphic") or []
-            # Every row-entity type this run declares, so an FK into one of them lands on the real
-            # row rather than on a value-keyed twin of it.
-            _row_types = {str(c.get("node_type") or "").strip()
-                          for c in ((step1_cfg or {}).get("tables") or [])
-                          if str(c.get("node_type") or "").strip()}
-            for c in fk_cols:
-                val = row.get(c)
-                if val in (None, ""):
-                    continue
-                if await _fk_edge(workspace_id, rid, val, c, roles.get(c, {}),
-                                  collection_id=collection_id, row=row, polymorphic=_poly_rules,
-                                  row_types=_row_types, source_key=source_key):
-                    counts["edges"] += 1
+            # The row this node and its FK edges rest on (core/dataplane/evidence.py); the same key
+            # the row has in the asset's Delta table, so the pointer opens it.
+            with _evidence.unit(table_id, "row", _row_key(row, [id_col] if id_col else (), _occ),
+                                quote=str(props[_node_document.STORED_KEY])[:300],
+                                extractor="row mode"):
+                await _put(node_id=rid, workspace_id=workspace_id, type=node_type, label=label,
+                           properties=props, source_ref=table_id, collection_id=collection_id)
+                await _uedge(workspace_id=workspace_id, source_id=table_id, target_id=rid, type="CONTAINS")
+                seen_rows.add(rid)
+                counts["rows"] += 1
+                # FK columns → edge to the referenced entity (created/deduped by value), honouring
+                # the card's target type / edge type / direction overrides (incl. per-ROW polymorphic)
+                _poly_rules = (_table_card(step1_cfg or {}, tbl["table"]) or {}).get("polymorphic") or []
+                # Every row-entity type this run declares, so an FK into one of them lands on the real
+                # row rather than on a value-keyed twin of it.
+                _row_types = {str(c.get("node_type") or "").strip()
+                              for c in ((step1_cfg or {}).get("tables") or [])
+                              if str(c.get("node_type") or "").strip()}
+                for c in fk_cols:
+                    val = row.get(c)
+                    if val in (None, ""):
+                        continue
+                    if await _fk_edge(workspace_id, rid, val, c, roles.get(c, {}),
+                                      collection_id=collection_id, row=row, polymorphic=_poly_rules,
+                                      row_types=_row_types, source_key=source_key):
+                        counts["edges"] += 1
             ordinal += 1
         step += 1
         if reporter:
@@ -1395,8 +1442,66 @@ def _node_pairs(nodes):
     return out
 
 
+async def ingest_lake_source(workspace_id: uuid.UUID, connector_id, collection_id=None,
+                             only_tables=None) -> dict:
+    """A Delta / Iceberg / Hudi connector's tables: catalogued like a database's (Table + Attribute
+    nodes, the same shape the SQL introspector gives), and - with the workspace's data in Delta -
+    registered as external assets read where they are (ingest/structured/dataplane.py)."""
+    from opencortyx.domain.control import Connector
+    from opencortyx.ingest.sources import datalake
+    async with V2Session() as db:
+        c = await db.get(Connector, uuid.UUID(str(connector_id)))
+        if not c or c.workspace_id != workspace_id:
+            raise RuntimeError("connector not found")
+        cfg = c.config or {}
+        fmt, directory = (cfg.get("kind") or "delta").lower(), cfg.get("directory") or ""
+        storage_cfg = {"kind": "local"}
+        if cfg.get("lake_connector_id"):
+            lc = await db.get(Connector, uuid.UUID(cfg["lake_connector_id"]))
+            if not lc or lc.workspace_id != workspace_id:
+                raise RuntimeError("referenced data-lake connector not found")
+            storage_cfg = lc.config or {}
+    directory = datalake.translate_local_path(directory) if storage_cfg.get("kind", "local") == "local" else directory
+    tables = await anyio.to_thread.run_sync(
+        lambda: datalake.introspect(storage_cfg, fmt, directory, only_tables=only_tables))
+    counts = {"tables": 0, "columns": 0}
+    source_key = f"lake:{fmt}:{directory}"
+    delta_mode = await _dataplane.uses_delta(workspace_id)
+    for tbl in tables:
+        if tbl.get("error"):
+            continue
+        table_id = _det_id(workspace_id, "mso", f"{source_key}.{tbl['table']}")
+        version = None
+        if delta_mode:
+            if fmt == "delta" and os.path.isdir(str(tbl.get("path") or "")):
+                from opencortyx.stores.data import delta as _delta
+                version = _delta.version(tbl["path"])
+            await _dataplane.register_lake_table(
+                workspace_id, table_id, connector_id=connector_id, fmt=fmt, location=tbl.get("path") or "",
+                name=tbl["table"], columns=tbl["columns"], source_key=source_key,
+                version_ref=None if version is None else str(version))
+        await _put(node_id=table_id, workspace_id=workspace_id, type="Table", label=tbl["table"],
+                   properties={"table_name": tbl["table"], "row_count": tbl.get("row_count"),
+                               "column_count": len(tbl["columns"]), "source_system": fmt,
+                               "source_key": source_key, "native": True,
+                               **({"storage": "external", "asset_kind": "structured",
+                                   "version_ref": version} if delta_mode else {})},
+                   source_ref=None, collection_id=collection_id)
+        counts["tables"] += 1
+        for col in tbl["columns"]:
+            cid = _det_id(workspace_id, "prop", f"{source_key}.{tbl['table']}.{col['name']}")
+            await _put(node_id=cid, workspace_id=workspace_id, type="Attribute", label=col["name"],
+                       properties={"physical_column": col["name"], "physical_table": tbl["table"],
+                                   "data_type": col["type"], "parent_table_id": str(table_id),
+                                   "source_key": source_key, "native": True},
+                       source_ref=table_id, collection_id=collection_id)
+            await _uedge(workspace_id=workspace_id, source_id=table_id, target_id=cid, type="HAS_ATTRIBUTE")
+            counts["columns"] += 1
+    return {"status": "ok", "source_key": source_key, "format": fmt, **counts}
+
+
 async def run_structured_dag(workspace_id, dsn, schema, stages, collection_id=None, reporter=None,
-                             prune: bool = True) -> dict:
+                             prune: bool = True, connector_id=None) -> dict:
     """Execute the structured pipeline as an ordered DAG of TASKS. `introspect` (base_schema) makes
     the Table/Attribute base; each later task runs over its Input Source — a prior step's output nodes
     or the base tables. Structured generators (segments/computations/semantics/business_rules) and
@@ -1438,7 +1543,8 @@ async def run_structured_dag(workspace_id, dsn, schema, stages, collection_id=No
     ing = await ingest_sql_source(workspace_id, dsn, schema, collection_id, enrich=(not has_sem_stage),
                                   only_tables=(base_tables or None), prune=prune,
                                   reading_mode=reading_mode, row_node_type=row_node_type, row_cols=row_cols,
-                                  step1_cfg=base_cfg)   # per-table cards + pattern rules + id patterns
+                                  step1_cfg=base_cfg,   # per-table cards + pattern rules + id patterns
+                                  connector_id=connector_id)
     src_key = ing.get("source_key")
     totals = {"introspect": ing}
 

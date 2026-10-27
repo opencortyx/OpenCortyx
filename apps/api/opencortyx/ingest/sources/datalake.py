@@ -386,7 +386,7 @@ def introspect(storage_cfg: dict, fmt: str, directory: str, only_tables=None, sa
                              "foreign_key": False, "nullable": True,
                              "references_table": None, "references_column": None})
             out.append({"table": name, "schema": fmt, "row_count": rc, "is_view": False,
-                        "columns": cols})
+                        "columns": cols, "path": path})
         return out
     finally:
         con.close()

@@ -17,6 +17,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional, Sequence
 
+from opencortyx.core.dataplane import evidence as _evidence
 from opencortyx.core.substrate import accounting as _acct
 from opencortyx.stores.graph import (
     Edge, EdgeQuery, EdgeWrite, Node, NodeQuery, get_graph_store,
@@ -335,6 +336,8 @@ class NodeRepo:
             raise
         finally:
             _acct.note(org, outcome or _acct.UNACCOUNTED)
+        if _evidence.current() is not None:
+            await _evidence.note(org, node.id, node_type=node.type)
         if date_link and type != "Date":
             await self.link_date(workspace_id=org, node_id=node.id, created=created)
         return node
@@ -408,6 +411,9 @@ class NodeRepo:
         await self.graph.upsert_nodes(nodes)
         _changed(org)
         await self._index([(stored.get(n.id), n) for n in nodes])
+        if _evidence.current() is not None:
+            for n in nodes:
+                await _evidence.note(org, n.id, node_type=n.type)
         if date_link:
             did = await self.ensure_date_node(workspace_id=org)
             await self.add_edges(workspace_id=org, edges=[
@@ -587,6 +593,11 @@ class NodeRepo:
         _acct.note(org, _acct.WRITTEN, len(written.created) + len(written.updated))
         _acct.note(org, _acct.CREATED, len(written.created))
         _acct.note(org, _acct.UPDATED, len(written.updated))
+        if _evidence.current() is not None:
+            for e in [*written.created, *written.updated]:
+                if e.type not in ("FROM_ASSET", "CREATED_ON", "MODIFIED_ON"):
+                    await _evidence.note(org, _evidence.edge_id(e.source_id, e.type, e.target_id),
+                                         target_kind="edge")
         return written
 
     async def delete_edges(self, workspace_id, edges: Sequence[Edge] | None = None, **filters) -> int:

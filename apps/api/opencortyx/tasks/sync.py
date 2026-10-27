@@ -254,7 +254,8 @@ def v2_sync_ingestion(self, workspace_id: str, ingestion_id: str, run_id: str = 
         return done
 
     try:
-        return async_to_sync(_run)()
+        from opencortyx.tasks._shared import with_evidence
+        return async_to_sync(with_evidence(workspace_id, _run))()
     except Exception as exc:
         _hibernate_ingestion(workspace_id, ingestion_id, exc, run_id)
         raise self.retry(exc=exc, countdown=30, max_retries=1)
