@@ -383,6 +383,10 @@ class RetrievalResult:
     abstained: bool = False
     paths: list = field(default_factory=list)
     aggregation: Optional[Any] = None
+    #: The sub-questions a decomposed question was searched as (retrieval/decomposition), in order:
+    #: index, question, asked (with earlier answers written in), answer, blocks, ran. Empty when the
+    #: question was searched as it is.
+    steps: list = field(default_factory=list)
 
     def block_ids(self) -> list[str]:
         return [str(b.node_id) for b in self.blocks]

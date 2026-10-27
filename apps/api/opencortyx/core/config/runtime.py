@@ -59,6 +59,7 @@ _DEFAULTS = {
     "simhash_max_distance": 5,         # max Hamming distance (of 64 bits) to treat docs as versions
     "simhash_version_review": True,    # a version match is PROPOSED for approval, not auto-applied
     "temporal_routing": True,          # retrieval: detect time-intent questions → order by date
+    "query_decomposition": "comparisons",  # retrieval: off | comparisons | full (chains need a strong model)
     "llm_concurrency": 16,             # ingest: how many extraction LLM calls run in parallel per document
     "extraction_call_groups": [],      # ingest: ordered call groups — [{"name": str, "extractors": [template names]}]
     "extraction_full_coverage": False,
@@ -148,6 +149,14 @@ SCHEMA: list[dict[str, Any]] = [
     {"key": "business_context_framing", "label": "Business-context framing", "kind": "bool",
      "group": "Retrieval", "help": "Prepend always-on org/business context (mission, domain, standing "
      "assumptions, authored in Manual Curation) to the assembled context as a frame for every answer."},
+    {"key": "query_decomposition", "label": "Query decomposition", "kind": "select",
+     "options": ["off", "comparisons", "full"], "group": "Retrieval",
+     "help": "Search a question one search cannot answer as several. 'comparisons': a comparison of "
+     "named things (\"which came first, A or B?\") is searched once per thing - no model needed. "
+     "'full': chained questions (\"who wrote the report that replaced R-12?\") are also split and "
+     "answered step by step by the generation model, which needs a capable model (the built-in "
+     "Qwen3-0.6B is not). The question as asked is always searched too. A request's own "
+     "`decompose` overrides it."},
     {"key": "retrieve_pool_k", "label": "Recall pool size", "kind": "int", "min": 10, "max": 500,
      "group": "Retrieval", "help": "Per-retriever fan-out — the WIDE recall net. Higher = better recall "
      "(a weak embedder is compensated by a bigger net), more to rerank. The final top-k is cut after "
@@ -426,6 +435,11 @@ def simhash_versioning() -> bool: return bool(get("simhash_versioning"))
 def simhash_max_distance() -> int: return max(0, int(get("simhash_max_distance")))
 def simhash_version_review() -> bool: return bool(get("simhash_version_review"))
 def temporal_routing() -> bool: return bool(get("temporal_routing"))
+def query_decomposition() -> str:
+    v = get("query_decomposition")
+    if isinstance(v, bool):                      # saved before it became a select
+        return "full" if v else "off"
+    return str(v) if v in ("off", "comparisons", "full") else "comparisons"
 def extraction_full_coverage() -> bool: return bool(get("extraction_full_coverage"))
 
 

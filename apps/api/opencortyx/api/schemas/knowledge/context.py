@@ -18,7 +18,7 @@ class ContextQuery(BaseModel):
     as_of: Optional[str] = None                  # valid-time: facts true as of this ISO date
     as_of_ingest: Optional[str] = None           # transaction-time: what we knew by this ISO date
     fast: Optional[bool] = None                  # low-latency mode: skip rerank + CRAG eval
-    decompose: Optional[bool] = False            # break complex questions into multi-query sub-searches
+    decompose: Optional[bool] = None             # search chains/comparisons step by step; None = the setting
     # WHAT to search — "knowledge" (your ingested data, the default), "conversations" (this app's own
     # Sessions/Turns/Decisions/Facts), or "all". See RetrieveContext.scope.
     scope: Optional[str] = None

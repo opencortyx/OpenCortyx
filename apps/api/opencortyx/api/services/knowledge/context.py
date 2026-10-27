@@ -39,7 +39,7 @@ async def scoped_ctx(user, payload):
         k=payload.k, abstain_threshold=payload.abstain_threshold,
         as_of=getattr(payload, "as_of", None), as_of_ingest=getattr(payload, "as_of_ingest", None),
         fast=getattr(payload, "fast", None),
-        decompose=getattr(payload, "decompose", False),
+        decompose=getattr(payload, "decompose", None),
         # Default "knowledge": the assistant answers from INGESTED data unless asked otherwise, so a
         # workspace's own chat history can never become the evidence for a question about its data.
         scope=(getattr(payload, "scope", None) or "knowledge"))

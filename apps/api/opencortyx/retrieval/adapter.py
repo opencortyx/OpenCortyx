@@ -46,7 +46,6 @@ _UNSUPPORTED = {
     "as_of": "bitemporal valid-time filtering is not implemented in the v2 engine",
     "as_of_ingest": "bitemporal transaction-time filtering is not implemented in the v2 engine",
     "rrf_k": "v2 fusion uses its own RRF constant; per-query override not plumbed",
-    "decompose": "v2 decomposes internally from the plan; the flag is not honoured",
     "retrievers": "v2 selects surfaces per question via its policy; explicit lists are not honoured",
     "rerank": "v2 ranks with one weighted feature model; per-query rerank stages are not honoured",
     "abstain_threshold": "v2 abstains on its own feature-based gate; the threshold is not plumbed",
@@ -224,8 +223,11 @@ async def build_context_v2(query: str, ctx: RetrieveContext, k: int = 0) -> dict
         cfg.context_blocks = want_k
     wf = _workflow(cfg)
 
+    decompose = getattr(ctx, "decompose", None)
     res = await wf.run(ctx.workspace_id, query,
-                       collection_ids=list(ctx.collection_ids) if ctx.collection_ids else None)
+                       collection_ids=list(ctx.collection_ids) if ctx.collection_ids else None,
+                       decompose=rc.query_decomposition() if decompose is None
+                       else ("full" if decompose else "off"))
 
     prov = await _provenance(ctx.workspace_id, res.blocks, query) if res.blocks else {}
     context_str, used = _serialise(res.blocks, prov)
@@ -262,6 +264,7 @@ async def build_context_v2(query: str, ctx: RetrieveContext, k: int = 0) -> dict
             "unsupported": unsupported or None,
             "paths": [{"steps": [s.edge_type for s in p.steps], "score": round(float(sc), 4)}
                       for sc, p, _ in (res.paths or [])[:5]],
+            **({"decomposition": res.steps} if getattr(res, "steps", None) else {}),
             **({"candidate_node_ids": [str(b.node_id) for b in res.blocks]}
                if getattr(ctx, "explain_retriever", False) else {})}
 

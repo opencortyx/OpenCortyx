@@ -805,8 +805,29 @@ class RetrievalWorkflow:
 
     async def run(self, workspace_id: uuid.UUID, query: str,
                   scope_dialogues: Optional[list] = None,
-                  collection_ids: Optional[list] = None) -> RetrievalResult:
-        """`scope_dialogues` is ROUTING metadata, not an answer hint: which memory to search.
+                  collection_ids: Optional[list] = None,
+                  decompose: str = "off") -> RetrievalResult:
+        """The workflow for `query`. With `decompose` ("comparisons" or "full"), a question one search
+        cannot answer (a comparison, a chain) is searched as its sub-questions and the question
+        itself, and the results are merged - see retrieval/decomposition."""
+        if decompose in ("off", "", None, False):
+            return await self.run_single(workspace_id, query, scope_dialogues, collection_ids)
+        from opencortyx.retrieval import decomposition
+
+        async def retrieve(q: str) -> RetrievalResult:
+            return await self.run_single(workspace_id, q, scope_dialogues, collection_ids)
+
+        return await decomposition.run(query, retrieve, self._bound_complete(workspace_id),
+                                       budget_tokens=self.cfg.budget_tokens,
+                                       max_blocks=self.cfg.context_blocks,
+                                       mode="full" if decompose is True else str(decompose))
+
+    async def run_single(self, workspace_id: uuid.UUID, query: str,
+                         scope_dialogues: Optional[list] = None,
+                         collection_ids: Optional[list] = None) -> RetrievalResult:
+        """One search, L0 to L4.
+
+        `scope_dialogues` is ROUTING metadata, not an answer hint: which memory to search.
 
         Every published LoCoMo number is produced per-conversation - systems ingest one
         conversation as one user's memory and query that memory ("top-20 relevant memories

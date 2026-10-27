@@ -41,7 +41,7 @@ class RetrieveContext:
     # ── low-latency mode: skip rerank + CRAG eval for ms-class retrieval ──
     fast: Optional[bool] = None
     # ── advanced retrieval strategies ──
-    decompose: Optional[bool] = False         # true → break complex questions into multi-query sub-searches
+    decompose: Optional[bool] = None          # search chains/comparisons step by step; None = the setting
     scope: str = "knowledge"
     explain_retriever: bool = False
 

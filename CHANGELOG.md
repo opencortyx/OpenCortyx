@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Query decomposition** (`retrieval/decomposition/`), a module above the L0-L4 layers: a question
+  one search cannot answer is searched as several, and the results are merged. A comparison of named
+  things ("which was published first, RFC 9155 or RFC 9410?") is searched once per thing, so both
+  land in the context; the question as asked is always searched too. Setting: Retrieval > Query
+  decomposition, `off` / `comparisons` (default, no model needed) / `full` (chained questions are
+  also split and bridged by the generation model, which needs a stronger model than the built-in
+  Qwen3-0.6B). The `decompose` request flag, accepted and ignored until now, overrides it, and the
+  response lists the sub-questions under `decomposition`.
+
 ## 0.1.0-beta.7 - 2026-10-23
 
 A new installation handles a large first upload: a thousand files dropped on Add data at once are
