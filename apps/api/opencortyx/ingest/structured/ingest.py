@@ -798,6 +798,7 @@ async def _ingest_one_table(workspace_id: uuid.UUID, path: str, filename: str, t
     truncated = False
     seen_rows: set = set()
     _occ: dict = {}                                   # duplicate rows, for their _row_key
+    _keys: list = []                                  # (source id, entity type, node) per batch
     while True:
         if max_rows and counts["rows"] >= max_rows:
             truncated = (tbl["row_count"] or 0) > counts["rows"]
@@ -838,6 +839,8 @@ async def _ingest_one_table(workspace_id: uuid.UUID, path: str, filename: str, t
                 await _put(node_id=rid, workspace_id=workspace_id, type=node_type, label=label,
                            properties=props, source_ref=table_id, collection_id=collection_id)
                 await _uedge(workspace_id=workspace_id, source_id=table_id, target_id=rid, type="CONTAINS")
+                if delta_mode and id_col and row.get(id_col) not in (None, ""):
+                    _keys.append((row[id_col], node_sem or node_type, rid))
                 seen_rows.add(rid)
                 counts["rows"] += 1
                 # FK columns → edge to the referenced entity (created/deduped by value), honouring
@@ -857,6 +860,12 @@ async def _ingest_one_table(workspace_id: uuid.UUID, path: str, filename: str, t
                                       row_types=_row_types, source_key=source_key):
                         counts["edges"] += 1
             ordinal += 1
+        if _keys:
+            # The source's own id for each row -> its node: how "customer 101" binds to the node,
+            # and how the SQL planner turns a node back into the key it filters the source on.
+            from opencortyx.core.dataplane import source_keys as _source_keys
+            await _source_keys.record(workspace_id, table_id, _keys)
+            _keys = []
         step += 1
         if reporter:
             await reporter.step(step, f"Rows {counts['rows']}", "completed", counts["rows"])

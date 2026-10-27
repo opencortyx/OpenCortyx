@@ -217,6 +217,8 @@ celery_app.conf.update(
         ("upload-sweep-tick", "opencortyx.sweep_uploads", 3600.0),
         # Compacts and vacuums the managed Delta tables (stores/data).
         ("data-compact-tick", "opencortyx.compact_data", 6 * 3600.0),
+        # Re-reads external assets whose data changed (a new Delta version, a moved watermark).
+        ("external-check-tick", "opencortyx.check_external_sources", 900.0),
     )},
     task_soft_time_limit=settings.TASK_SOFT_TIME_LIMIT,
     task_time_limit=settings.TASK_TIME_LIMIT,

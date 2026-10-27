@@ -1,4 +1,5 @@
 """Maintenance tasks: integrity audit, reaping stale runs, replaying quarantined edges."""
+import os
 import uuid
 from opencortyx.core.worker.celery_app import celery_app
 from opencortyx.core.config import V2_SCHEMA, settings
@@ -93,6 +94,67 @@ def v2_compact_data(self):
     if out["tables"] or out["failed"]:
         log.info("data.compacted", **out)
     return out
+
+
+@celery_app.task(bind=True, queue="maintenance", name="opencortyx.check_external_sources")
+def v2_check_external_sources(self):
+    """Re-read an external asset whose data changed: a customer's Delta table at a new version, or a
+    live table whose declared watermark column (`metadata.watermark_column`) moved. The data is
+    never copied, so this is what keeps the graph's knowledge of it current. One re-ingest per
+    connector, however many of its tables changed."""
+    async def _run():
+        import anyio
+        from sqlalchemy import select
+
+        from opencortyx.core.dataplane.connectors import attach_dsn
+        from opencortyx.domain.data import DataAsset
+        from opencortyx.stores.data import AssetRef, Views, delta
+        async with V2Session() as db:
+            rows = (await db.execute(select(DataAsset).where(
+                DataAsset.storage == "external", DataAsset.status == "active"))).scalars().all()
+        due: dict = {}
+        for a in rows:
+            meta = dict(a.metadata_ or {})
+            changed, new_ref = False, a.version_ref
+            try:
+                if a.format == "delta" and os.path.isdir(a.location or ""):
+                    v = delta.version(a.location)
+                    new_ref = None if v is None else str(v)
+                    changed = new_ref != a.version_ref
+                elif meta.get("watermark_column") and a.connector_id and a.format in ("postgres", "mysql", "sqlite"):
+                    col = str(meta["watermark_column"]).replace('"', '""')
+                    ref = AssetRef.from_row(a)
+                    ref.dsn = await attach_dsn(a.workspace_id, a.connector_id, a.format)
+                    ref.options = {**ref.options, "table": a.location}
+
+                    def _max():
+                        with Views(a.workspace_id, [ref]) as v:
+                            view = next(iter(v.names))
+                            return v.query(f'SELECT CAST(max("{col}") AS VARCHAR) AS m FROM "{view}"').column("m")[0].as_py()
+                    mark = await anyio.to_thread.run_sync(_max)
+                    changed = bool(mark) and mark != meta.get("watermark")
+                    meta["watermark"] = mark
+            except Exception as e:                            # noqa: BLE001 - unreachable: next tick
+                log.info("external.check_skipped", asset_id=str(a.id), error=str(e)[:200])
+                continue
+            if changed and a.connector_id:
+                due.setdefault((str(a.workspace_id), str(a.connector_id)), []).append((a.id, new_ref, meta))
+        if not due:
+            return {"changed": 0}
+        from opencortyx.tasks.ingest import v2_ingest_sql
+        async with V2Session() as db:
+            for items in due.values():
+                for aid, new_ref, meta in items:
+                    row = await db.get(DataAsset, aid)
+                    if row is not None:
+                        row.version_ref, row.metadata_ = new_ref, meta
+            await db.commit()
+        for (ws, conn), items in due.items():
+            v2_ingest_sql.delay(ws, None, None, None, False, None, None, conn, False)
+            log.info("external.changed", workspace_id=ws, connector_id=conn, tables=len(items))
+        return {"changed": sum(len(v) for v in due.values()), "connectors": len(due)}
+
+    return async_to_sync(_run)()
 
 
 @celery_app.task(bind=True, queue="maintenance", name="opencortyx.reap_stale_runs")

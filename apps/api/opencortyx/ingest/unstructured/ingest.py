@@ -20,6 +20,7 @@ from opencortyx.core.db import V2Session
 from opencortyx.core.substrate import NodeRepo
 from opencortyx.core.inference.llm import complete
 from opencortyx.ingest.formats.unstructured.documents import parse_content, extract_title
+from opencortyx.ingest.unstructured import dataplane as _udata
 from opencortyx.ingest.unstructured.chunking import chunk_document
 from opencortyx.ingest.semistructured.ingest import evaluate_key_filters
 from opencortyx.core.observability import get_logger
@@ -171,7 +172,7 @@ async def _apply_stage_filters(workspace_id, pairs, cfg: dict):
 
 
 async def _run_dag(workspace_id, source_id, chunk_pairs, stages, collection_id,
-                   reporter=None, base_index=0) -> dict:
+                   reporter=None, base_index=0, records: dict | None = None) -> dict:
     """Execute the pipeline as an ordered DAG. Each stage runs over its declared Input Source —
     a previous stage's OUTPUT or the chunks — so extractors can be chained on top of any step.
 
@@ -225,7 +226,7 @@ async def _run_dag(workspace_id, source_id, chunk_pairs, stages, collection_id,
         sid = s.get("id")
         try:
             cnt = await run_named_templates_on_chunks(
-                workspace_id, [s.get("type")], in_pairs, collection_id)
+                workspace_id, [s.get("type")], in_pairs, collection_id, records=records)
             totals["custom"] += cnt
             # publish THIS extractor's emitted nodes (via its declared emit edge) so a downstream
             # stage can chain over them — e.g. a temporal detector feeding the date normalizer.
@@ -343,6 +344,21 @@ async def _drop_chunk_nodes(workspace_id: uuid.UUID, source_id: uuid.UUID, node_
         await _repo.save(node)
     await _repo.delete_nodes(workspace_id, chunk_ids)
     return len(chunk_ids)
+
+
+async def _uses_delta(workspace_id) -> bool:
+    from opencortyx.ingest.structured.dataplane import uses_delta
+    return await uses_delta(workspace_id)
+
+
+async def _drop_chunks(workspace_id, source_id, node_type: str, delta_mode: bool) -> int:
+    """'Extract only': the chunks fed extraction and are not kept - graph nodes, or Delta rows and
+    their search points."""
+    if not delta_mode:
+        return await _drop_chunk_nodes(workspace_id, source_id, node_type)
+    await _udata.store_chunks(workspace_id, source_id, [])
+    await _udata.drop_passages(workspace_id, source_id)
+    return 1
 
 
 async def _detect_doc_version(workspace_id: uuid.UUID, source_id: uuid.UUID, fingerprint: int):
@@ -606,6 +622,12 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
     fingerprint = simhash64(text)                  # 64-bit SimHash for near-duplicate version detection
 
     step1 = await resolve_step1_chunk_config(workspace_id, pipeline, filename)
+    # Where the chunks go: graph nodes (as always), or - the workspace's data in Delta - rows of the
+    # data store's `unstructured` table with only extracted knowledge in the graph (dataplane.py).
+    delta_mode = await _uses_delta(workspace_id)
+    chunk_rows: list = []
+    records: dict | None = None
+    data_version = None
     # Layout unless a mapping or the stage asks for windows: it is the reading that keeps
     # the document's own structure — titles, sections, tables, lists and figures as node types of
     # their own. Sliding windows cut text into equal pieces and keep none of it.
@@ -681,7 +703,8 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
         ex_props = existing.properties or {}
         if (not replace and ex_props.get("__checksum") == checksum
                 and ex_props.get("__plan_sig") == sig and ex_props.get("__ingested_ok")
-                and await _repo.find(workspace_id, source_refs=[source_id], limit=1)):
+                and (await _udata.has_chunks(workspace_id, source_id) if delta_mode
+                     else await _repo.find(workspace_id, source_refs=[source_id], limit=1))):
             # "Unchanged" also requires the content to still BE there: a document whose chunks
             # were removed kept its completion stamp and every re-upload was skipped, leaving an
             # asset with no knowledge and no way back. `replace` re-reads it on request.
@@ -690,6 +713,8 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
                     "chunks": 0, "rels": 0}
         version = int(ex_props.get("__version", 1)) + 1   # content or plan changed → rebuild
         await _purge_document(workspace_id, source_id)
+        if delta_mode:
+            await _udata.drop_passages(workspace_id, source_id)
 
     src_props = {"filename": filename, "mime": mime_type, "checksum": checksum,
                  "language": parsed["language"], "word_count": parsed["word_count"],
@@ -738,6 +763,7 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
         edge_specs_out: list = []
         from opencortyx.core.config import runtime as _rc
         unit_cap = _rc.reading_unit_max_chars()           # Settings > Chunking
+        heading_path: list = []                           # (level, heading) above the element
         for i, ast_node in enumerate(ast_nodes):
             nid = uuid.uuid5(source_id, ast_node.id)
             props = {
@@ -763,6 +789,24 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
             # and was listed among the workspace's assets.
             kind = _LAYOUT_ELEMENT_KINDS.get(ast_node.label)
             ntype = table_type if kind == "table" else image_type if kind == "image" else ast_node.type
+            if delta_mode:
+                if ast_node.level is not None and ast_node.text:
+                    heading_path = [h for h in heading_path if h[0] < ast_node.level]
+                    heading_path.append((ast_node.level, " ".join(ast_node.text.split())[:120]))
+                chunk_rows.append(_udata.chunk_row(
+                    source_id, version, nid, i, ntype, ast_node.text, level=ast_node.level,
+                    parent_chunk_id=created_nodes.get(ast_node.parent_id),
+                    section_path=" > ".join(h[1] for h in heading_path),
+                    page=ast_node.metadata.page_number,
+                    bbox=ast_node.metadata.bounding_box.model_dump(), grid=ast_node.grid))
+                created_nodes[ast_node.id] = nid
+                if ast_node.text:
+                    if ast_node.level is not None or not units \
+                            or sum(len(t) for t in units[-1][1]) >= unit_cap:
+                        units.append([nid, [ast_node.text]])
+                    else:
+                        units[-1][1].append(ast_node.text)
+                continue
             node_specs.append({"node_id": nid, "type": ntype,
                                "label": _element_label(ast_node.text) or f"{ntype} #{i}",
                                "properties": props, "source_ref": source_id,
@@ -790,11 +834,13 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
                 else:
                     units[-1][1].append(ast_node.text)
         # Nodes first, so every edge's endpoints exist when the edges are written.
-        await _repo.upsert_many(workspace_id, node_specs)
+        if node_specs:
+            await _repo.upsert_many(workspace_id, node_specs)
         # The elements are this upload's own: nothing else writes them while it runs, so their degrees
         # go in bulk. The Source is not in the list; other writers link to it.
-        await _repo.add_edges(workspace_id=workspace_id, edges=edge_specs_out,
-                              owned=[s["node_id"] for s in node_specs])
+        if edge_specs_out:
+            await _repo.add_edges(workspace_id=workspace_id, edges=edge_specs_out,
+                                  owned=[s["node_id"] for s in node_specs])
         pairs.extend((uid, "\n\n".join(texts)) for uid, texts in units)
     else:
         for i, rec in enumerate(chunk_recs):
@@ -803,6 +849,14 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
             props = await _chunk_props(workspace_id, {"text": ct, "ordinal": i}, attr_specs,
                                        discovered, ct, i, offset, c_size)
             props[READING_UNIT_KEY] = True
+            if delta_mode:
+                cid = _chunk_id(source_id, i)
+                chunk_rows.append(_udata.chunk_row(
+                    source_id, version, cid, i, node_type, ct,
+                    section_path=str(discovered.get("heading") or "").strip()))
+                pairs.append((cid, ct))
+                offset += len(ct)
+                continue
             # The SECTION this chunk belongs to — the heading the chunker reported for it. One node
             # per distinct heading, so an over-long section's several chunks share their section.
             parent_id = source_id
@@ -842,7 +896,8 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
             pairs.append((node.id, ct))
             offset += len(ct)
 
-    _els = document_elements(text) if elements_cfg else {"tables": [], "images": []}
+    _els = (document_elements(text) if elements_cfg and not delta_mode
+            else {"tables": [], "images": []})
     if (elements_cfg.get("tables") or {}).get("enabled"):
         for ti, tb in enumerate(_els["tables"]):
             tnode = await _repo.upsert_node(node_id=_det_element_id(source_id, "table", str(ti)), workspace_id=workspace_id,
@@ -863,6 +918,24 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
             await _repo.add_edge(workspace_id=workspace_id, source_id=source_id,
                                  target_id=inode.id, type=image_edge)
 
+    if delta_mode:
+        data_version = await _udata.store_chunks(workspace_id, source_id, chunk_rows)
+        records = {}
+        for r in chunk_rows:
+            n = _udata.record(workspace_id, r, collection_id=collection_id, version_ref=data_version)
+            records[n.id] = n
+        await _udata.index_passages(workspace_id, records.values())
+        from opencortyx.core.dataplane import assets as _assets
+        await _assets.register(workspace_id, source_id, kind="unstructured", name=title,
+                               format=(filename.rsplit(".", 1)[-1].lower() if "." in (filename or "") else "txt"),
+                               location="unstructured", version_ref=data_version,
+                               metadata={"filename": filename, "mime": mime_type, "checksum": checksum,
+                                         "chunks": len(chunk_rows), "title": title,
+                                         "collection_id": str(collection_id) if collection_id else None})
+        await _repo.patch_properties(workspace_id, [source_id], {
+            "asset_kind": "unstructured", "storage": "managed", "chunks": len(chunk_rows),
+            "data_version": data_version})
+
     if reporter is not None:
         await reporter.step(1, "Parse & chunk", "completed", len(pairs))
 
@@ -877,14 +950,16 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
                 "extraction": "deferred", "pending_chunks": len(pairs),
                 "mode": "dag" if pipeline else "flat",
                 # what the deferred pipeline run needs to finish the job exactly as inline would
-                "node_type": node_type, "save_chunks": save_chunks}
+                "node_type": node_type, "save_chunks": save_chunks, "data_store": "delta" if delta_mode else "graph"}
 
     # ── DAG mode: stages chain over each other's output (Modular Pipeline Builder) ──
     if pipeline:
         dag = await _run_dag(workspace_id, source_id, pairs, pipeline, collection_id,
-                             reporter=reporter, base_index=1)
+                             reporter=reporter, base_index=1, records=records)
         if not save_chunks:                        # 'extract only' → keep extracted nodes, drop chunks
-            dag["chunks_dropped"] = await _drop_chunk_nodes(workspace_id, source_id, node_type)
+            dag["chunks_dropped"] = await _drop_chunks(workspace_id, source_id, node_type, delta_mode)
+        if delta_mode:
+            dag["stale"] = await _udata.mark_stale(workspace_id, source_id, data_version)
         await _mark_ingested_ok(workspace_id, source_id)
         return {**_reader_fields(layout_reader), "status": "ok", "source_id": str(source_id), "title": title,
                 "version": version, "chunks": 0 if not save_chunks else len(pairs),
@@ -903,7 +978,7 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
             totals["graph"] = await run_named_templates_on_chunks(
                 workspace_id, names, pairs, collection_id,
                 extra_ctx=None,
-                breakdown=bd)
+                breakdown=bd, records=records)
         except Exception as e:
             log.warning("document.unified_extraction_failed", error=str(e))
         totals["rels"] = int(bd.get("edges") or 0)
@@ -925,8 +1000,10 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
         await reporter.step(2, "Extraction & enrichment", "completed", totals.get("graph"))
 
     if not save_chunks:                            # 'extract only' → keep extracted nodes, drop chunks
-        totals["chunks_dropped"] = await _drop_chunk_nodes(workspace_id, source_id, node_type)
+        totals["chunks_dropped"] = await _drop_chunks(workspace_id, source_id, node_type, delta_mode)
         totals["chunks"] = 0
+    if delta_mode:
+        totals["stale"] = await _udata.mark_stale(workspace_id, source_id, data_version)
     await _mark_ingested_ok(workspace_id, source_id)
     return {**_reader_fields(layout_reader), "status": "ok", "source_id": str(source_id), "title": title, "version": version,
             "doc_version": version_info, **totals}
@@ -940,14 +1017,19 @@ async def run_pipeline_over_source(workspace_id: uuid.UUID, source_id: uuid.UUID
     The chunks are addressed by their deterministic ids (`_chunk_id(source, i)`), in reading order,
     so the stages see exactly the pairs the inline run would have handed them — no re-parse, and no
     guessing which of a document's nodes were its reading units."""
-    ids = [_chunk_id(source_id, i) for i in range(int(chunks or 0))]
-    by_id = {n.id: n for n in await _repo.get_many(workspace_id, ids)}
-    pairs = [(cid, str((by_id[cid].properties or {}).get("text") or ""))
-             for cid in ids if cid in by_id]
+    records = None
+    if await _uses_delta(workspace_id):
+        records = await _udata.load_records(workspace_id, source_id, collection_id=collection_id)
+        pairs = [(cid, str((n.properties or {}).get("text") or "")) for cid, n in records.items()]
+    else:
+        ids = [_chunk_id(source_id, i) for i in range(int(chunks or 0))]
+        by_id = {n.id: n for n in await _repo.get_many(workspace_id, ids)}
+        pairs = [(cid, str((by_id[cid].properties or {}).get("text") or ""))
+                 for cid in ids if cid in by_id]
     dag = await _run_dag(workspace_id, source_id, pairs, stages, collection_id,
-                         reporter=reporter, base_index=1)
+                         reporter=reporter, base_index=1, records=records)
     if not save_chunks:                            # 'extract only' → keep extracted nodes, drop chunks
-        dag["chunks_dropped"] = await _drop_chunk_nodes(workspace_id, source_id, node_type)
+        dag["chunks_dropped"] = await _drop_chunks(workspace_id, source_id, node_type, records is not None)
     await _mark_ingested_ok(workspace_id, source_id)
     return dag
 
@@ -966,8 +1048,13 @@ async def extract_over_source(workspace_id: uuid.UUID, source_id: uuid.UUID, *,
     """
 
     plan = plan or {}
-    rows = [n for n in await _repo.find(workspace_id, source_refs=[source_id], order_by="created_at")
-            if n.id != source_id]
+    records = None
+    if await _uses_delta(workspace_id):
+        records = await _udata.load_records(workspace_id, source_id, collection_id=collection_id)
+        rows = list(records.values())
+    else:
+        rows = [n for n in await _repo.find(workspace_id, source_refs=[source_id], order_by="created_at")
+                if n.id != source_id]
     # Only real text chunks feed extraction; a document's derived profile nodes are not inputs.
     pairs = [(n.id, (n.properties or {}).get("text") or "")
              for n in rows if (n.properties or {}).get("text")]
@@ -983,7 +1070,7 @@ async def extract_over_source(workspace_id: uuid.UUID, source_id: uuid.UUID, *,
     try:
         totals["graph"] = await run_named_templates_on_chunks(
             workspace_id, names, pairs, collection_id,
-            extra_ctx=None, breakdown=bd)
+            extra_ctx=None, breakdown=bd, records=records)
     except Exception as e:                                # noqa: BLE001
         log.warning("document.deferred_extraction_failed", source_id=str(source_id), error=str(e))
         return {**totals, "status": "error", "error": str(e)[:300]}

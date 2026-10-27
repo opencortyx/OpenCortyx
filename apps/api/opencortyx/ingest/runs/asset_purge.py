@@ -158,6 +158,30 @@ async def purge_asset_full(workspace_id: uuid.UUID, asset_id: uuid.UUID) -> dict
     n_nodes = await repo.delete_nodes(workspace_id, list(closure))
     runs = await _purge_runs(workspace_id, asset_id, source_key)
     manifest = await _purge_manifest(workspace_id, asset_id)
+    data = await _purge_data(workspace_id, asset_id)
     return {"deleted": True, "id": str(asset_id), "label": asset.label, "type": asset.type,
             "nodes": n_nodes, "edges": n_edges, "runs": runs, "manifest_entries": manifest,
-            "by_type": _breakdown(closure.values())}
+            "data": data, "by_type": _breakdown(closure.values())}
+
+
+async def _purge_data(workspace_id, asset_id) -> dict:
+    """The asset on the data plane: its managed rows or chunks, its search passages, its evidence and
+    source keys, and its registry row. A customer's own external data is never touched. Entities
+    other assets still back keep their evidence; one left with none is marked stale, not deleted."""
+    from opencortyx.core.dataplane import assets, evidence
+    try:
+        row = await assets.get(workspace_id, asset_id)
+        if row is None:
+            return {}
+        lost = await evidence.drop_for_asset(workspace_id, asset_id)
+        if row.kind == "unstructured":
+            from opencortyx.ingest.unstructured import dataplane as _udata
+            await _udata.drop_passages(workspace_id, asset_id)
+        await assets.remove(workspace_id, asset_id)
+        stale = await evidence.without_evidence(workspace_id, lost)
+        if stale:
+            await NodeRepo().patch_properties(workspace_id, stale, {"__stale": True})
+        return {"kind": row.kind, "storage": row.storage, "stale": len(stale)}
+    except Exception as e:                                    # noqa: BLE001 - the graph delete stands
+        log.warning("asset_purge.data_failed", asset_id=str(asset_id), error=repr(e))
+        return {"error": str(e)[:200]}

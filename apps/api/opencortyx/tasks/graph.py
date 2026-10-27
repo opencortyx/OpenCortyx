@@ -77,6 +77,12 @@ def v2_embed_source(self, workspace_id: str, source_id: str):
         oid, sid = uuid.UUID(workspace_id), uuid.UUID(source_id)
         root = await repo.get(oid, sid)
         subtree = ([root] if root else []) + await repo.descendants(oid, [sid])
+        from opencortyx.ingest.structured.dataplane import uses_delta
+        if await uses_delta(oid):
+            # A document's chunks are in the data store, not the graph: their passages are embedded
+            # from there, as the chunk nodes' were.
+            from opencortyx.ingest.unstructured import dataplane as _udata
+            subtree += list((await _udata.load_records(oid, sid)).values())
         subtree = [n for n in subtree if str((n.properties or {}).get("__structural") or "") != "true"]
         pending = await repo.unembedded(oid, subtree)
         if pending:

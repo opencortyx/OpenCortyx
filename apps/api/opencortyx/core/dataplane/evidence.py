@@ -268,3 +268,10 @@ async def note(workspace_id, target_id, *, node_type: Optional[str] = None, targ
         await record(workspace_id, [(target_id, [ptr])], target_kind)
     except Exception:                                        # noqa: BLE001 - the ledger never fails a write
         pass
+
+
+async def flush() -> None:
+    """Write out what the active collector holds - before something reads the ledger mid-job."""
+    c = _collector.get()
+    if c is not None:
+        await c.flush()

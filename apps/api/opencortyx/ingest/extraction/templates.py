@@ -699,6 +699,10 @@ async def _resolve_endpoints(workspace_id, ep, rec, source_node, emitted_node, c
     A list is returned because wiring is one-to-many: a segment depends on several columns, a
     community contains several members. Callers draw one edge per resolved endpoint."""
     if ep in (None, "source"):
+        if source_node is not None and _is_virtual(source_node):
+            # A chunk read from the data store is not a node: what links to "the source" links to
+            # its document, and the evidence ledger keeps the exact chunk.
+            return [(source_node.source_ref, "Source")] if source_node.source_ref else []
         return [(source_node.id, _vtype(source_node))] if source_node else []
     if ep == "emitted":
         return [(emitted_node.id, _vtype(emitted_node))] if emitted_node else []
@@ -984,6 +988,19 @@ def _apply_from_source(spec, props, ctx):
     return props
 
 
+def _is_virtual(node) -> bool:
+    """A chunk record from the data store, shaped like a node for the extractors but not in the graph."""
+    return bool((getattr(node, "properties", None) or {}).get("__virtual"))
+
+
+def _parent_ref(source_node):
+    """What an emitted node points up to: its input node, or for a chunk that is not a graph node,
+    that chunk's document."""
+    if source_node is None:
+        return None
+    return source_node.source_ref if _is_virtual(source_node) else source_node.id
+
+
 def _evidence_unit(source_node, tmpl):
     """The unit an extractor's output rests on, so everything `_apply_emit` writes carries evidence
     (core/dataplane/evidence.py). An ingest that already declared its unit (the Delta path, which
@@ -1051,7 +1068,11 @@ async def _apply_emit_unit(db, workspace_id, tmpl, *, source_node, parsed, ctx, 
                     if v not in (None, "", [], {}) and not str(k).startswith("__")}
         if attrs is not None:                            # per-stage attribute enable/disable
             resolved = {k: v for k, v in resolved.items() if k in attrs}
-        if on == "source" and source_node is not None and resolved:
+        if on == "source" and source_node is not None and resolved and _is_virtual(source_node):
+            # Attributes of a chunk that lives in the data store, not the graph: nothing to write
+            # them onto. Counted, so a mapping that relies on them shows it.
+            counts["chunk_attributes_skipped"] = counts.get("chunk_attributes_skipped", 0) + len(resolved)
+        elif on == "source" and source_node is not None and resolved:
             props = dict(source_node.properties or {})
             props.update(resolved)
             by = list(props.get("__enriched_by") or [])
@@ -1147,7 +1168,7 @@ async def _apply_emit_unit(db, workspace_id, tmpl, *, source_node, parsed, ctx, 
                 props["__generated"] = inherited
             node = await _repo.upsert_node(node_id=nid, workspace_id=workspace_id, type=ntype, label=label, properties=props,
                 entity_type=(etype or None),
-                source_ref=None if (is_global or resolve) else (source_node.id if source_node else None),
+                source_ref=None if (is_global or resolve) else _parent_ref(source_node),
                 collection_id=collection_id, confidence=0.85)
             if node is not None:
                 emitted.append(node)
@@ -1690,7 +1711,8 @@ async def existing_template_names(workspace_id: uuid.UUID, names) -> dict:
 async def run_named_templates_on_chunks(workspace_id: uuid.UUID, names, pairs, collection_id=None,
                                         extra_ctx: dict | None = None,
                                         breakdown: dict | None = None,
-                                        mech_overrides: dict | None = None) -> int:
+                                        mech_overrides: dict | None = None,
+                                        records: dict | None = None) -> int:
     """Run named declarative templates over a SINGLE document's chunks. Scoped to `pairs` (this
     doc's chunks) so it doesn't touch other documents; reuses the same emit machinery as the
     generic engine. Two throughput levers (Settings → Extraction), neither of which changes WHAT
@@ -1704,6 +1726,9 @@ async def run_named_templates_on_chunks(workspace_id: uuid.UUID, names, pairs, c
       • PARALLELISM (`llm_concurrency`): within one unit (a group or a single extractor), the
         per-chunk LLM calls run concurrently under a semaphore. DB writes stay sequential — only
         the network-bound LLM production is parallel.
+
+    `records` ({chunk id: node-shaped record}) are the chunks when they are not graph nodes - a
+    workspace whose data is in Delta reads them from the data store (or from memory at ingest).
 
     Returns the scalar total (nodes + edges + attributes) that every caller already expects. Pass
     `breakdown` (a dict) to ALSO receive per-type attribution, filled in place:
@@ -1735,7 +1760,10 @@ async def run_named_templates_on_chunks(workspace_id: uuid.UUID, names, pairs, c
         if not tmpls:
             return 0
     chunk_ids = [cid for cid, _ in pairs]
-    nodes = {n.id: n for n in await _repo.get_many(workspace_id, chunk_ids)}
+    recs = records or {}
+    _graph_ids = [c for c in chunk_ids if c not in recs]
+    nodes = {**({n.id: n for n in await _repo.get_many(workspace_id, _graph_ids)} if _graph_ids else {}),
+             **recs}
     stage_ctx = {"words": "60-100", "per_node": 3, "top_n": 8, "label": "topic", **(extra_ctx or {})}
     ctxs = {}
     for cid, txt in pairs:
@@ -1860,7 +1888,8 @@ async def run_named_templates_on_chunks(workspace_id: uuid.UUID, names, pairs, c
             if breakdown is not None:
                 breakdown["duplicate_chunks_skipped"] = (
                     breakdown.get("duplicate_chunks_skipped", 0) + _saved)
-        nmap = {n.id: n for n in await _repo.get_many(workspace_id, chunk_ids)}
+        nmap = {**({n.id: n for n in await _repo.get_many(workspace_id, _graph_ids)} if _graph_ids else {}),
+                **recs}
         async with V2Session() as db:
             for (cid, _txt), sections in zip(valid_pairs, produced):
                 node = nmap.get(cid)
@@ -1938,8 +1967,27 @@ async def emitted_pairs_for(workspace_id: uuid.UUID, template, input_ids) -> lis
     in_set = {str(i) for i in input_ids}
     edges = await _repo.edges(workspace_id, node_ids=list(in_set), types=[etype])
     other = {str(e.target_id) if str(e.source_id) in in_set else str(e.source_id) for e in edges} - in_set
+    if not other:
+        # Inputs that are chunks in the data store have no edges; what was extracted from them is
+        # found through the evidence that names them.
+        other = await _evidenced_by(workspace_id, in_set)
     nodes = [n for n in await _repo.get_many(workspace_id, list(other)) if n.type == nspec["type"]]
     return [(n.id, (n.properties or {}).get("text") or n.label or "") for n in nodes]
+
+
+async def _evidenced_by(workspace_id, unit_keys) -> set:
+    """Nodes whose evidence points at any of these units."""
+    from opencortyx.domain.data import Evidence
+    from opencortyx.core.dataplane import evidence
+    keys = [str(k) for k in unit_keys]
+    if not keys:
+        return set()
+    await evidence.flush()                 # an earlier stage of this job may still be buffered
+    async with V2Session() as db:
+        rows = (await db.execute(select(Evidence.target_id).where(
+            Evidence.workspace_id == workspace_id, Evidence.target_kind == "node",
+            Evidence.unit_key.in_(keys)))).scalars().all()
+    return {str(r) for r in rows}
 
 
 async def emitted_pairs_by_name(workspace_id: uuid.UUID, name: str, input_ids) -> list:
