@@ -1,8 +1,66 @@
 # Changelog
 
-## Unreleased
+## 0.2.0-beta.1 - unreleased
+
+Data and knowledge are stored apart ([ADR-006](docs/adr/006-data-and-knowledge-apart.md),
+[design](docs/knowledge-layer.md)). A new workspace keeps its documents, tables and records as Delta
+tables beside the graph; the graph holds what was extracted from them, and every extracted fact
+points at the chunk, row or record it came from. Questions about rows - how many, how much, which
+one has the most - are answered with SQL over all the rows, with the query and the data's version
+shown, instead of counting whatever retrieval returned. Live databases, MongoDB and a customer's
+own lake tables are read in place, never copied.
+
+### Upgrading
+- `opencortyx update`. A database migration (`0032_data_plane`) adds the `data_asset`, `evidence` and
+  `source_key` tables and the workspace setting `data_store`.
+- **Existing workspaces keep their data in the graph** (`data_store = graph`), working as before, and
+  `opencortyx doctor` says so. This store is deprecated: while in beta, the way to the new one is
+  Settings > Workspace > Data store = delta, then a reset and a re-ingest of the workspace's files.
+  New workspaces start on `delta`.
+- A new volume, `data_store`, holds the Delta tables. `bin/opencortyx backup` includes it; a backup
+  from before it restores without it.
+- New settings, all optional: `DATA_ROOT` (/data/store), `DUCKDB_EXTENSION_DIR`,
+  `DATA_DUCKDB_MEMORY_LIMIT` (512MB) / `DATA_DUCKDB_THREADS` (2) for question-time SQL,
+  `DATA_DUCKDB_INGEST_MEMORY_LIMIT` (1GB) / `DATA_DUCKDB_INGEST_THREADS` for reading files at ingest,
+  `DATA_QUERY_TIMEOUT_SECONDS` (30), `DATA_ADAPTER_MAX_ROWS` (1,000,000).
+- The image carries the DuckDB extensions (delta, iceberg, httpfs, aws, azure, postgres, mysql,
+  sqlite): reading a lake or attaching a database no longer downloads anything at query time.
 
 ### Added
+- **The data store** (`stores/data`): delta-rs writes, DuckDB reads, both behind one module.
+  `DATA_ROOT/<workspace>/unstructured` (every document's chunks, one table),
+  `structured/<asset>` (a table's rows, typed once at ingest, keyed by `_row_key`) and
+  `semistructured/<asset>` (a payload's records, the whole record as JSON plus its top-level fields).
+  Compacted and vacuumed by the maintenance worker every six hours.
+- **Evidence on every extracted fact**: the Mapper's and extractors' nodes and edges, the
+  semi-structured walker's records and row mode's rows record which chunk, row or record they rest
+  on, at which version, with the quote. Citations read it first; an entity found the same as another
+  shares its evidence; a fact whose every source is gone is marked stale, not deleted.
+- **Documents in Delta**: chunks are rows, not nodes (no Chunk, Section, layout, table or image nodes);
+  passages are searched as before and read back from Delta; extractors read the same chunks.
+- **Tables in Delta, or in place**: a file's every row goes to its table whatever the reading mode, so
+  a catalog-only table is answerable through SQL; a SQL connector's tables are registered live (read
+  through DuckDB ATTACH, never copied); Delta / Iceberg / Hudi connectors are catalogued and registered
+  where they are (their ingestion failed before); a moved Delta version or watermark column re-reads
+  the source.
+- **Column profiles** instead of sample values: null share, distinct count, and for a category column
+  its values and counts (`value_set`), which the SQL planner filters with. Personal-data columns are
+  flagged and kept out of prompts and the graph.
+- **MongoDB** connector: each collection walked like a JSON file of its documents - the same KeyNodes,
+  references and categorical values - and read in place. **SQL Server, Oracle, Snowflake, BigQuery,
+  Redshift, ...** through an Arrow adapter.
+- **The data route** (`retrieval/l2_data`): L0 routes a question about rows to SQL; the planner writes
+  it from the schema only (columns, value sets, joins, defined metrics, verified examples) - by rules
+  for counts, totals and rankings, which needs no model, or by the generation model; the guard allows
+  one read-only SELECT over the workspace's views; DuckDB runs it over managed and external tables in
+  one query. SQL wins over graph aggregation for numbers.
+- **Answer outcomes**: `ANSWERED`, `PARTIAL`, `UNKNOWN` with a reason (no matching rows, the source is
+  unavailable, no source has it) or `CLARIFY` (a name that means two things: the answer asks which).
+  A number stated from a query result must be in its rows.
+- **Data definitions** (Curation > Data definitions, `/definitions`): Metrics, Segments and verified
+  questions with their SQL, each run against the data before it is saved. "Save as verified query" on
+  an answer in the assistant. Glossary synonyms bring column and metric names into a question.
+- **Asset pages** show the asset's own chunks, rows or records (Data tab).
 - **Query decomposition** (`retrieval/decomposition/`), a module above the L0-L4 layers: a question
   one search cannot answer is searched as several, and the results are merged. A comparison of named
   things ("which was published first, RFC 9155 or RFC 9410?") is searched once per thing, so both
@@ -11,6 +69,14 @@
   also split and bridged by the generation model, which needs a stronger model than the built-in
   Qwen3-0.6B). The `decompose` request flag, accepted and ignored until now, overrides it, and the
   response lists the sub-questions under `decomposition`.
+- Optional **answer write-back** (off by default): a fact found through SQL is saved with its query as
+  evidence.
+- The Models page warns when a generation model is under 3B parameters: fine for short answers, not
+  for SQL, routing or multi-step questions.
+- `doctor` checks the data store and reports workspaces still on the graph store.
+- A gold set (`apps/api/tests/goldset`): a licensing business over CSV, JSON, a live database, a lake
+  table and documents, 200 questions of eleven types, and a runner reporting the resolution and
+  unsupported-answer rates.
 
 ## 0.1.0-beta.7 - 2026-10-23
 

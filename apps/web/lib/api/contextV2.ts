@@ -1173,6 +1173,8 @@ export const contextV2Api = {
   addGlossary: (spec: GlossaryInput) =>
     apiClient.post("/api/v2/glossary", spec).then((r) => r.data),
   // Data definitions the SQL planner uses (knowledge/definitions.py). Each is run once before saving.
+  assetData: (assetId: string, offset = 0, limit = 50) =>
+    apiClient.get(`/api/v2/assets/${assetId}/data`, { params: { offset, limit } }).then((r) => r.data),
   listDefinitions: () =>
     apiClient.get("/api/v2/definitions").then((r) => r.data as DefinitionsList),
   addMetric: (spec: MetricInput) =>

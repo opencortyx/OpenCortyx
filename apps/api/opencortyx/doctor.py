@@ -284,6 +284,41 @@ async def check_search_index() -> str:
     return OK
 
 
+async def check_data_store() -> str:
+    """The data store (stores/data): its volume, DuckDB with the delta extension, and which workspaces
+    still keep their data as graph nodes - the store before 0.2.0, kept working but deprecated."""
+    import shutil
+    from pathlib import Path
+
+    from sqlalchemy import text
+
+    from opencortyx.core.config import settings
+    from opencortyx.core.db import V2Session
+    from opencortyx.domain.base import V2_SCHEMA
+    root = Path(settings.DATA_ROOT)
+    if not root.exists():
+        _line(FAIL, "data store", f"{root} does not exist: is the `data_store` volume mounted?")
+        return FAIL
+    try:
+        from opencortyx.stores.data import connect
+        connect(extensions=["delta"]).close()
+    except Exception as e:  # noqa: BLE001
+        _line(FAIL, "data store", f"DuckDB could not load its delta extension: {str(e)[:160]}")
+        return FAIL
+    async with V2Session() as db:
+        old = (await db.execute(text(f"SELECT count(*) FROM {V2_SCHEMA}.workspace "
+                                     f"WHERE data_store = 'graph'"))).scalar() or 0
+        tables = (await db.execute(text(f"SELECT count(*) FROM {V2_SCHEMA}.data_asset"))).scalar() or 0
+    free = shutil.disk_usage(root).free
+    detail = f"{tables} asset(s) registered; {free / 2**30:.1f} GB free"
+    if old:
+        _line(WARN, "data store", f"{detail}; {old} workspace(s) still keep data as graph nodes (deprecated): "
+                                  "reset and re-ingest, or switch Settings > Workspace > Data store to delta")
+        return WARN
+    _line(OK, "data store", detail)
+    return OK
+
+
 async def check_graph_store() -> str:
     from opencortyx.stores.graph import get_graph_store
     return await _check_store("graph_store", get_graph_store())
@@ -312,7 +347,7 @@ async def main() -> int:
     results = [await check_database(), check_redis(), check_workers(), check_queues(),
                await check_models(), await check_llm(), await check_embedding(),
                await check_reranker(), await check_graph_store(), await check_vector_store(),
-               check_uploads(), await check_search_index()]
+               await check_data_store(), check_uploads(), await check_search_index()]
     failed = results.count(FAIL)
     print(f"\n  {results.count(OK)} ok, {results.count(WARN)} warnings, {failed} failed")
     return 1 if failed else 0

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "opencortyx-api"
-version = "0.1.0-beta.7"
+version = "0.2.0-beta.1"
 description = "OpenCortyx API: the knowledge layer for AI"
 authors = ["OpenCortyx Team"]
 license = "MIT"

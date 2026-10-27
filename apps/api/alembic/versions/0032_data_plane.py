@@ -68,9 +68,15 @@ def upgrade() -> None:
             last_seen timestamptz DEFAULT now(),
             PRIMARY KEY (workspace_id, asset_id, native_id, entity_type))""")
     op.execute(f"CREATE INDEX IF NOT EXISTS ix_source_key_node ON {S}.source_key (workspace_id, node_id)")
-    # Where a workspace's data is written: 'graph' (as before) until it is switched to 'delta'.
+    # Where a workspace's data is written. Every workspace that exists keeps 'graph' - what its data
+    # already is - including one that never saved a profile (no row yet: it gets one here); a
+    # workspace created from now on starts on 'delta' (knowledge.workspace).
     op.execute(f"ALTER TABLE {S}.workspace ADD COLUMN IF NOT EXISTS data_store varchar(10) "
                f"NOT NULL DEFAULT 'graph'")
+    op.execute(f"INSERT INTO {S}.workspace (workspace_id, name, mode, data_store) "
+               f"SELECT DISTINCT workspace_id, '', 'person', 'graph' FROM {S}.app_user "
+               f"ON CONFLICT (workspace_id) DO NOTHING")
+    op.execute(f"ALTER TABLE {S}.workspace ALTER COLUMN data_store SET DEFAULT 'delta'")
 
 
 def downgrade() -> None:

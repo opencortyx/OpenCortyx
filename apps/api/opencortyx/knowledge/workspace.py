@@ -46,7 +46,7 @@ class Profile:
     workspace_id: uuid.UUID
     name: str
     mode: str
-    data_store: str = "graph"
+    data_store: str = "delta"
 
     @property
     def central_type(self) -> str:
@@ -91,7 +91,8 @@ def _default(workspace_id) -> Profile:
     """A workspace with no row yet — one made before this table, or by a test. `GRAPH_ROOT_NAME` is
     the install's seed for a name, as it was for the setting this replaced."""
     from opencortyx.core.config.env import settings
-    return Profile(workspace_id=workspace_id, name=clean_name(settings.GRAPH_ROOT_NAME or "")[:NAME_MAX], mode="person")
+    return Profile(workspace_id=workspace_id, name=clean_name(settings.GRAPH_ROOT_NAME or "")[:NAME_MAX], mode="person",
+                   data_store="delta")
 
 
 async def get_profile(workspace_id) -> Profile:
@@ -102,7 +103,7 @@ async def get_profile(workspace_id) -> Profile:
         return _default(org)
     store = getattr(row, "data_store", None)
     return Profile(workspace_id=org, name=row.name or "", mode=row.mode if row.mode in MODES else "person",
-                   data_store=store if store in DATA_STORES else "graph")
+                   data_store=store if store in DATA_STORES else "delta")
 
 
 async def data_store(workspace_id) -> str:

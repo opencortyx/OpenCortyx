@@ -25,7 +25,7 @@ export default function AssetDetailsPage(props0: { params: Promise<{ id: string 
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [activeTab, setActiveTab] = useState<"overview" | "schema" | "lineage">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "schema" | "data" | "lineage">("overview");
 
   // Comments & collaboration
   const [comments, setComments] = useState<any[]>([]);
@@ -300,6 +300,7 @@ export default function AssetDetailsPage(props0: { params: Promise<{ id: string 
         {([
           ["overview", "Overview", Gauge],
           ["schema", "Schema", Table2],
+          ["data", "Data", FileBox],
           ["lineage", "Lineage", Network],
         ] as const).map(([key, label, Icon]) => (
           <button
@@ -634,6 +635,9 @@ export default function AssetDetailsPage(props0: { params: Promise<{ id: string 
         </div>
       )}
 
+      {/* ── DATA: the asset's own chunks, rows or records, from the data store ── */}
+      {activeTab === "data" && <AssetData assetId={params.id} />}
+
       {/* ── LINEAGE GRAPH ── */}
       {activeTab === "lineage" && (
         <div className="bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden h-[700px]">
@@ -705,6 +709,51 @@ function Mini({ label, value }: { label: string; value: React.ReactNode }) {
     <div className="bg-stone-50 border border-stone-100 rounded-lg p-3 text-center">
       <div className="text-xl font-bold text-stone-900">{value}</div>
       <div className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mt-0.5">{label}</div>
+    </div>
+  );
+}
+
+
+// A page of the asset's own data - a document's chunks, a table's rows, a payload's records - read
+// from its Delta table, or in place from the customer's source.
+function AssetData({ assetId }: { assetId: string }) {
+  const [page, setPage] = useState<any>(null);
+  const [offset, setOffset] = useState(0);
+  const limit = 50;
+  useEffect(() => {
+    setPage(null);
+    contextV2Api.assetData(assetId, offset, limit).then(setPage).catch((e: any) =>
+      setPage({ available: true, error: e?.message || "Could not read the data", columns: [], rows: [], total: 0 }));
+  }, [assetId, offset]);
+  if (!page) return <div className="text-sm text-stone-500 p-4">Loading…</div>;
+  if (!page.available) {
+    return <div className="text-sm text-stone-500 p-4">This asset's data lives in the graph (a workspace from before 0.2.0). Its parts are under Lineage.</div>;
+  }
+  if (page.error) return <div className="text-sm text-red-600 p-4">The source could not be read: {page.error}</div>;
+  return (
+    <div className="bg-white border border-stone-200 rounded-2xl shadow-sm p-4 space-y-3">
+      <div className="text-xs text-stone-500">
+        {page.total} {page.kind === "unstructured" ? "chunks" : page.kind === "semistructured" ? "records" : "rows"}
+        {" · "}{page.storage === "external" ? `read in place (${page.format})` : "managed (Delta)"}
+        {page.version_ref ? ` · version ${page.version_ref}` : ""}
+      </div>
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-xs">
+          <thead><tr>{page.columns.map((c: string) => <th key={c} className="text-left pr-3 py-1 font-semibold text-stone-600 whitespace-nowrap">{c}</th>)}</tr></thead>
+          <tbody>
+            {page.rows.map((r: any[], i: number) => (
+              <tr key={i} className="border-t border-stone-100 align-top">
+                {r.map((v, j) => <td key={j} className="pr-3 py-1 text-stone-700 max-w-md truncate" title={v ?? ""}>{v ?? ""}</td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="flex items-center gap-2 text-xs">
+        <button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - limit))} className="px-2 py-1 border rounded disabled:opacity-40">Previous</button>
+        <span className="text-stone-500">{offset + 1}-{Math.min(offset + limit, page.total)} of {page.total}</span>
+        <button disabled={offset + limit >= page.total} onClick={() => setOffset(offset + limit)} className="px-2 py-1 border rounded disabled:opacity-40">Next</button>
+      </div>
     </div>
   );
 }

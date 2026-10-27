@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from opencortyx.api.deps import audit
 from opencortyx.api.schemas.graph.assets import OverviewEdit
-from opencortyx.core.security.auth import CurrentUser, require_write
+from opencortyx.core.security.auth import CurrentUser, require_auth, require_write
 from opencortyx.domain.ontology import ASSET_TYPES
 from opencortyx.core.substrate import NodeRepo
 from opencortyx.core.observability import get_logger
@@ -98,3 +98,39 @@ async def delete_asset_ep(asset_id: uuid.UUID, user: CurrentUser = Depends(requi
 async def delete_source_ep(source_id: uuid.UUID, user: CurrentUser = Depends(require_write)):
     """Alias of DELETE /assets/{id} — same full purge, kept for existing callers."""
     return await delete_asset_ep(source_id, user)
+
+
+@router.get("/assets/{asset_id}/data")
+async def asset_data_ep(asset_id: uuid.UUID, offset: int = 0, limit: int = 50,
+                        user: CurrentUser = Depends(require_auth)):
+    """A page of the asset's own data: a document's chunks, a table's rows, a payload's records -
+    from its managed Delta table, or read in place from the customer's source. `{"available":
+    false}` for an asset whose data is in the graph (a workspace from before 0.2.0)."""
+    import anyio
+
+    from opencortyx.core.dataplane import assets as _assets
+    from opencortyx.stores.data import Views
+    row = await _assets.get(user.workspace_id, asset_id)
+    if row is None:
+        return {"available": False}
+    limit, offset = max(1, min(int(limit), 500)), max(0, int(offset))
+    refs = await _assets.refs(user.workspace_id, ids=[asset_id])
+    order = {"unstructured": '"ordinal"', "structured": '"_row_key"', "semistructured": '"record_id"'}
+    by = order.get(row.kind, "1") if row.storage == "managed" else "1"
+
+    def go():
+        with Views(user.workspace_id, refs, lock=True) as v:
+            view = next(iter(v.names), None)
+            if view is None:
+                return [], [], 0
+            total = v.query(f'SELECT count(*) AS n FROM "{view}"').column("n")[0].as_py()
+            t = v.query(f'SELECT * FROM "{view}" ORDER BY {by} LIMIT {limit} OFFSET {offset}')
+            return t.column_names, [[None if x is None else str(x) for x in r.values()] for r in t.to_pylist()], total
+    try:
+        cols, rows, total = await anyio.to_thread.run_sync(go)
+    except Exception as e:  # noqa: BLE001 - an external source that is down says so
+        return {"available": True, "kind": row.kind, "storage": row.storage, "error": str(e)[:300],
+                "columns": [], "rows": [], "total": 0}
+    return {"available": True, "kind": row.kind, "storage": row.storage, "format": row.format,
+            "version_ref": row.version_ref, "columns": cols, "rows": rows, "total": total,
+            "offset": offset, "limit": limit}
