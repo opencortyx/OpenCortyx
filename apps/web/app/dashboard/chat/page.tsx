@@ -14,6 +14,8 @@ type Msg = {
     trace?: any[]; retrieved_context?: string;
     stage_trace?: { stage: string; detail?: string; degraded?: boolean; [k: string]: any }[];
     generation?: { model?: string; template?: string; cot?: boolean; instructions?: string };
+    outcome?: "ANSWERED" | "PARTIAL" | "UNKNOWN" | "CLARIFY"; unknown_reason?: string | null; route?: string;
+    data?: { sql: string; columns: string[]; rows: any[][]; assets: { name: string; version_ref?: string }[]; method?: string };
   };
 };
 
@@ -181,8 +183,11 @@ export default function ChatPage() {
             const c = [...m]; const last = c[c.length - 1];
             // A failed generation (no model connected, server down) carries the reason in
             // `answer`; only a real abstention on the evidence reads as one.
+            // An UNKNOWN with a reason, or a CLARIFY question, says so in its own words.
             const text = d.error
               ? `⚠ ${d.answer || d.error}`
+              : d.abstained && (d.outcome === "CLARIFY" || d.unknown_reason) && d.answer
+              ? d.answer
               : d.abstained
               ? "No grounded evidence found — abstained instead of guessing."
               : (d.answer ?? last?.text ?? "");
@@ -193,7 +198,8 @@ export default function ChatPage() {
                 retrievers: d.retrievers, citations: d.citations, caveats: d.caveats,
                 unsupported: d.unsupported_sentences, trust_score: d.trust_score, crag: d.crag,
                 trace: d.trace, retrieved_context: d.retrieved_context, stage_trace: d.stage_trace,
-                generation: d.generation
+                generation: d.generation, outcome: d.outcome, unknown_reason: d.unknown_reason,
+                route: d.route, data: d.data
               },
             };
             return c;
@@ -349,6 +355,9 @@ export default function ChatPage() {
                   : "bg-white border border-stone-200 text-stone-800 rounded-tl-sm"
                 }`}>
                 <div className="whitespace-pre-wrap [overflow-wrap:anywhere] leading-relaxed">{m.text}</div>
+                {m.meta?.data && (
+                  <DataResult data={m.meta.data} question={msgs[i - 1]?.role === "user" ? msgs[i - 1].text : ""} />
+                )}
                 {m.meta && !m.meta.abstained && !!m.meta.citations?.length && (
                   <SourceList citations={m.meta.citations} question={msgs[i - 1]?.role === "user" ? msgs[i - 1].text : ""} />
                 )}
@@ -620,6 +629,48 @@ function AssistantMeta({ meta }: { meta: NonNullable<Msg["meta"]> }) {
             </div>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+
+// The rows a data question was answered from: the query, what it read, and a way to keep it.
+function DataResult({ data, question }: { data: NonNullable<NonNullable<Msg["meta"]>["data"]>; question: string }) {
+  const [saved, setSaved] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [open, setOpen] = useState(false);
+  const save = async () => {
+    setSaved("saving");
+    try { await contextV2Api.addVerifiedQuery({ question, sql: data.sql }); setSaved("saved"); }
+    catch { setSaved("error"); }
+  };
+  return (
+    <div className="mt-3 rounded-lg border border-stone-200 bg-stone-50 p-3 text-xs space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-medium text-stone-700">
+          From the data: {data.assets.map((a) => a.name + (a.version_ref ? ` @${a.version_ref}` : "")).join(", ")}
+        </span>
+        <button onClick={() => setOpen(!open)} className="text-stone-500 hover:text-stone-800">{open ? "Hide" : "Show"} SQL</button>
+      </div>
+      {open && <pre className="whitespace-pre-wrap break-all rounded bg-white border border-stone-200 p-2">{data.sql}</pre>}
+      {data.rows.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-left">
+            <thead><tr>{data.columns.map((c) => <th key={c} className="pr-3 font-semibold text-stone-600">{c}</th>)}</tr></thead>
+            <tbody>
+              {data.rows.slice(0, 10).map((r, i) => (
+                <tr key={i}>{r.map((v, j) => <td key={j} className="pr-3 text-stone-700">{v === null ? "" : String(v)}</td>)}</tr>
+              ))}
+            </tbody>
+          </table>
+          {data.rows.length > 10 && <div className="text-stone-400 mt-1">{data.rows.length - 10} more rows</div>}
+        </div>
+      )}
+      {question && (
+        <button onClick={save} disabled={saved === "saving" || saved === "saved"}
+          className="inline-flex items-center gap-1 rounded border border-stone-300 bg-white px-2 py-1 text-stone-700 disabled:opacity-60">
+          {saved === "saved" ? <><Check size={12} /> Saved as a verified query</> : saved === "error" ? "Could not save - try again" : <><Save size={12} /> Save as verified query</>}
+        </button>
       )}
     </div>
   );

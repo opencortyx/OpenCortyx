@@ -154,3 +154,41 @@ async def mark_stale(workspace_id, asset_id, version_ref) -> int:
     if orphans:
         await NodeRepo().patch_properties(workspace_id, orphans, {"__stale": True})
     return len(orphans)
+
+
+#: Whether a workspace's documents live in Delta, cached briefly: asked on every retrieval read.
+_MODE_TTL = 60.0
+_mode_cache: dict = {}
+
+
+async def _delta_workspace(workspace_id) -> bool:
+    import time
+    key = str(workspace_id)
+    hit = _mode_cache.get(key)
+    if hit and time.monotonic() - hit[0] < _MODE_TTL:
+        return hit[1]
+    from opencortyx.ingest.structured.dataplane import uses_delta
+    on = await uses_delta(workspace_id)
+    _mode_cache[key] = (time.monotonic(), on)
+    return on
+
+
+async def hydrate(workspace_id, chunk_ids) -> list[Node]:
+    """Chunk records for ids the graph does not have - one batched read of the workspace's chunks
+    table, filtered by id (file statistics skip what cannot match). Empty for a graph workspace."""
+    ids = [str(i) for i in chunk_ids if i]
+    if not ids or not await _delta_workspace(workspace_id):
+        return []
+    import anyio
+
+    from opencortyx.stores.data import UNSTRUCTURED, DataStore
+    store = DataStore(workspace_id)
+
+    def go():
+        return store.chunks(ids)
+    try:
+        rows = await anyio.to_thread.run_sync(go)
+    except Exception:                                         # noqa: BLE001 - no table yet
+        return []
+    version = store.version(UNSTRUCTURED)
+    return [record(workspace_id, r, version_ref=version) for r in rows]

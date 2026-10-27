@@ -299,17 +299,28 @@ async def _run_pipeline(query: str, ctx: RetrieveContext, stream: bool):
     spend = {"in": 0, "out": 0}
     base = {"retrievers": pkg.get("retrievers"), "trace": pkg.get("citations", []),
             "stage_trace": pkg.get("stage_trace", []),
-            "tokens_context": pkg.get("tokens_used", 0)}
+            "tokens_context": pkg.get("tokens_used", 0), "route": pkg.get("route") or "knowledge",
+            **({"data": pkg["data"]} if pkg.get("data") else {})}
 
     def _abstain(caveat, **extra):
-        return {"type": "done", "answer": _ABSTAIN, "abstained": True, "grounded": True,
+        # Every non-answer says which kind it is: UNKNOWN with a reason, or CLARIFY with the choices.
+        outcome = pkg.get("outcome") or "UNKNOWN"
+        reason = pkg.get("unknown_reason") or extra.pop("unknown_reason", None) or "no source answers it"
+        text = _ABSTAIN
+        if outcome == "CLARIFY" and pkg.get("clarify"):
+            text = _clarify_text(pkg["clarify"])
+        elif pkg.get("unknown_reason"):
+            text = f"UNKNOWN: {pkg['unknown_reason']}."
+        return {"type": "done", "answer": text, "abstained": True, "grounded": True,
+                "outcome": outcome, "unknown_reason": reason if outcome == "UNKNOWN" else None,
+                **({"clarify": pkg["clarify"]} if outcome == "CLARIFY" and pkg.get("clarify") else {}),
                 "citations": [], "caveats": [caveat] if isinstance(caveat, str) else caveat,
                 "tokens_prompt": spend["in"], "tokens_completion": spend["out"],
                 "tokens_total": spend["in"] + spend["out"], **extra, **base}
 
     if pkg.get("abstained"):
         if stream:
-            yield {"type": "token", "text": _ABSTAIN}
+            yield {"type": "token", "text": _abstain([])["answer"]}
         yield _abstain(pkg.get("caveats", []), confidence=pkg.get("confidence", 0.0))
         return
 
@@ -419,6 +430,15 @@ async def _run_pipeline(query: str, ctx: RetrieveContext, stream: bool):
         grounded, unsupported = await trust.verify_grounding(
             ans, _grounding_blocks(pkg), threshold=rc.grounding_threshold())
 
+    if pkg.get("data"):
+        # A number the answer states must be one the query result holds - a sum the model did in its
+        # head, or a figure it remembered, is unsupported however fluent the sentence around it.
+        extra = trust.unsupported_numbers(ans, [str(c.get("text") or "") for c in pkg.get("citations") or []]
+                                          + [_rows_text(pkg["data"])])
+        if extra:
+            unsupported = list(dict.fromkeys([*(unsupported or []), *extra]))
+            grounded = False
+
     if rc.grounding_mode() == "entailment" and not grounded:
         yield _abstain("Answer was not entailed by the retrieved context (grounding gate).",
                        trust_score=trust_score)
@@ -429,14 +449,32 @@ async def _run_pipeline(query: str, ctx: RetrieveContext, stream: bool):
         return
 
     numbered = _number_citations(ans, pkg["citations"])
+    if pkg.get("data") and grounded and not unsupported and rc.answer_write_back():
+        from opencortyx.knowledge.writeback import write_back
+        base["written_back"] = await write_back(ctx.workspace_id, query, ans, pkg["data"])
     yield {"type": "done", "answer": numbered,
            "abstained": False, "grounded": grounded,
+           "outcome": "PARTIAL" if unsupported else "ANSWERED", "unknown_reason": None,
            "unsupported_sentences": unsupported, "citations": _mark_support(numbered, pkg["citations"]),
            "caveats": pkg.get("caveats", []), "confidence": pkg["confidence"],
            "trust_score": trust_score,
            "crag": {"verdict": "accepted", "score": trust_score, "threshold": threshold},
            "tokens_used": pkg.get("tokens_used"), "tokens_prompt": spend["in"],
            "tokens_completion": spend["out"], "tokens_total": spend["in"] + spend["out"], **base}
+
+
+def _clarify_text(choices: list) -> str:
+    """The question back when a name means two things: which one, by what tells them apart."""
+    parts = []
+    for c in choices:
+        opts = " or ".join(f"{o.get('label')} ({str(o.get('node_id'))[:8]})" for o in c.get("candidates") or [])
+        parts.append(f'"{c.get("mention")}" matches more than one record: {opts}. Which one do you mean?')
+    return " ".join(parts) or _ABSTAIN
+
+
+def _rows_text(data: dict) -> str:
+    rows = (data or {}).get("rows") or []
+    return " ".join(" ".join("" if v is None else str(v) for v in r) for r in rows)
 
 
 async def _answer_query_inner(query: str, ctx: RetrieveContext) -> dict:

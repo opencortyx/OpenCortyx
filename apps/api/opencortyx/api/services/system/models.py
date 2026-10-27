@@ -1,11 +1,31 @@
 """Services: the model registry for generation, embeddings and reranking."""
+import re
+
 from sqlalchemy import select
+
+
+#: A generation model this small writes answers but not reliable SQL, routing or multi-step plans
+#: (measured: Qwen3-0.6B split no chained question of the 1000-file bench). Parameters, in billions.
+_SMALL_B = 3.0
+_PARAMS = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*[bB](?![a-zA-Z])")
+
+
+def capability_warning(role: str, model_id: str) -> str | None:
+    """Why a generation model may be too small for SQL planning and answering, or None."""
+    if role not in ("generation", "utility"):
+        return None
+    m = _PARAMS.search(str(model_id or ""))
+    if m and float(m.group(1)) < _SMALL_B:
+        return (f"{m.group(1)}B parameters: fine for short answers, not reliable for questions over your "
+                f"tables (SQL), multi-step questions or routing. Use a model of 7B or more for those.")
+    return None
 
 
 def model_view(m) -> dict:
     return {"id": str(m.id), "name": m.name, "role": m.role, "provider": m.provider,
             "model_id": m.model_id, "base_url": m.base_url, "params": m.params or {},
             "is_default": m.is_default, "has_key": bool(m.api_key),
+            "warning": capability_warning(m.role, m.model_id),
             "created_at": m.created_at.isoformat() if m.created_at else None}
 
 

@@ -208,6 +208,7 @@ export default function ModelRegistryPage() {
                         <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-stone-100 text-stone-600">{providerLabel(m.provider)}</span>
                       </div>
                       <p className="text-xs text-stone-500 mt-0.5 font-mono truncate">{m.model_id}{m.base_url ? ` · ${m.base_url}` : ""}{m.has_key ? " · 🔑 key set" : ""}</p>
+                      {(m as any).warning && <p className="text-xs text-amber-700 mt-1">{(m as any).warning}</p>}
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
                       <Button variant="ghost" size="sm" icon={ShieldCheck} busy={testing === m.id} onClick={() => onTest(m)}>Test</Button>

@@ -130,6 +130,17 @@ def _citations(blocks, prov: dict | None = None) -> list:
     prov = prov or {}
     out = []
     for b in blocks:
+        if b.role == "table-result":
+            # The rows' evidence is the query and what it read, not a node.
+            assets = (b.attributes or {}).get("assets") or []
+            out.append({"node_id": str(b.node_id), "type": "TableResult", "score": 1.0,
+                        "text": (b.text or "")[:240], "asset_id": assets[0]["asset_id"] if assets else None,
+                        "asset_label": ", ".join(a["name"] for a in assets) or None, "asset_type": "data",
+                        "origin": "data", "sql": (b.attributes or {}).get("sql"),
+                        "sources": [{"asset_id": a["asset_id"], "label": a["name"], "type": a.get("storage"),
+                                     "version_ref": a.get("version_ref")} for a in assets],
+                        "source_count": len(assets), "source_count_capped": False})
+            continue
         p = prov.get(str(b.node_id)) or {}
         out.append({"node_id": str(b.node_id),
                     "type": b.node_type,
@@ -240,6 +251,15 @@ async def build_context_v2(query: str, ctx: RetrieveContext, k: int = 0) -> dict
                       "detail": "; ".join("%s: %s" % (n, w) for n, w in unsupported.items()),
                       "n_in": 0, "n_out": 0, "ms": 0.0})
 
+    if res.unknown_reason and (res.abstained or not res.blocks or res.plan and res.plan.ambiguous):
+        return {"abstained": True, "outcome": "CLARIFY" if res.plan and res.plan.ambiguous else "UNKNOWN",
+                "reason": res.unknown_reason, "unknown_reason": res.unknown_reason,
+                "clarify": [{"mention": a["mention"], "candidates": a["candidates"]}
+                            for a in (res.plan.ambiguous if res.plan else [])] or None,
+                "context": context_str if res.blocks else "", "citations": cites,
+                "confidence": round(best, 3), "retrievers": surfaces, "stage_trace": trace,
+                "engine": "retrieval", "route": res.route,
+                "unsupported": unsupported or None}
     if res.abstained or not res.blocks:
         return {"abstained": True,
                 "reason": "no candidate resembles the question",
@@ -265,6 +285,10 @@ async def build_context_v2(query: str, ctx: RetrieveContext, k: int = 0) -> dict
             "paths": [{"steps": [s.edge_type for s in p.steps], "score": round(float(sc), 4)}
                       for sc, p, _ in (res.paths or [])[:5]],
             **({"decomposition": res.steps} if getattr(res, "steps", None) else {}),
+            "route": res.route,
+            **({"data": {"sql": res.data.sql, "columns": res.data.columns, "rows": res.data.rows[:200],
+                         "assets": res.data.assets, "method": res.data.method}}
+               if res.data is not None and res.data.ok else {}),
             **({"candidate_node_ids": [str(b.node_id) for b in res.blocks]}
                if getattr(ctx, "explain_retriever", False) else {})}
 

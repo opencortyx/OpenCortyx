@@ -191,9 +191,10 @@ def _now() -> datetime:
 class NodeRepo:
     """Stateless; the stores are resolved per process."""
 
-    def __init__(self, graph=None, vectors=None):
+    def __init__(self, graph=None, vectors=None, include_passages: bool = False):
         self._graph = graph
         self._vectors = vectors
+        self.include_passages = include_passages
 
     @property
     def graph(self):
@@ -212,9 +213,20 @@ class NodeRepo:
         return found[0] if found else None
 
     async def get_many(self, workspace_id, node_ids: Sequence) -> list[Node]:
-        """Nodes in the order of `node_ids`, skipping ids that do not exist."""
+        """Nodes in the order of `node_ids`, skipping ids that do not exist.
+
+        With `include_passages` (the retrieval workflow's repo), an id the graph does not have may be
+        a chunk of a workspace whose documents live in Delta: it comes back as the node-shaped chunk
+        record, read from the data store (ingest/unstructured/dataplane.py). Read-only - a write path
+        never sees one, so no chunk is ever written into the graph by accident."""
         ids = [str(i) for i in node_ids if i is not None]
         by_id = {str(n.id): n for n in await self.graph.get_nodes(as_uuid(workspace_id), ids)}
+        if self.include_passages:
+            missing = [i for i in dict.fromkeys(ids) if i not in by_id]
+            if missing:
+                from opencortyx.ingest.unstructured import dataplane as _udata
+                for n in await _udata.hydrate(workspace_id, missing):
+                    by_id[str(n.id)] = n
         return [by_id[i] for i in dict.fromkeys(ids) if i in by_id]
 
     async def find(self, workspace_id, query: NodeQuery | None = None, **filters) -> list[Node]:

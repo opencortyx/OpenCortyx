@@ -121,6 +121,13 @@ class _Walker:
         if missing:
             for n in await self.store.get_nodes(self.org, missing):
                 self.nodes[str(n.id)] = n
+            # A chunk of a document kept in Delta is not a graph node: read it from the data store,
+            # and its `source_ref` (its document) leads to the asset like a chunk node's did.
+            gone = [i for i in missing if i not in self.nodes]
+            if gone:
+                from opencortyx.ingest.unstructured.dataplane import hydrate
+                for n in await hydrate(self.org, gone):
+                    self.nodes[str(n.id)] = n
 
     async def assets(self, ids: Sequence[str]) -> dict[str, Optional[str]]:
         """node id → id of the asset at the top of its parent chain (itself, if it is one)."""

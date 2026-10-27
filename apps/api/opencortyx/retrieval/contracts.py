@@ -161,6 +161,11 @@ class QueryPlan:
     policy: ExecutionPolicy = field(default_factory=ExecutionPolicy)
     confidence: float = 0.0                                      # the classifier's, kept for trace
     notes: list[str] = field(default_factory=list)               # human-readable plan trace
+    #: Which kinds of answer the question may need, weighted, several at once (l0 routes.py):
+    #: KNOWLEDGE (the graph), PASSAGE (document text), DATA_SQL (rows), AGGREGATE, CLARIFY.
+    routes: dict[str, float] = field(default_factory=dict)
+    #: Mentions that bind to two or more equally good, different nodes: [{mention, candidates}].
+    ambiguous: list = field(default_factory=list)
 
     def wants(self, surface: str, threshold: float = 0.0) -> bool:
         return self.strategies.get(surface, 0.0) > threshold
@@ -387,6 +392,13 @@ class RetrievalResult:
     #: index, question, asked (with earlier answers written in), answer, blocks, ran. Empty when the
     #: question was searched as it is.
     steps: list = field(default_factory=list)
+    #: What answered: "knowledge", "data_sql", "knowledge+data_sql", "aggregate".
+    route: str = "knowledge"
+    #: Why the answer is unknown, when the data says so: "no matching rows", "the source is
+    #: unavailable", "the question is ambiguous". None otherwise.
+    unknown_reason: Optional[str] = None
+    #: The data route's result (retrieval/l2_data DataResult), when it ran.
+    data: Optional[Any] = None
 
     def block_ids(self) -> list[str]:
         return [str(b.node_id) for b in self.blocks]

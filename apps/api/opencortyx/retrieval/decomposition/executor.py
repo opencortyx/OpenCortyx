@@ -135,7 +135,8 @@ async def execute(plan: Decomposition, retrieve: Retrieve, complete: model.Compl
     return RetrievalResult(
         plan=base.plan, graph=base.graph, blocks=blocks, trace=list(base.trace or []) + trace,
         tokens=tokens, abstained=all(r.abstained for r in ordered) or not blocks,
-        paths=base.paths, aggregation=None,
+        paths=base.paths, aggregation=None, route=base.route, unknown_reason=base.unknown_reason,
+        data=base.data,
         steps=[{"index": s.index, "question": s.text, "asked": s.asked or "",
                 "answer": s.answer, "blocks": len(done[s.index].blocks) if s.index in done else 0,
                 "ran": s.index in done} for s in plan.steps])

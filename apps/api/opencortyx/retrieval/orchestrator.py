@@ -47,6 +47,7 @@ from opencortyx.retrieval.l0_understanding.vocabulary import (
     TypeVocabulary, load_vocabulary,
 )
 from opencortyx.retrieval.l0_understanding import policy as policy_mod
+from opencortyx.retrieval.l0_understanding import routes as routes_mod
 from opencortyx.retrieval.l0_understanding.intent import Intent
 
 from opencortyx.core.substrate import NodeRepo, window_open
@@ -139,7 +140,9 @@ class RetrievalWorkflow:
         self._embed = embed
         self._embed_batch = embed_batch
         self._complete = complete or _default_complete
-        self.repo = NodeRepo()
+        # Reads passages too: a document whose chunks live in Delta is found through its search
+        # points and read back from the data store (NodeRepo.get_many).
+        self.repo = NodeRepo(include_passages=True)
         self.embedding = EmbeddingRetrieval(embed, repo=self.repo)
         self.bm25 = BM25Surface(self.repo)
         self.identifier = IdentifierSurface(self.repo)
@@ -401,6 +404,9 @@ class RetrievalWorkflow:
         plan.entities = resolved
         bound = [r for r in resolved if r.resolved]
         ambiguous = [r for r in bound if r.alternatives]
+        plan.ambiguous = routes_mod.ambiguous_bindings(bound)
+        if plan.ambiguous:
+            plan.routes["CLARIFY"] = 1.0
         t.mark("L1", "resolve", n_in=len(plan.mentions), n_out=len(bound),
                detail=" ".join(f"{r.mention.text}->{r.label or '?'}"
                                f"({'+'.join(r.matched_by)},{r.confidence:.2f})"
@@ -762,6 +768,33 @@ class RetrievalWorkflow:
                       f" in {result.ms}ms")
         return result
 
+    async def data_route(self, workspace_id: uuid.UUID, query: str, t: _Timer):
+        """L2b: SQL over the workspace's data (retrieval/l2_data). None when it has nothing to say."""
+        from opencortyx.retrieval import l2_data
+        try:
+            res = await l2_data.answer(workspace_id, query, self._bound_complete(workspace_id))
+        except Exception as exc:                              # noqa: BLE001 - a layer degrades
+            t.mark("L2b", "data", detail=f"FAILED {type(exc).__name__}: {exc}")
+            return None
+        if res is None:
+            t.mark("L2b", "data", detail="no table answers this")
+            return None
+        t.mark("L2b", "data", n_out=len(res.rows), detail=f"{res.method}: {res.sql[:200]}"
+               + (f" -> {res.unknown_reason}" if res.unknown_reason else ""),
+               sql=res.sql, assets=[a["name"] for a in res.assets], attempts=len(res.attempts))
+        return res
+
+    @staticmethod
+    def _data_block(data) -> ContextBlock:
+        """The rows as one block: the table, the SQL, and what was read at which version."""
+        text = data.render()
+        block = ContextBlock(node_id=uuid.uuid4(), role="table-result", text=text, node_type="TableResult",
+                             retrieved_by=["sql"], score=1.0,
+                             attributes={"sql": data.sql, "columns": data.columns, "rows": data.rows[:200],
+                                         "assets": data.assets, "method": data.method})
+        block.tokens = max(1, len(text) // 4)
+        return block
+
     _MEMORY_FLAG = "__memory"          # core.substrate.CONVERSATION_FLAG - stamped by session capture
 
     def _apply_scope(self, graph: CandidateGraph, t) -> CandidateGraph:
@@ -842,6 +875,17 @@ class RetrievalWorkflow:
         t = _Timer()
         vocab = await self.vocabulary(workspace_id, t)
         plan = self.understand(query, t, vocab)
+        plan.routes = routes_mod.routes(plan, query)
+
+        # L2b - rows answer a question about rows. Before graph aggregation: when both can count,
+        # SQL sees every row and the graph only what was made into nodes.
+        data = None
+        if plan.routes.get("DATA_SQL") and self.cfg.scope != "conversations":
+            data = await self.data_route(workspace_id, query, t)
+            if data is not None and data.ok and data.rows and plan.intent == Intent.AGGREGATION:
+                block = self._data_block(data)
+                return RetrievalResult(plan=plan, graph=CandidateGraph(), blocks=[block], trace=t.trace,
+                                       tokens=block.tokens, route="data_sql", data=data)
 
         agg = await self.aggregate(workspace_id, plan, vocab, t)
         if agg is not None:
@@ -881,8 +925,20 @@ class RetrievalWorkflow:
                    detail=" | ".join("->".join(s.edge_type for s in p.steps) + f"={sc:.3f}"
                                      for sc, p, _ in top_paths[:3]))
 
+        route, unknown = "knowledge", None
+        if data is not None:
+            if data.ok and data.rows:
+                block = self._data_block(data)
+                blocks = [block] + blocks
+                tokens += block.tokens
+                route, abstain = "knowledge+data_sql", False
+            elif data.unknown_reason and (abstain or not blocks):
+                unknown = data.unknown_reason
+        if plan.ambiguous:
+            unknown = unknown or "the question is ambiguous"
         return RetrievalResult(plan=plan, graph=graph, blocks=blocks, trace=t.trace,
-                               tokens=tokens, abstained=abstain, paths=top_paths)
+                               tokens=tokens, abstained=abstain, paths=top_paths, route=route,
+                               unknown_reason=unknown, data=data)
 
 
 _provenance_cache: dict = {}

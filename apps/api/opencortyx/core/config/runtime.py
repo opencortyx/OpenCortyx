@@ -60,6 +60,7 @@ _DEFAULTS = {
     "simhash_version_review": True,    # a version match is PROPOSED for approval, not auto-applied
     "temporal_routing": True,          # retrieval: detect time-intent questions → order by date
     "query_decomposition": "comparisons",  # retrieval: off | comparisons | full (chains need a strong model)
+    "answer_write_back": False,        # retrieval: save a fact found through SQL as knowledge, with its query as evidence
     "llm_concurrency": 16,             # ingest: how many extraction LLM calls run in parallel per document
     "extraction_call_groups": [],      # ingest: ordered call groups — [{"name": str, "extractors": [template names]}]
     "extraction_full_coverage": False,
@@ -157,6 +158,10 @@ SCHEMA: list[dict[str, Any]] = [
      "answered step by step by the generation model, which needs a capable model (the built-in "
      "Qwen3-0.6B is not). The question as asked is always searched too. A request's own "
      "`decompose` overrides it."},
+    {"key": "answer_write_back", "label": "Answer write-back", "kind": "bool", "group": "Retrieval",
+     "help": "When an answer comes from the data (a query over your tables) and passes the grounding "
+     "checks, save it as a Fact in the graph, with the query and the tables it read as its evidence. "
+     "The next time the graph answers it directly. Off by default."},
     {"key": "retrieve_pool_k", "label": "Recall pool size", "kind": "int", "min": 10, "max": 500,
      "group": "Retrieval", "help": "Per-retriever fan-out — the WIDE recall net. Higher = better recall "
      "(a weak embedder is compensated by a bigger net), more to rerank. The final top-k is cut after "
@@ -441,6 +446,7 @@ def simhash_versioning() -> bool: return bool(get("simhash_versioning"))
 def simhash_max_distance() -> int: return max(0, int(get("simhash_max_distance")))
 def simhash_version_review() -> bool: return bool(get("simhash_version_review"))
 def temporal_routing() -> bool: return bool(get("temporal_routing"))
+def answer_write_back() -> bool: return bool(get("answer_write_back"))
 def query_decomposition() -> str:
     v = get("query_decomposition")
     if isinstance(v, bool):                      # saved before it became a select

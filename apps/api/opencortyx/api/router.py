@@ -7,7 +7,7 @@ from fastapi import APIRouter
 
 from opencortyx.api.routes.access import api_keys, audit, auth, collections, users
 from opencortyx.api.routes.graph import (
-    assets, comments, edges, glossary, graph, nodes, ontology, resolution, tree)
+    assets, comments, definitions, edges, glossary, graph, nodes, ontology, resolution, tree)
 from opencortyx.api.routes.ingestion import (
     connectors, extraction, ingest, ingestions, pipelines, progress, quarantine, schema_mappings,
     structured)
@@ -37,6 +37,7 @@ router.include_router(nodes.router)
 router.include_router(maintenance.router)
 router.include_router(edges.router)
 router.include_router(glossary.router)
+router.include_router(definitions.router)
 router.include_router(audit.router)
 router.include_router(progress.router)
 router.include_router(models.router)

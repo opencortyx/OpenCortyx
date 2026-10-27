@@ -113,6 +113,20 @@ class DataStore:
                            keys).to_pylist()
         return {str(r[key]): r for r in rows}
 
+    def chunks(self, chunk_ids: Iterable) -> list[dict]:
+        """Chunks of any of the workspace's documents by id, in one read of the shared table."""
+        ids = [str(i) for i in chunk_ids]
+        path = self.path(UNSTRUCTURED)
+        if not ids or not delta.exists(path):
+            return []
+        con = duck.connect(extensions=["delta"])
+        try:
+            marks = ", ".join("?" for _ in ids)
+            return duck.run(con, f"SELECT * FROM delta_scan({duck._lit(path)}) WHERE chunk_id IN ({marks})",
+                            ids).to_pylist()
+        finally:
+            con.close()
+
     def open_unit(self, kind: str, asset_id, unit_key, version_ref=None) -> tuple[Optional[dict], bool]:
         """The chunk, row or record behind a piece of evidence, as it was at `version_ref`.
 

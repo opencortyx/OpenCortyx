@@ -601,6 +601,17 @@ export type ResolutionDecision = {
   created_at?: string | null;
 };
 
+export interface MetricInput {
+  name: string; table: string; expression: string; description?: string; filters?: string;
+  segment?: string | null; grain?: string; unit?: string; synonyms?: string[];
+}
+export interface SegmentInput { name: string; table: string; condition: string; description?: string }
+export interface DefinitionsList {
+  Metric: Array<Record<string, any>>;
+  Segment: Array<Record<string, any>>;
+  VerifiedQuery: Array<Record<string, any>>;
+}
+
 export const contextV2Api = {
   resetDatabase: () => apiClient.delete("/api/v2/reset").then((r) => r.data),
   // Clear the task QUEUE: drop queued broker messages + revoke running/scheduled tasks (admin).
@@ -1161,6 +1172,17 @@ export const contextV2Api = {
       `/api/v2/search?q=${encodeURIComponent(q)}${types ? `&types=${types}` : ""}`).then((r) => r.data),
   addGlossary: (spec: GlossaryInput) =>
     apiClient.post("/api/v2/glossary", spec).then((r) => r.data),
+  // Data definitions the SQL planner uses (knowledge/definitions.py). Each is run once before saving.
+  listDefinitions: () =>
+    apiClient.get("/api/v2/definitions").then((r) => r.data as DefinitionsList),
+  addMetric: (spec: MetricInput) =>
+    apiClient.post("/api/v2/definitions/metrics", spec).then((r) => r.data),
+  addSegment: (spec: SegmentInput) =>
+    apiClient.post("/api/v2/definitions/segments", spec).then((r) => r.data),
+  addVerifiedQuery: (spec: { question: string; sql: string }) =>
+    apiClient.post("/api/v2/definitions/verified-queries", spec).then((r) => r.data),
+  deleteDefinition: (id: string) =>
+    apiClient.delete(`/api/v2/definitions/${id}`).then((r) => r.data),
   addRule: (spec: RuleInput) =>
     apiClient.post("/api/v2/rules", spec).then((r) => r.data),
   // `/business-context`, not `/context`: the latter is the retrieval endpoint, and posting a

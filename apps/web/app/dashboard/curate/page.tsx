@@ -10,13 +10,15 @@ import {
 import { GlossaryInput, SynonymInput, RuleInput } from "@/lib/api/contextV2";
 import PageHeader from "@/components/layout/PageHeader";
 import SchemaTab from "./SchemaTab";
+import DefinitionsTab from "./DefinitionsTab";
 
 type Hit = { id: string; label: string; type: string };
-type Tab = "schema" | "resources";
+type Tab = "schema" | "resources" | "definitions";
 
 const TABS: { id: Tab; label: string; icon: any }[] = [
   { id: "schema", label: "Schema", icon: Network },
   { id: "resources", label: "Resources", icon: Library },
+  { id: "definitions", label: "Data definitions", icon: Scale },
 ];
 
 export default function CuratePage() {
@@ -54,6 +56,7 @@ export default function CuratePage() {
 
       {tab === "schema" && <SchemaTab flash={flash} />}
       {tab === "resources" && <Resources flash={flash} />}
+      {tab === "definitions" && <DefinitionsTab flash={flash} />}
 
       <RecentActivity refreshKey={refreshKey} />
     </div>

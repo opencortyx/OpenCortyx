@@ -3,6 +3,8 @@
 This is the no-hallucination guarantee: if nothing is grounded above threshold, we refuse
 rather than guess. Every included node carries a citation back to its source.
 """
+import re
+
 from opencortyx.core.config import ABSTAIN_SCORE_THRESHOLD, MIN_NODE_CONFIDENCE, settings
 
 
@@ -251,3 +253,31 @@ async def verify_grounding_judge(query: str, answer_text: str, context: str, mod
         return (len(unsup) == 0, unsup)
     except Exception:
         return await verify_grounding(answer_text, context.split("\n\n"))
+
+
+
+_NUMBER = re.compile(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?(?![\w])")
+
+
+def _norm_number(s: str) -> str:
+    s = s.replace(",", "")
+    try:
+        f = float(s)
+    except ValueError:
+        return s
+    return str(int(f)) if f.is_integer() else f"{f:.6f}".rstrip("0").rstrip(".")
+
+
+def unsupported_numbers(answer: str, sources: list) -> list:
+    """Sentences of `answer` stating a number (not a year, not a list index) that no source holds."""
+    held = {_norm_number(m.group(0)) for s in sources for m in _NUMBER.finditer(str(s or ""))}
+    out = []
+    for sentence in re.split(r"(?<=[.!?])\s+", answer or ""):
+        for m in _NUMBER.finditer(sentence):
+            n = _norm_number(m.group(0))
+            if len(n) == 4 and n.isdigit() and 1900 <= int(n) <= 2100:
+                continue                       # a year is context, not a computed figure
+            if n not in held and not re.fullmatch(r"\d", n):
+                out.append(sentence.strip())
+                break
+    return out

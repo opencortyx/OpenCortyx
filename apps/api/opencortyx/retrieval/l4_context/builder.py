@@ -42,10 +42,12 @@ ROLE_PRIMARY = "primary"
 ROLE_RELATIONSHIP = "relationship"
 ROLE_TEMPORAL = "temporal"
 ROLE_SUPPORTING = "supporting"
+#: Rows the data route read (retrieval/l2_data): the table, its SQL and the versions read.
+ROLE_TABLE_RESULT = "table-result"
 
 #: Order sections appear in. Primary first because attention degrades with distance, and the
 #: block most likely to answer should not sit behind twenty corroborating ones.
-ROLE_ORDER = (ROLE_PRIMARY, ROLE_RELATIONSHIP, ROLE_TEMPORAL, ROLE_SUPPORTING)
+ROLE_ORDER = (ROLE_TABLE_RESULT, ROLE_PRIMARY, ROLE_RELATIONSHIP, ROLE_TEMPORAL, ROLE_SUPPORTING)
 
 
 def estimate_tokens(text: str) -> int:
@@ -327,6 +329,7 @@ def render(blocks: Iterable[ContextBlock], include_provenance: bool = True) -> s
         ROLE_RELATIONSHIP: "RELATIONSHIP EVIDENCE",
         ROLE_TEMPORAL: "TEMPORAL EVIDENCE",
         ROLE_SUPPORTING: "SUPPORTING EVIDENCE",
+        ROLE_TABLE_RESULT: "DATA (query result)",
     }
     for role in ROLE_ORDER:
         items = grouped.get(role) or []
