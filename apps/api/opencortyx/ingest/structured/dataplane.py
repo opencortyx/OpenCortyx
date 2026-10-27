@@ -38,11 +38,8 @@ def is_pii(name: str) -> bool:
 
 
 async def uses_delta(workspace_id) -> bool:
-    try:
-        from opencortyx.knowledge.workspace import data_store
-        return (await data_store(workspace_id)) == "delta"
-    except Exception:                                         # noqa: BLE001 - default to the old path
-        return False
+    from opencortyx.core.dataplane.mode import uses_delta as _uses_delta
+    return await _uses_delta(workspace_id)
 
 
 def _keyed_batches(batches: Iterable, key_columns: list, snapshot: str) -> Iterator:

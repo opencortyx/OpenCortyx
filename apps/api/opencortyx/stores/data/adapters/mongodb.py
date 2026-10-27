@@ -123,7 +123,7 @@ class MongoAdapter:
             if f.op == "is_null":
                 q[f.column] = None
             elif f.op in _OPS:
-                q.setdefault(f.column, {})[_OPS[f.op]] = list(f.value) if f.op == "in" else f.value
+                q.setdefault(f.column, {})[_OPS[f.op]] = f.values() if f.op == "in" else f.value
             else:
                 raise ValueError(f"unsupported filter operator {f.op!r}")
         return q
@@ -183,8 +183,8 @@ class MongoAdapter:
 
 def _schema(rows: list[dict], names: list):
     import pyarrow as pa
-    from opencortyx.ingest.semistructured.dataplane import _column_type
-    return pa.schema([pa.field(n, _column_type([r.get(n) for r in rows])) for n in names])
+    from opencortyx.stores.data.layout import arrow_type
+    return pa.schema([pa.field(n, arrow_type([r.get(n) for r in rows])) for n in names])
 
 
 def database_of(uri: str) -> Optional[str]:

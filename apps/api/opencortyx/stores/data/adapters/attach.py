@@ -73,7 +73,7 @@ class AttachedDatabase:
             if f.op == "is_null":
                 where.append(f"{_ident(f.column)} IS NULL")
             elif f.op == "in":
-                vals = list(f.value or [])
+                vals = f.values()
                 where.append(f"{_ident(f.column)} IN ({', '.join('?' for _ in vals)})" if vals else "FALSE")
                 params.extend(vals)
             elif f.op in ("=", "!=", "<", "<=", ">", ">="):

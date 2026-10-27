@@ -107,8 +107,9 @@ async def get_profile(workspace_id) -> Profile:
 
 
 async def data_store(workspace_id) -> str:
-    """`graph` or `delta`: which path this workspace's ingest writes through."""
-    return (await get_profile(workspace_id)).data_store
+    """`delta` or `graph`: which path this workspace's ingest writes through."""
+    from opencortyx.core.dataplane.mode import data_store as _data_store
+    return await _data_store(workspace_id)
 
 
 async def save_profile(workspace_id, *, name=None, mode=None, data_store=None) -> tuple[Profile, dict]:
@@ -127,6 +128,8 @@ async def save_profile(workspace_id, *, name=None, mode=None, data_store=None) -
         stmt = pg_insert(Workspace).values(workspace_id=after.workspace_id, **vals)
         await db.execute(stmt.on_conflict_do_update(index_elements=["workspace_id"], set_=vals))
         await db.commit()
+    from opencortyx.core.dataplane.mode import forget
+    forget(after.workspace_id)
     await ensure_central_node(after.workspace_id, after)
     return after, changed
 

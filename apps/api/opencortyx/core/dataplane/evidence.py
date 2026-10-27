@@ -232,11 +232,8 @@ async def collect(workspace_id, *, from_asset: Optional[bool] = None):
     """Batch the pointers of everything written inside into a few ledger writes. `from_asset`
     (default: when the workspace's data lives in Delta) also links each node to its assets."""
     if from_asset is None:
-        try:
-            from opencortyx.knowledge.workspace import data_store
-            from_asset = (await data_store(workspace_id)) == "delta"
-        except Exception:                                    # noqa: BLE001 - a lookup never fails an ingest
-            from_asset = False
+        from opencortyx.core.dataplane.mode import uses_delta
+        from_asset = await uses_delta(workspace_id)
     c = Collector(workspace_id, bool(from_asset))
     token = _collector.set(c)
     try:

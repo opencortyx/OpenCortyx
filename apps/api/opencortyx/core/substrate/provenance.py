@@ -125,7 +125,7 @@ class _Walker:
             # and its `source_ref` (its document) leads to the asset like a chunk node's did.
             gone = [i for i in missing if i not in self.nodes]
             if gone:
-                from opencortyx.ingest.unstructured.dataplane import hydrate
+                from opencortyx.core.dataplane.passages import hydrate
                 for n in await hydrate(self.org, gone):
                     self.nodes[str(n.id)] = n
 
@@ -262,8 +262,8 @@ async def provenance(workspace_id, node_ids: Sequence, *, query: str = "", store
                 continue
             words = _terms(str(p.get("quote") or ""))
             score = (len(q & words) / len(q)) if q else 0.0
-            prev = best_p.get(p["asset_id"])
-            if prev is None or score > prev[0]:
+            held = best_p.get(p["asset_id"])
+            if held is None or score > held[0]:
                 best_p[p["asset_id"]] = (score, p)
         if not best_p:
             continue

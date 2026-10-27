@@ -430,15 +430,6 @@ async def _run_pipeline(query: str, ctx: RetrieveContext, stream: bool):
         grounded, unsupported = await trust.verify_grounding(
             ans, _grounding_blocks(pkg), threshold=rc.grounding_threshold())
 
-    if pkg.get("data"):
-        # A number the answer states must be one the query result holds - a sum the model did in its
-        # head, or a figure it remembered, is unsupported however fluent the sentence around it.
-        extra = trust.unsupported_numbers(ans, [str(c.get("text") or "") for c in pkg.get("citations") or []]
-                                          + [_rows_text(pkg["data"])])
-        if extra:
-            unsupported = list(dict.fromkeys([*(unsupported or []), *extra]))
-            grounded = False
-
     if rc.grounding_mode() == "entailment" and not grounded:
         yield _abstain("Answer was not entailed by the retrieved context (grounding gate).",
                        trust_score=trust_score)
@@ -470,11 +461,6 @@ def _clarify_text(choices: list) -> str:
         opts = " or ".join(f"{o.get('label')} ({str(o.get('node_id'))[:8]})" for o in c.get("candidates") or [])
         parts.append(f'"{c.get("mention")}" matches more than one record: {opts}. Which one do you mean?')
     return " ".join(parts) or _ABSTAIN
-
-
-def _rows_text(data: dict) -> str:
-    rows = (data or {}).get("rows") or []
-    return " ".join(" ".join("" if v is None else str(v) for v in r) for r in rows)
 
 
 async def _answer_query_inner(query: str, ctx: RetrieveContext) -> dict:

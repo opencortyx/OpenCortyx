@@ -90,3 +90,17 @@ def row_key(row: dict, key_columns=(), occurrences: dict | None = None) -> str:
     n = occurrences.get(digest, 0)
     occurrences[digest] = n + 1
     return f"{digest}:{n}"
+
+
+def arrow_type(values):
+    """The Arrow type a column of mixed JSON values is kept as: all numbers (or all booleans) keep
+    that type, anything mixed is text - so records with differing fields still make one table."""
+    import pyarrow as pa
+    seen = [v for v in values if v is not None]
+    if seen and all(isinstance(v, bool) for v in seen):
+        return pa.bool_()
+    if seen and all(isinstance(v, int) and not isinstance(v, bool) for v in seen):
+        return pa.int64()
+    if seen and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in seen):
+        return pa.float64()
+    return pa.string()

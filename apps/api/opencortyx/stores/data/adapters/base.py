@@ -36,6 +36,13 @@ class Filter:
     op: str
     value: object = None
 
+    def values(self) -> list:
+        """The values of an `in` filter, as a list (one value becomes a list of one)."""
+        v = self.value
+        if v is None:
+            return []
+        return list(v) if isinstance(v, (list, tuple, set, frozenset)) else [v]
+
 
 class SourceAdapter(Protocol):
     def schema(self, source: str | None = None) -> list[TableSchema]:

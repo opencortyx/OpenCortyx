@@ -62,7 +62,7 @@ class ArrowSQLAdapter:
                 where.append(f"{col} IS NULL")
             elif f.op == "in":
                 keys = []
-                for j, v in enumerate(f.value or []):
+                for j, v in enumerate(f.values()):
                     params[f"p{i}_{j}"] = v
                     keys.append(f":p{i}_{j}")
                 where.append(f"{col} IN ({', '.join(keys)})" if keys else "1 = 0")

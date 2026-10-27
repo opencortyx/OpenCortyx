@@ -182,6 +182,7 @@ class Views:
             self.con.execute("SET lock_configuration = true")
 
     def add(self, ref: AssetRef) -> Optional[str]:
+        source: Optional[str]
         if ref.storage == "external" and ref.format in ADAPTED:
             return self._add_adapted(ref)
         if ref.storage == "external" and ref.format in ("postgres", "mysql", "sqlite"):

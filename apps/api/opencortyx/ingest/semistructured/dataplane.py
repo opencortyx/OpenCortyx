@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from typing import Iterable, Optional
 
 from opencortyx.core.observability import get_logger
-from opencortyx.stores.data.layout import SEMISTRUCTURED
+from opencortyx.stores.data.layout import SEMISTRUCTURED, arrow_type
 
 log = get_logger(__name__)
 _NS = uuid.uuid5(uuid.NAMESPACE_URL, "opencortyx/semistructured-attribute")
@@ -45,18 +45,6 @@ def record_row(record_id: str, index: int, value, *, sync_run: Optional[str] = N
     return row
 
 
-def _column_type(values: list):
-    import pyarrow as pa
-    seen = [v for v in values if v is not None]
-    if seen and all(isinstance(v, bool) for v in seen):
-        return pa.bool_()
-    if seen and all(isinstance(v, int) and not isinstance(v, bool) for v in seen):
-        return pa.int64()
-    if seen and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in seen):
-        return pa.float64()
-    return pa.string()
-
-
 def to_table(rows: list[dict]):
     """Rows with differing fields and mixed types as one typed Arrow table: a field whose values are
     all numbers (or all booleans) keeps that type, anything mixed is text."""
@@ -74,7 +62,7 @@ def to_table(rows: list[dict]):
         elif n in _SYSTEM:
             t = pa.string()
         else:
-            t = _column_type(vals)
+            t = arrow_type(vals)
         if t == pa.string():
             vals = [None if v is None else (v if isinstance(v, str) else json.dumps(v) if isinstance(v, bool) else str(v))
                     for v in vals]

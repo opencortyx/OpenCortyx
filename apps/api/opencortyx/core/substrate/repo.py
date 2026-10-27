@@ -217,15 +217,15 @@ class NodeRepo:
 
         With `include_passages` (the retrieval workflow's repo), an id the graph does not have may be
         a chunk of a workspace whose documents live in Delta: it comes back as the node-shaped chunk
-        record, read from the data store (ingest/unstructured/dataplane.py). Read-only - a write path
+        record, read from the data store (core/dataplane/passages.py). Read-only - a write path
         never sees one, so no chunk is ever written into the graph by accident."""
         ids = [str(i) for i in node_ids if i is not None]
         by_id = {str(n.id): n for n in await self.graph.get_nodes(as_uuid(workspace_id), ids)}
         if self.include_passages:
             missing = [i for i in dict.fromkeys(ids) if i not in by_id]
             if missing:
-                from opencortyx.ingest.unstructured import dataplane as _udata
-                for n in await _udata.hydrate(workspace_id, missing):
+                from opencortyx.core.dataplane.passages import hydrate
+                for n in await hydrate(workspace_id, missing):
                     by_id[str(n.id)] = n
         return [by_id[i] for i in dict.fromkeys(ids) if i in by_id]
 
