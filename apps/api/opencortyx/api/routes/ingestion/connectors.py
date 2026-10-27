@@ -111,6 +111,21 @@ async def test_connector(connector_id: str, user: CurrentUser = Depends(require_
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"lake read failed: {e}")
         return {"ok": True, "tables": len(tables or [])}
+    if kind == "mongodb":                        # read through its adapter, never SQL
+        try:
+            from opencortyx.stores.data.adapters.mongodb import MongoAdapter, database_of
+            dsn = resolve_connector_dsn(c.config or {})
+
+            def _count():
+                a = MongoAdapter(dsn, database_of(dsn))
+                try:
+                    return len(a.collections())
+                finally:
+                    a.close()
+            n = await anyio.to_thread.run_sync(_count)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"connection failed: {e}")
+        return {"ok": True, "tables": n, "note": f"{n} collection(s), read in place."}
     try:
         dsn = resolve_connector_dsn(c.config or {})
         if not dsn:

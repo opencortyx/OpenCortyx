@@ -30,6 +30,7 @@ import uuid
 from typing import Any, Optional
 
 from opencortyx.core.substrate import NodeRepo
+from opencortyx.ingest.semistructured import dataplane as _sdp
 from opencortyx.ingest.walkers.semistructured import SemiStructuredWalker
 
 _repo = NodeRepo()
@@ -750,7 +751,7 @@ class _Walker:
 
         from opencortyx.core.dataplane import evidence
         if det_key is not None:
-            self._last_unit = (asset, det_key, quote)
+            self._last_unit = (asset, getattr(self, "_record_key", None) or det_key, quote)
         asset, key, quote = getattr(self, "_last_unit", None) or (None, None, None)
         if evidence.current() is not None or not asset or key is None:
             return contextlib.nullcontext()
@@ -772,6 +773,7 @@ class _Walker:
                           path=""):
         if depth <= 1:
             self._record_nodes = {}
+            self._record_key = det_prefix         # the record a nested node's evidence opens
         fm = dict(field_map or {})
         if self.spec:
             sp = self._ix_promotions
@@ -1140,8 +1142,11 @@ async def ingest_json(workspace_id: uuid.UUID, data: Any, *, source_label: str =
                       embed_nodes: bool = False, mapping: Optional[dict] = None,
                       collect_ids: bool = False,
                       walk_spec: Optional[dict] = None, auto_zip: bool = True,
-                      checksum: Optional[str] = None, replace: bool = False) -> dict:
-    """Walk a parsed JSON payload into the graph. A `Source` node is created for provenance; a list
+                      checksum: Optional[str] = None, replace: bool = False,
+                      external: Optional[dict] = None) -> dict:
+    """Walk a parsed JSON payload into the graph. `external` ({format, location, connector_id}):
+    the payload was read from a source that stays where it is (a MongoDB collection) - with the
+    workspace's data in Delta it is registered in place instead of stored. A `Source` node is created for provenance; a list
     root attaches each element under it (HAS_RECORD), an object root walks directly.
 
     `mapping` (Mode A, guided) overrides the auto rules for each top-level record field —
@@ -1174,11 +1179,31 @@ async def ingest_json(workspace_id: uuid.UUID, data: Any, *, source_label: str =
                                               **({"checksum": checksum, "__checksum": checksum}
                                                  if checksum else {})},
                                   collection_id=collection_id, node_id=src_id)
+    delta_mode = await _uses_delta(workspace_id)
+    rows: list = []
     if _plain(spec, mapping, root_type):
         walker = SemiStructuredWalker(workspace_id=workspace_id, repo=_repo, max_depth=max_depth, max_array=max_array,
                                       default_node_type=_KEYNODE)
-        res = await walker.walk(data, source_label=source_label, collection_id=collection_id,
-                                root_id=src.id)
+        if delta_mode:
+            # One walk per record, each inside its own evidence unit: a node opens its record.
+            res = {"nodes": 0, "edges": 0}
+            seen_types: dict = {}
+            elems = list(enumerate(data[:max_records])) if isinstance(data, list) else [(0, data)]
+            for i, elem in elems:
+                rid = f"{source_label}:{i}" if isinstance(data, list) else source_label
+                rows.append(_sdp.record_row(rid, i, elem))
+                with _record_unit(src.id, rid, elem):
+                    r = await walker.walk(elem, source_label=source_label, collection_id=collection_id,
+                                          root_id=src.id, path_suffix=str(i) if isinstance(data, list) else "")
+                res["nodes"] += r["nodes"]
+                res["edges"] += r["edges"]
+                for t, ids in (r.get("created_by_type") or {}).items():
+                    seen_types.setdefault(t, []).extend(ids)
+            await _store_records(workspace_id, src.id, rows, source_label, seen_types,
+                                 collection_id, spec, external)
+        else:
+            res = await walker.walk(data, source_label=source_label, collection_id=collection_id,
+                                    root_id=src.id)
         if checksum:
             await _repo.patch_properties(workspace_id, [src.id], {"__ingested_ok": True}, bump_version=False)
         out = {"status": "ok", "duplicate": False, "source": source_label, "source_id": str(src.id),
@@ -1196,16 +1221,23 @@ async def ingest_json(workspace_id: uuid.UUID, data: Any, *, source_label: str =
     if isinstance(data, list):
         for i, elem in enumerate(data[:max_records]):
             if isinstance(elem, dict):
+                if delta_mode:
+                    rows.append(_sdp.record_row(f"{source_label}:{i}", i, elem))
                 await walker.walk_object(_prep(elem), key=root_type or "record", parent_id=src.id,
                                          edge_type="HAS_RECORD", depth=1, det_prefix=f"{source_label}:{i}",
                                          field_map=mapping, type_override=rtype)
                 records += 1
     elif isinstance(data, dict):
+        if delta_mode:
+            rows.append(_sdp.record_row(source_label, 0, data))
         await walker.walk_object(_prep(data), key=root_type or "record", parent_id=src.id,
                                  edge_type="HAS_RECORD", depth=1, det_prefix=source_label,
                                  field_map=mapping, type_override=rtype)
         records = 1
     await walker.resolve_declared_edges()   # declared join rules within this file
+    if delta_mode:
+        await _store_records(workspace_id, src.id, rows, source_label, walker.created, collection_id, spec,
+                             external)
     if checksum:
         # Stamped LAST: a crash before this point leaves no `__ingested_ok`, so the next upload
         # re-walks instead of being skipped forever as an unchanged duplicate.
@@ -1218,6 +1250,70 @@ async def ingest_json(workspace_id: uuid.UUID, data: Any, *, source_label: str =
            "unresolved_joins": walker.unresolved_joins[:50]}
     if collect_ids:                           # per-type created ids — for per-NODE extractor attachment
         out["created_by_type"] = walker.created
+    return out
+
+
+async def ingest_mongo_source(workspace_id: uuid.UUID, connector_id, collection_id=None,
+                              only=None, max_records: int = 100000) -> dict:
+    """A MongoDB database: each collection walked like a JSON file of its documents - the same
+    KeyNodes, HAS_<KEY> edges, references and categorical values - read through the adapter
+    (stores/data/adapters/mongodb.py) with the documents never copied: with the workspace's data in
+    Delta each collection is registered as an external SemiStructuredAsset."""
+    import anyio
+
+    from opencortyx.core.dataplane.connectors import connector_url
+    from opencortyx.stores.data.adapters.mongodb import MongoAdapter, database_of
+    url = await connector_url(workspace_id, connector_id)
+    adapter = await anyio.to_thread.run_sync(lambda: MongoAdapter(url, database_of(url)))
+    try:
+        names = await anyio.to_thread.run_sync(adapter.collections)
+        if only:
+            names = [n for n in names if n in set(only)]
+        out = {"status": "ok", "collections": 0, "records": 0, "nodes": 0, "edges": 0, "per_collection": []}
+        db = adapter.db.name
+        for name in names:
+            docs = await anyio.to_thread.run_sync(lambda n=name: list(adapter.documents(n, limit=max_records)))
+            if not docs:
+                continue
+            res = await ingest_json(workspace_id, docs, source_label=f"mongodb:{db}.{name}",
+                                    collection_id=collection_id, max_records=max_records, collect_ids=True,
+                                    external={"format": "mongodb", "location": name,
+                                              "connector_id": connector_id})
+            out["collections"] += 1
+            for k in ("records", "nodes", "edges"):
+                out[k] += int(res.get(k) or 0)
+            out["per_collection"].append({"collection": name, "source_id": res.get("source_id"),
+                                          "records": res.get("records")})
+        out["source_key"] = f"mongodb:{db}"
+        return out
+    finally:
+        adapter.close()
+
+
+async def _uses_delta(workspace_id) -> bool:
+    from opencortyx.ingest.structured.dataplane import uses_delta
+    return await uses_delta(workspace_id)
+
+
+def _record_unit(asset_id, record_id: str, value):
+    """The record everything written while walking it rests on (core/dataplane/evidence.py)."""
+    import json as _json
+
+    from opencortyx.core.dataplane import evidence
+    quote = _json.dumps(value, ensure_ascii=False, default=str)[:300] if value is not None else None
+    return evidence.unit(asset_id, "record", record_id, quote=quote, extractor="semistructured walker")
+
+
+async def _store_records(workspace_id, asset_id, rows, source_label, created: dict, collection_id, spec,
+                         external: Optional[dict] = None):
+    """The records into Delta, the fields as Attribute nodes, the declared joins as JOINS_TO."""
+    types = [t for t, ids in (created or {}).items() if ids]
+    fmt = source_label.rsplit(".", 1)[-1].lower() if "." in str(source_label) else "json"
+    out = await _sdp.store_records(workspace_id, asset_id, rows, name=source_label, fmt=fmt,
+                                   source_key=f"json:{source_label}", record_types=types,
+                                   collection_id=collection_id, external=external)
+    if (spec or {}).get("edge_rules"):
+        out["joins"] = await _sdp.link_join_rules(workspace_id, asset_id, spec["edge_rules"], types)
     return out
 
 
@@ -1242,6 +1338,8 @@ async def ingest_json_stream(workspace_id: uuid.UUID, source, *, source_label: s
     n = 0
     spec = walk_spec or {}
     plain = _plain(spec, mapping, root_type)
+    delta_mode = await _uses_delta(workspace_id)
+    rows: list = []
     walker = _Walker(workspace_id, collection_id, max_depth=max_depth, max_array=max_array,
                      embed_nodes=embed_nodes, spec=spec)
     simple = SemiStructuredWalker(workspace_id=workspace_id, repo=_repo, max_depth=max_depth, max_array=max_array,
@@ -1257,8 +1355,12 @@ async def ingest_json_stream(workspace_id: uuid.UUID, source, *, source_label: s
                 break
             if plain and isinstance(rec, (dict, list)):
                 # one Source for the file; `path_suffix` keeps same-shaped records on distinct ids
-                res = await simple.walk(rec, source_label=source_label, collection_id=collection_id,
-                                        root_id=src.id, path_suffix=str(n))
+                rid = f"{source_label}:{n}"
+                if delta_mode:
+                    rows.append(_sdp.record_row(rid, n, rec))
+                with _record_unit(src.id, rid, rec):
+                    res = await simple.walk(rec, source_label=source_label, collection_id=collection_id,
+                                            root_id=src.id, path_suffix=str(n))
                 walker.counts["nodes"] += res["nodes"]
                 walker.counts["edges"] += res["edges"]
                 for t, ids in res["created_by_type"].items():
@@ -1270,6 +1372,8 @@ async def ingest_json_stream(workspace_id: uuid.UUID, source, *, source_label: s
                 rec = apply_declared_zips(rec, spec.get("zips") or [])
                 if auto_zip:
                     rec = normalize_parallel_arrays(rec)
+                if delta_mode:
+                    rows.append(_sdp.record_row(f"{source_label}:{n}", n, rec))
                 await walker.walk_object(rec, key=root_type or "record", parent_id=src.id,
                                          edge_type="HAS_RECORD", depth=1,
                                          det_prefix=f"{source_label}:{n}",
@@ -1278,6 +1382,9 @@ async def ingest_json_stream(workspace_id: uuid.UUID, source, *, source_label: s
                 if reporter is not None and n % 500 == 0:
                     await reporter.step(1, f"Streamed {n} records", "running", walker.counts["nodes"])
         await walker.resolve_declared_edges()   # declared join rules within this file
+        if delta_mode and rows:
+            await _store_records(workspace_id, src.id, rows, source_label, walker.created,
+                                 collection_id, spec)
     finally:
         if opened is not None:
             opened.close()

@@ -115,6 +115,8 @@ SQL_DIALECTS = {
     "mysql": ("mysql+pymysql", 3306),
     "mssql": ("mssql+pymssql", 1433),     # pymssql wheels bundle the TDS client; pyodbc needs system ODBC drivers the image lacks
     "oracle": ("oracle+oracledb", 1521),
+    # Not SQL: read through its adapter (stores/data/adapters/mongodb.py), live, never copied.
+    "mongodb": ("mongodb", 27017),
 }
 #: File databases: the `database` field is the file's path.
 FILE_DIALECTS = {"sqlite": "sqlite"}

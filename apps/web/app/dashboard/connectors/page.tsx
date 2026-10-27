@@ -22,6 +22,7 @@ const ENGINES: { value: string; label: string; server?: boolean; uri: string; fa
   { value: "sqlite", label: "SQLite (file)", uri: "sqlite:////app/spider2-databases/chinook.sqlite" },
   { value: "mssql", label: "SQL Server", uri: "mssql+pyodbc://user:pass@host:1433/db?driver=ODBC+Driver+18+for+SQL+Server" },
   { value: "oracle", label: "Oracle", uri: "oracle+oracledb://user:pass@host:1521/?service_name=XEPDB1" },
+  { value: "mongodb", label: "MongoDB (read in place)", server: true, uri: "mongodb://reader:pass@host:27017/db" },
 ];
 const ENGINE = (k: string) => ENGINES.find((e) => e.value === k) || ENGINES[ENGINES.length - 1];
 const FAMILY = (k: string): Family => ENGINE(k).family || "sql";
@@ -121,6 +122,7 @@ const CATALOG_CONNECTORS: CatalogConnector[] = [
   { id: "sqlite", name: "SQLite", category: "Databases", kind: "sqlite" },
   { id: "mssql", name: "SQL Server", category: "Databases", kind: "mssql" },
   { id: "oracle", name: "Oracle", category: "Databases", kind: "oracle" },
+  { id: "mongodb", name: "MongoDB", category: "Databases", kind: "mongodb" },
   { id: "s3", name: "AWS S3", category: "Data Lakehouses", kind: "s3" },
   { id: "gcs", name: "Google Cloud Storage", category: "Data Lakehouses", kind: "gcs" },
   { id: "adls", name: "Azure ADLS", category: "Data Lakehouses", kind: "adls" },
@@ -274,6 +276,7 @@ function getKindDisplayName(kind: string): string {
     sqlite: "SQLite",
     mssql: "SQL Server",
     oracle: "Oracle",
+    mongodb: "MongoDB",
     s3: "AWS S3",
     adls: "Azure ADLS",
     gcs: "Google Cloud Storage",

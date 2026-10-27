@@ -92,30 +92,41 @@ def write_rows(workspace_id, asset_id, batches: Callable[[], Iterable], key_colu
 def profile(workspace_id, ref, columns: list[dict]) -> dict:
     """{column: {null_pct, distinct_count, value_set?}} over an asset's view (sync)."""
     from opencortyx.stores.data import Views
-    out: dict = {}
     with Views(workspace_id, [ref]) as v:
         view = next(iter(v.names), None)
-        if view is None:
-            return out
-        total = v.query(f'SELECT count(*) AS n FROM "{view}"').column("n")[0].as_py() or 0
-        for c in columns:
-            name = c["name"]
-            q = '"' + str(name).replace('"', '""') + '"'
-            try:
-                r = v.query(f'SELECT count(*) - count({q}) AS nulls, approx_count_distinct({q}) AS d '
-                            f'FROM "{view}"').to_pylist()[0]
-            except Exception:                                 # noqa: BLE001 - a type DuckDB cannot count
-                continue
-            prof = {"null_pct": round(100.0 * (r["nulls"] or 0) / total, 2) if total else 0.0,
-                    "distinct_count": int(r["d"] or 0), "pii": is_pii(name)}
-            if _is_category(c, prof, total):
-                vs = v.query(f'SELECT CAST({q} AS VARCHAR) AS v, count(*) AS n FROM "{view}" '
-                             f'WHERE {q} IS NOT NULL GROUP BY 1 ORDER BY 2 DESC LIMIT {VALUE_SET_MAX + 1}'
-                             ).to_pylist()
-                if len(vs) <= VALUE_SET_MAX:
-                    prof["value_set"] = {x["v"]: int(x["n"]) for x in vs}
-            out[name] = prof
+        return _profile_view(v, view, columns) if view else {}
+
+
+def _profile_view(v, view: str, columns: list[dict]) -> dict:
+    out: dict = {}
+    total = v.query(f'SELECT count(*) AS n FROM "{view}"').column("n")[0].as_py() or 0
+    for c in columns:
+        name = c["name"]
+        q = '"' + str(name).replace('"', '""') + '"'
+        try:
+            r = v.query(f'SELECT count(*) - count({q}) AS nulls, approx_count_distinct({q}) AS d '
+                        f'FROM "{view}"').to_pylist()[0]
+        except Exception:                                     # noqa: BLE001 - a type DuckDB cannot count
+            continue
+        prof = {"null_pct": round(100.0 * (r["nulls"] or 0) / total, 2) if total else 0.0,
+                "distinct_count": int(r["d"] or 0), "pii": is_pii(name)}
+        if _is_category(c, prof, total):
+            vs = v.query(f'SELECT CAST({q} AS VARCHAR) AS v, count(*) AS n FROM "{view}" '
+                         f'WHERE {q} IS NOT NULL GROUP BY 1 ORDER BY 2 DESC LIMIT {VALUE_SET_MAX + 1}'
+                         ).to_pylist()
+            if len(vs) <= VALUE_SET_MAX:
+                prof["value_set"] = {x["v"]: int(x["n"]) for x in vs}
+        out[name] = prof
     return out
+
+
+def profile_arrow(table, columns: list[dict]) -> dict:
+    """`profile` over an Arrow table in memory - a sample of a source that is not copied."""
+    from opencortyx.stores.data import Views
+    with Views(None, [], root="") as v:
+        v.con.register("sample", table)
+        v.names["sample"] = "sample"
+        return _profile_view(v, "sample", columns)
 
 
 def _is_category(col: dict, prof: dict, total: int) -> bool:

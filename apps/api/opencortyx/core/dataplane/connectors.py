@@ -41,8 +41,8 @@ def attach_string(url: str, kind: str) -> str:
     raise ValueError(f"{kind!r} is not attached natively")
 
 
-async def attach_dsn(workspace_id, connector_id, kind: str) -> str:
-    """The connector's ATTACH string, from its (decrypted) connection string."""
+async def connector_url(workspace_id, connector_id) -> str:
+    """The connector's (decrypted) connection URL - for an adapter, for this use only."""
     from opencortyx.core.db import V2Session
     from opencortyx.core.security.secrets import resolve_connector_dsn
     from opencortyx.domain import Connector
@@ -50,4 +50,9 @@ async def attach_dsn(workspace_id, connector_id, kind: str) -> str:
         row = await db.get(Connector, uuid.UUID(str(connector_id)))
     if row is None or str(row.workspace_id) != str(workspace_id):
         raise LookupError("connector not found in this workspace")
-    return attach_string(resolve_connector_dsn(row.config or {}), kind)
+    return resolve_connector_dsn(row.config or {})
+
+
+async def attach_dsn(workspace_id, connector_id, kind: str) -> str:
+    """The connector's ATTACH string, from its (decrypted) connection string."""
+    return attach_string(await connector_url(workspace_id, connector_id), kind)

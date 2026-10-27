@@ -659,6 +659,19 @@ def v2_ingest_sql(self, workspace_id: str, dsn: str = None, schema: str = None,
             # A table-format connector (Delta / Iceberg / Hudi) has tables in a lake, not a DSN.
             async with V2Session() as _db:
                 _c = await _db.get(Connector, uuid.UUID(connector_id))
+            if _c and ((_c.config or {}).get("kind") or "").lower() == "mongodb":
+                from opencortyx.ingest.semistructured.ingest import ingest_mongo_source
+                rep = _reporter(run_id)
+                if rep:
+                    await rep.start(1)
+                res = await ingest_mongo_source(oid, connector_id,
+                                                uuid.UUID(collection_id) if collection_id else None)
+                _queue_embed_pass(workspace_id, res)
+                if rep:
+                    await rep.set_source(res.get("source_key"))
+                    await rep.finish("completed", result=res)
+                await _close_ingestion(ingestion_id, "completed", run_id)
+                return res
             if _c and ((_c.config or {}).get("kind") or "").lower() in datalake.DATALAKE_FORMATS:
                 from opencortyx.ingest.structured.ingest import ingest_lake_source
                 rep = _reporter(run_id)

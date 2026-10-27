@@ -142,6 +142,20 @@ def scan_sql(ref: AssetRef, root: str, workspace_id) -> Optional[str]:
     raise DataStoreError(f"no reader for external format {fmt!r}")
 
 
+#: External formats read through an adapter (stores/data/adapters) rather than a DuckDB extension.
+ADAPTED = ("mongodb", "mssql", "sqlserver", "oracle", "snowflake", "bigquery", "redshift", "trino",
+           "clickhouse", "databricks", "athena", "db2")
+
+
+def adapter_for(ref: "AssetRef"):
+    """The adapter that reads `ref`'s source; `ref.dsn` holds its connection string for this use only."""
+    if ref.format == "mongodb":
+        from opencortyx.stores.data.adapters.mongodb import MongoAdapter, database_of
+        return MongoAdapter(ref.dsn, ref.options.get("database") or database_of(ref.dsn))
+    from opencortyx.stores.data.adapters.arrow_sql import ArrowSQLAdapter
+    return ArrowSQLAdapter(ref.dsn)
+
+
 class Views:
     """One connection with one workspace's assets as views. Use as a context manager."""
 
@@ -168,6 +182,8 @@ class Views:
             self.con.execute("SET lock_configuration = true")
 
     def add(self, ref: AssetRef) -> Optional[str]:
+        if ref.storage == "external" and ref.format in ADAPTED:
+            return self._add_adapted(ref)
         if ref.storage == "external" and ref.format in ("postgres", "mysql", "sqlite"):
             from opencortyx.stores.data.adapters import attach
             self._attached += 1
@@ -180,6 +196,19 @@ class Views:
                 return None
         view = layout.view_name(ref.name, self._taken)
         self.con.execute(f'CREATE VIEW "{view}" AS SELECT * FROM {source}')
+        self.names[view] = ref.asset_id
+        return view
+
+    def _add_adapted(self, ref: AssetRef) -> str:
+        """A source DuckDB cannot attach: its adapter's scan, capped, registered for this connection."""
+        import pyarrow as pa
+        adapter = adapter_for(ref)
+        source = ref.options.get("table") or ref.location
+        cap = int(_settings().DATA_ADAPTER_MAX_ROWS)
+        batches = list(adapter.scan(source, filters=ref.options.get("filters"), limit=cap))
+        table = pa.Table.from_batches(batches) if batches else pa.table({})
+        view = layout.view_name(ref.name, self._taken)
+        self.con.register(view, table)
         self.names[view] = ref.asset_id
         return view
 

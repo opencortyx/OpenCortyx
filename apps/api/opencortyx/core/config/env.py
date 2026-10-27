@@ -148,6 +148,8 @@ class V2Settings(BaseSettings):
     DATA_DUCKDB_INGEST_THREADS: int = 0
     #: A read that runs longer is interrupted: one question must not hold a worker for minutes.
     DATA_QUERY_TIMEOUT_SECONDS: float = 30.0
+    #: Most rows one scan of a source read through an adapter (MongoDB, SQL Server, ...) hands DuckDB.
+    DATA_ADAPTER_MAX_ROWS: int = 1_000_000
     MAX_REQUEST_BYTES: int = 50 * 1024 * 1024
     RATELIMIT_ENABLED: bool = True
     RATELIMIT_WINDOW_SECONDS: float = 60.0

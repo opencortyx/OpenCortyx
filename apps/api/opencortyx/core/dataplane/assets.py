@@ -95,8 +95,12 @@ async def refs(workspace_id, kinds: Optional[Iterable[str]] = None, ids: Optiona
     out = []
     for row in await list_assets(workspace_id, kinds=kinds, ids=ids):
         ref = AssetRef.from_row(row)
-        if row.storage == "external" and row.format in ("postgres", "mysql", "sqlite") and row.connector_id:
-            from opencortyx.core.dataplane.connectors import attach_dsn
-            ref.dsn = await attach_dsn(workspace_id, row.connector_id, row.format)
+        if row.storage == "external" and row.connector_id:
+            from opencortyx.core.dataplane.connectors import attach_dsn, connector_url
+            from opencortyx.stores.data.duck import ADAPTED
+            if row.format in ("postgres", "mysql", "sqlite"):
+                ref.dsn = await attach_dsn(workspace_id, row.connector_id, row.format)
+            elif row.format in ADAPTED:
+                ref.dsn = await connector_url(workspace_id, row.connector_id)
         out.append(ref)
     return out
