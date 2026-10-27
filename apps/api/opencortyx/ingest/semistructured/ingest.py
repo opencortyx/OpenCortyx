@@ -24,6 +24,7 @@ Customer's `id`") are drawn while the file is walked when both ends are in it, a
 rules the resolution engine applies across files. Bounded by `max_depth` / `max_array`. Each node stores a `text` summary (so lexical retrieval works); embeddings
 are optional (`embed_nodes`) since a big payload would otherwise make one embed call per node.
 """
+import contextlib
 import os
 import re
 import uuid
@@ -1185,21 +1186,17 @@ async def ingest_json(workspace_id: uuid.UUID, data: Any, *, source_label: str =
         walker = SemiStructuredWalker(workspace_id=workspace_id, repo=_repo, max_depth=max_depth, max_array=max_array,
                                       default_node_type=_KEYNODE)
         if delta_mode:
-            # One walk per record, each inside its own evidence unit: a node opens its record.
-            res = {"nodes": 0, "edges": 0}
-            seen_types: dict = {}
-            elems = list(enumerate(data[:max_records])) if isinstance(data, list) else [(0, data)]
-            for i, elem in elems:
-                rid = f"{source_label}:{i}" if isinstance(data, list) else source_label
-                rows.append(_sdp.record_row(rid, i, elem))
-                with _record_unit(src.id, rid, elem):
-                    r = await walker.walk(elem, source_label=source_label, collection_id=collection_id,
-                                          root_id=src.id, path_suffix=str(i) if isinstance(data, list) else "")
-                res["nodes"] += r["nodes"]
-                res["edges"] += r["edges"]
-                for t, ids in (r.get("created_by_type") or {}).items():
-                    seen_types.setdefault(t, []).extend(ids)
-            await _store_records(workspace_id, src.id, rows, source_label, seen_types,
+            # The same walk as always (the same graph), each top-level record's writes inside its own
+            # evidence unit - a node opens its record - and every record a row in the data store.
+            is_list = isinstance(data, list)
+            elems = list(enumerate(data[:max_records])) if is_list else [(0, data)]
+            rows = [_sdp.record_row(f"{source_label}:{i}" if is_list else source_label, i, e) for i, e in elems]
+            if is_list:
+                walker.record_unit = lambda idx, item: _record_unit(src.id, f"{source_label}:{idx}", item)
+            with (contextlib.nullcontext() if is_list else _record_unit(src.id, source_label, data)):
+                res = await walker.walk(data, source_label=source_label, collection_id=collection_id,
+                                        root_id=src.id)
+            await _store_records(workspace_id, src.id, rows, source_label, res.get("created_by_type") or {},
                                  collection_id, spec, external)
         else:
             res = await walker.walk(data, source_label=source_label, collection_id=collection_id,
