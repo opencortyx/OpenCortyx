@@ -285,8 +285,7 @@ def _secret_sql(provider: str, opts: dict, secret_val: str) -> str:
 
 def _connect(storage_cfg: dict, fmt: str):
     """A DuckDB connection with the format extension loaded + the lake's credentials registered."""
-    import duckdb
-    con = duckdb.connect()
+    from opencortyx.stores.data import DataStoreError, connect
     provider = (storage_cfg.get("kind") or storage_cfg.get("provider") or "local").lower()
     exts = []
     if provider != "local":
@@ -297,11 +296,11 @@ def _connect(storage_cfg: dict, fmt: str):
         exts.append("aws")                       # needed for credential_chain / STS
     if fmt in ("delta", "iceberg"):
         exts.append(fmt)
-    for ext in dict.fromkeys(exts):
-        try:
-            con.execute(f"INSTALL {ext}; LOAD {ext};")
-        except Exception as e:
-            raise RuntimeError(f"DuckDB extension '{ext}' unavailable (needs internet to install): {e}")
+    # The image carries these extensions (stores/data/duck.py), so nothing is downloaded here.
+    try:
+        con = connect(extensions=exts, purpose="ingest")
+    except DataStoreError as e:
+        raise RuntimeError(str(e)) from e
 
     if provider == "local":
         return con

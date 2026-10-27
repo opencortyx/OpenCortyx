@@ -22,6 +22,9 @@ from opencortyx.core.substrate import NodeRepo
 from opencortyx.domain import Workspace
 
 MODES = ("person", "team")
+#: Where a workspace's data is written: `graph` (chunk and row nodes, as before) or `delta` (Delta
+#: tables through stores/data, the graph holding knowledge only).
+DATA_STORES = ("graph", "delta")
 #: The central node's type in each mode.
 CENTRAL_TYPES = {"person": "Person", "team": "Organization"}
 #: Stamped on the central node, so it is told apart from a Person or Organization read from data.
@@ -43,6 +46,7 @@ class Profile:
     workspace_id: uuid.UUID
     name: str
     mode: str
+    data_store: str = "graph"
 
     @property
     def central_type(self) -> str:
@@ -77,6 +81,12 @@ def clean_mode(mode) -> str:
     return mode
 
 
+def clean_data_store(value) -> str:
+    if value not in DATA_STORES:
+        raise InvalidWorkspace(f"data_store: {value!r} is not one of {list(DATA_STORES)}")
+    return value
+
+
 def _default(workspace_id) -> Profile:
     """A workspace with no row yet — one made before this table, or by a test. `GRAPH_ROOT_NAME` is
     the install's seed for a name, as it was for the setting this replaced."""
@@ -90,23 +100,31 @@ async def get_profile(workspace_id) -> Profile:
         row = await db.get(Workspace, org)
     if row is None:
         return _default(org)
-    return Profile(workspace_id=org, name=row.name or "", mode=row.mode if row.mode in MODES else "person")
+    store = getattr(row, "data_store", None)
+    return Profile(workspace_id=org, name=row.name or "", mode=row.mode if row.mode in MODES else "person",
+                   data_store=store if store in DATA_STORES else "graph")
 
 
-async def save_profile(workspace_id, *, name=None, mode=None) -> tuple[Profile, dict]:
+async def data_store(workspace_id) -> str:
+    """`graph` or `delta`: which path this workspace's ingest writes through."""
+    return (await get_profile(workspace_id)).data_store
+
+
+async def save_profile(workspace_id, *, name=None, mode=None, data_store=None) -> tuple[Profile, dict]:
     """Write the fields given (None = leave as it is), then bring the central node in line.
     Returns (profile, {field: {"from", "to"}} for what actually changed). Raises InvalidWorkspace,
     writing nothing, on a bad value."""
     before = await get_profile(workspace_id)
     after = Profile(workspace_id=before.workspace_id,
                     name=before.name if name is None else clean_name(name),
-                    mode=before.mode if mode is None else clean_mode(mode))
+                    mode=before.mode if mode is None else clean_mode(mode),
+                    data_store=before.data_store if data_store is None else clean_data_store(data_store))
     changed = {k: {"from": getattr(before, k), "to": getattr(after, k)}
-               for k in ("name", "mode") if getattr(before, k) != getattr(after, k)}
+               for k in ("name", "mode", "data_store") if getattr(before, k) != getattr(after, k)}
     async with V2Session() as db:
-        stmt = pg_insert(Workspace).values(workspace_id=after.workspace_id, name=after.name, mode=after.mode)
-        await db.execute(stmt.on_conflict_do_update(
-            index_elements=["workspace_id"], set_={"name": after.name, "mode": after.mode}))
+        vals = {"name": after.name, "mode": after.mode, "data_store": after.data_store}
+        stmt = pg_insert(Workspace).values(workspace_id=after.workspace_id, **vals)
+        await db.execute(stmt.on_conflict_do_update(index_elements=["workspace_id"], set_=vals))
         await db.commit()
     await ensure_central_node(after.workspace_id, after)
     return after, changed

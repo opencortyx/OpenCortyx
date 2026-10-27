@@ -23,6 +23,7 @@ from opencortyx.domain.graph_tree import (
 )
 from opencortyx.domain.resolution import ResolutionDecision, ResolutionKey
 from opencortyx.domain.chat import ChatMessage, ChatThread
+from opencortyx.domain.data import DataAsset, Evidence, SourceKey
 
 __all__ = [
     "V2_SCHEMA", "V2Base", "uuid_pk",
@@ -34,4 +35,5 @@ __all__ = [
     "GraphAsset", "GraphAssetTag", "GraphRoot", "GraphTagRequest", "GraphTreeRun",
     "ResolutionDecision", "ResolutionKey",
     "ChatMessage", "ChatThread",
+    "DataAsset", "Evidence", "SourceKey",
 ]

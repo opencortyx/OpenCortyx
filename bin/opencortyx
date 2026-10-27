@@ -167,10 +167,11 @@ cmd_connect() {
   esac
 }
 
-# The three stores keep their state in Docker volumes, so one backup covers all of them: the control
-# plane (PostgreSQL), the graph (NebulaGraph) and the search surfaces (Qdrant). The stack is stopped
-# for the copy, because a database's files are only consistent when nothing is writing to them.
-STORE_VOLUMES="postgres_data qdrant_data nebula_meta_data nebula_storage_data"
+# The stores keep their state in Docker volumes, so one backup covers all of them: the control plane
+# (PostgreSQL), the graph (NebulaGraph), the search surfaces (Qdrant) and the managed data (Delta
+# tables). The stack is stopped for the copy, because a database's files are only consistent when
+# nothing is writing to them.
+STORE_VOLUMES="postgres_data qdrant_data nebula_meta_data nebula_storage_data data_store"
 
 project_name() { env_or COMPOSE_PROJECT_NAME opencortyx; }
 
@@ -225,7 +226,12 @@ cmd_restore() {
   fi
   compose stop >/dev/null
   for volume in $STORE_VOLUMES; do
-    [ -f "$dir/$volume.tar.gz" ] || die "$dir is missing $volume.tar.gz"
+    if [ ! -f "$dir/$volume.tar.gz" ]; then
+      # A backup made before the volume existed (data_store arrived in 0.2.0) restores without it.
+      grep -q "\"$volume\"" "$dir/manifest.json" && die "$dir is missing $volume.tar.gz"
+      info "Skipping $volume: this backup predates it"
+      continue
+    fi
     info "Restoring $volume"
     volume_archive "$volume" load "$dir/$volume.tar.gz"
   done

@@ -130,6 +130,24 @@ class V2Settings(BaseSettings):
     #: share. Kept this long after the last upload of the same file, longer while a run still needs it.
     UPLOAD_STORE: str = "/data/uploads"
     UPLOAD_RETENTION_HOURS: int = 168
+
+    # ── Data store (stores/data: Delta tables written by delta-rs, read by DuckDB) ─────────────
+    #: Managed data lives here, one folder per workspace (`unstructured`, `structured/<asset>`,
+    #: `semistructured/<asset>`). A volume the API and every worker share.
+    DATA_ROOT: str = "/data/store"
+    #: DuckDB extensions (delta, iceberg, httpfs, postgres, mysql, sqlite...) baked into the image, so
+    #: nothing is downloaded when a query runs. One missing here is installed on first use instead.
+    DUCKDB_EXTENSION_DIR: str = "/opt/duckdb/extensions"
+    #: One DuckDB connection's ceiling. It queries and keeps nothing, so this is working memory only;
+    #: keep it under the smallest worker budget (docs/memory-budget.md).
+    DATA_DUCKDB_MEMORY_LIMIT: str = "512MB"
+    DATA_DUCKDB_THREADS: int = 2
+    #: Reading a source file at ingest (a large CSV, a lake table) runs in a worker child, which is
+    #: recycled at 1.5 GB: more memory than a question gets, and every core (0 = DuckDB's default).
+    DATA_DUCKDB_INGEST_MEMORY_LIMIT: str = "1GB"
+    DATA_DUCKDB_INGEST_THREADS: int = 0
+    #: A read that runs longer is interrupted: one question must not hold a worker for minutes.
+    DATA_QUERY_TIMEOUT_SECONDS: float = 30.0
     MAX_REQUEST_BYTES: int = 50 * 1024 * 1024
     RATELIMIT_ENABLED: bool = True
     RATELIMIT_WINDOW_SECONDS: float = 60.0

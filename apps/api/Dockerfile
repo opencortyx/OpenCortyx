@@ -64,6 +64,15 @@ TextCrossEncoder('Xenova/ms-marco-MiniLM-L-12-v2', cache_dir='/cache', lazy_load
 # in the Hugging Face cache on the same volume, where the Models page downloads models
 # (core/inference/hf_hub.py: config, tokenizer and safetensors only).
 RUN HF_HOME=/cache/huggingface python -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-0.6B', allow_patterns=['*.json', '*.safetensors', '*.txt', '*.model', '*.tiktoken', '*.jinja'])"
+# The DuckDB extensions the data store reads with (stores/data/duck.py: BUNDLED), for this image's
+# DuckDB version and architecture, so no query downloads one - an offline install reads lakes and
+# databases like any other. Outside /cache on purpose: they belong to the image's DuckDB, and a
+# volume would keep an old version's across updates.
+ENV DUCKDB_EXTENSION_DIR=/opt/duckdb/extensions
+RUN python -c "import duckdb; \
+con = duckdb.connect(config={'extension_directory': '/opt/duckdb/extensions'}); \
+[con.install_extension(e) for e in ('delta', 'iceberg', 'httpfs', 'aws', 'azure', 'postgres', 'mysql', 'sqlite')]; \
+[con.load_extension(e) for e in ('delta', 'iceberg', 'httpfs', 'postgres', 'mysql', 'sqlite')]"
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     if [ "$INSTALL_RERANK" = "1" ]; then \

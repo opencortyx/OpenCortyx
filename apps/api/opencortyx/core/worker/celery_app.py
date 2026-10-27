@@ -215,6 +215,8 @@ celery_app.conf.update(
         ("embedding-sweep-tick", "opencortyx.sweep_unembedded", 600.0),
         # Removes stored uploads past their retention (core/uploads.py).
         ("upload-sweep-tick", "opencortyx.sweep_uploads", 3600.0),
+        # Compacts and vacuums the managed Delta tables (stores/data).
+        ("data-compact-tick", "opencortyx.compact_data", 6 * 3600.0),
     )},
     task_soft_time_limit=settings.TASK_SOFT_TIME_LIMIT,
     task_time_limit=settings.TASK_TIME_LIMIT,

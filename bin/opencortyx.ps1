@@ -183,10 +183,11 @@ function Invoke-Connect($client, $key) {
     }
 }
 
-# The three stores keep their state in Docker volumes, so one backup covers all of them: the control
-# plane (PostgreSQL), the graph (NebulaGraph) and the search surfaces (Qdrant). The stack is stopped
-# for the copy, because a database's files are only consistent when nothing is writing to them.
-$StoreVolumes = @("postgres_data", "qdrant_data", "nebula_meta_data", "nebula_storage_data")
+# The stores keep their state in Docker volumes, so one backup covers all of them: the control plane
+# (PostgreSQL), the graph (NebulaGraph), the search surfaces (Qdrant) and the managed data (Delta
+# tables). The stack is stopped for the copy, because a database's files are only consistent when
+# nothing is writing to them.
+$StoreVolumes = @("postgres_data", "qdrant_data", "nebula_meta_data", "nebula_storage_data", "data_store")
 
 function Get-ProjectName {
     $name = Get-EnvValue "COMPOSE_PROJECT_NAME"
@@ -241,7 +242,13 @@ function Invoke-Restore($dir) {
     Invoke-Compose stop | Out-Null
     foreach ($volume in $StoreVolumes) {
         $file = Join-Path $dir "$volume.tar.gz"
-        if (-not (Test-Path $file)) { Die "$dir is missing $volume.tar.gz" }
+        if (-not (Test-Path $file)) {
+            # A backup made before the volume existed (data_store arrived in 0.2.0) restores without it.
+            $listed = (Get-Content (Join-Path $dir "manifest.json") -Raw) -match ('"' + $volume + '"')
+            if ($listed) { Die "$dir is missing $volume.tar.gz" }
+            Info "Skipping ${volume}: this backup predates it"
+            continue
+        }
         Info "Restoring $volume"
         Copy-StoreVolume $volume "load" $file
     }

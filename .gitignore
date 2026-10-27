@@ -6,7 +6,7 @@
 .tok
 
 # Local data
-data/
+/data/
 backups/
 *.dump
 

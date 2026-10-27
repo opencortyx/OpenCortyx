@@ -168,6 +168,12 @@ SCHEMA: list[dict[str, Any]] = [
      "group": "Retrieval", "help": "Collapse retrieved turns to one slot per parent session (with a small "
      "bonus per extra matching turn), so near-duplicate turns from one session don't crowd out other "
      "sessions' evidence. The multi-session recall lever."},
+    {"key": "data_store", "label": "Data store", "kind": "select", "options": ["graph", "delta"],
+     "group": "Workspace", "scope": "workspace",
+     "help": "Where this workspace's data is written. 'graph': documents, rows and records become "
+     "graph nodes (as before). 'delta': they are kept as Delta tables beside the graph, which then "
+     "holds only the knowledge extracted from them, each fact pointing at the chunk, row or record "
+     "it came from. Applies to files read after the change; re-ingest to move existing ones."},
     {"key": "mode", "label": "Workspace mode", "kind": "select", "options": ["person", "team"],
      "group": "Workspace", "scope": "workspace",
      "help": "'person': the workspace is you — the central node is a Person and the personal Person "

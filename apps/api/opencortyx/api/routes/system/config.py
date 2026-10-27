@@ -9,13 +9,13 @@ from opencortyx.core.db import V2Session
 router = APIRouter()
 
 #: Settings fields that belong to the caller's workspace, mapped to the profile field each one is.
-_WORKSPACE_FIELDS = {"workspace_name": "name", "mode": "mode"}
+_WORKSPACE_FIELDS = {"workspace_name": "name", "mode": "mode", "data_store": "data_store"}
 
 
 async def _workspace_values(workspace_id) -> dict:
     from opencortyx.knowledge.workspace import get_profile
     p = await get_profile(workspace_id)
-    return {"workspace_name": p.name, "mode": p.mode}
+    return {"workspace_name": p.name, "mode": p.mode, "data_store": p.data_store}
 
 
 @router.get("/config")
@@ -41,7 +41,9 @@ async def update_config(spec: ConfigUpdate, user: CurrentUser = Depends(require_
     """Persist + apply editable runtime knobs (parallelism / cache / abstain / permissions).
     Infra knobs (pool size, replica URL, embedding model) are ignored here — they need a restart."""
     from opencortyx.core.config import runtime as rc
-    from opencortyx.knowledge.workspace import InvalidWorkspace, clean_mode, clean_name, save_profile
+    from opencortyx.knowledge.workspace import (
+        InvalidWorkspace, clean_data_store, clean_mode, clean_name, save_profile,
+    )
     values = dict(spec.values or {})
     ws = {_WORKSPACE_FIELDS[k]: values.pop(k) for k in list(values) if k in _WORKSPACE_FIELDS}
     ws = {k: v for k, v in ws.items() if v is not None}
@@ -49,6 +51,7 @@ async def update_config(spec: ConfigUpdate, user: CurrentUser = Depends(require_
     try:
         # checked before anything is written, so one bad field saves nothing at all
         clean_name(ws.get("name")), clean_mode(ws.get("mode", "person"))
+        clean_data_store(ws.get("data_store", "graph"))
         updated = await rc.update(values)
         _, ws_changed = await save_profile(user.workspace_id, **ws) if ws else (None, {})
     except (rc.InvalidSetting, InvalidWorkspace) as exc:

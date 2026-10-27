@@ -56,6 +56,8 @@ x-api-volumes: &api-volumes
   - model_cache:/cache
   # Uploaded files wait here for their worker; the queue carries a reference (core/uploads.py).
   - uploads:/data/uploads
+  # Managed data: chunks, rows and records as Delta tables (stores/data, DATA_ROOT).
+  - data_store:/data/store
   - ${OPENCORTYX_FILES_ROOT:-./data/files}:/host:ro
 
 x-after-setup: &after-setup
@@ -468,3 +470,4 @@ volumes:
   nebula_storage_data:
   model_cache:
   uploads:
+  data_store:

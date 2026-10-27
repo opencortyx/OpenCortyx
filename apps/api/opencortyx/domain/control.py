@@ -84,6 +84,10 @@ class Workspace(V2Base):
     workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False, default="")
     mode: Mapped[str] = mapped_column(String(20), nullable=False, default="person")
+    #: Where this workspace's data is written: `graph` (as before: chunk and row nodes) or `delta`
+    #: (Delta tables, with only knowledge in the graph - docs/knowledge-layer-implementation.md).
+    data_store: Mapped[str] = mapped_column(String(10), nullable=False, default="graph",
+                                            server_default="graph")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

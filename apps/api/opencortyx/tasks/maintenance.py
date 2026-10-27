@@ -84,6 +84,17 @@ def v2_sweep_uploads(self):
     return async_to_sync(_run)()
 
 
+@celery_app.task(bind=True, queue="maintenance", name="opencortyx.compact_data")
+def v2_compact_data(self):
+    """Compact the managed Delta tables and vacuum what no version from the last week needs
+    (stores/data). Small files from many one-document commits otherwise slow every read."""
+    from opencortyx.stores.data import compact
+    out = compact()
+    if out["tables"] or out["failed"]:
+        log.info("data.compacted", **out)
+    return out
+
+
 @celery_app.task(bind=True, queue="maintenance", name="opencortyx.reap_stale_runs")
 def v2_reap_stale_runs(self):
     """Fail ingest runs whose worker died, so a half-finished asset cannot pass for a finished one.

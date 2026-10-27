@@ -22,9 +22,10 @@ postgres_data.tar.gz
 nebula_meta_data.tar.gz
 nebula_storage_data.tar.gz
 qdrant_data.tar.gz
+data_store.tar.gz
 ```
 
-`restore` asks for confirmation, stops the stack, replaces all three stores with the backup and
+`restore` asks for confirmation, stops the stack, replaces every store with the backup (a backup from before `data_store` existed restores without it) and
 starts everything again. Set `OPENCORTYX_YES=1` to skip the prompt in scripts.
 
 If a service fails to come back after `backup` (a container can fail to start under memory

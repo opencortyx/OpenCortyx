@@ -77,6 +77,12 @@ pymssql = "^2.3.0"                    # SQL Server connector driver (no system O
 #    (snowflake-sqlalchemy, sqlalchemy-bigquery, databricks-sql, pyathena) stay opt-in — install
 #    them in the image if you use those sources. ──
 "duckdb-engine" = "^0.17.0"           # DuckDB → Parquet / CSV / Iceberg / Delta files (table formats)
+# The data store (stores/data): delta-rs writes the managed Delta tables, DuckDB reads them and every
+# external source. Pinned together - the DuckDB `delta` extension must read what delta-rs writes, and
+# tests/test_data_store.py proves it for each operation. sqlglot parses question-time SQL for the guard.
+duckdb = "1.5.5"
+deltalake = "~1.6"
+sqlglot = "^30.0"
 # Avro has no pyarrow reader; fastavro streams it into Arrow so .avro joins the other
 # columnar formats on the structured path instead of falling through to the CSV sniffer.
 fastavro = "^1.9.0"

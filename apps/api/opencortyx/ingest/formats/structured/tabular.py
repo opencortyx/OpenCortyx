@@ -50,9 +50,9 @@ def _q(s: str) -> str:
 
 
 def _con():
-    import duckdb
-    con = duckdb.connect()
-    return con
+    """DuckDB through the data store, the one module that opens it (stores/data)."""
+    from opencortyx.stores.data import connect
+    return connect(purpose="ingest")
 
 
 def _register_excel(con, path: str, sheet: Optional[str]) -> str:
