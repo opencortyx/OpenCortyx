@@ -150,6 +150,15 @@ def cmd_ask(args) -> dict:
     rows, lat = [], []
     with open(out / "results.jsonl", "w", encoding="utf-8") as fh:
         for q in qs:
+            retrieved = None
+            if q["outcome"] == "ANSWERED" and q["expect"]:
+                # Retrieval alone: is the evidence in what /context returns (the bench's measure)?
+                try:
+                    c = api.call("POST", "/context", json={"query": q["question"]}) or {}
+                    ctext = _norm((c.get("context") or "") + " " + json.dumps(c.get("data") or {}))
+                    retrieved = all(any(_norm(m) in ctext for m in g) for g in q["expect"])
+                except Exception:                            # noqa: BLE001
+                    retrieved = False
             t0 = time.perf_counter()
             try:
                 res = api.call("POST", "/answer", json={"query": q["question"], "save_chat": False})
@@ -159,7 +168,7 @@ def cmd_ask(args) -> dict:
             ms = round((time.perf_counter() - t0) * 1000)
             lat.append(ms)
             s = score(q, res or {})
-            row = {**q, **s, "ms": ms, "error": err, "answer": (res or {}).get("answer"),
+            row = {**q, **s, "ms": ms, "error": err, "retrieved": retrieved, "answer": (res or {}).get("answer"),
                    "route": (res or {}).get("route"), "unknown_reason": (res or {}).get("unknown_reason"),
                    "citations": [c.get("source") or c.get("node_id") for c in (res or {}).get("citations") or []][:8]}
             rows.append(row)
@@ -177,6 +186,11 @@ def cmd_ask(args) -> dict:
         "p50_ms": statistics.median(lat) if lat else 0,
         "p95_ms": sorted(lat)[int(0.95 * (len(lat) - 1))] if lat else 0,
         "by_type": {t: round(100 * sum(r["resolved"] for r in rs) / len(rs), 1) for t, rs in sorted(by_type.items())},
+        # retrieval accuracy: questions with an answer whose evidence /context returned
+        "retrieval_rate": round(100 * sum(1 for r in rows if r.get("retrieved")) /
+                                max(1, sum(1 for r in rows if r.get("retrieved") is not None)), 1),
+        "retrieval_by_type": {t: round(100 * sum(1 for r in rs if r.get("retrieved")) / len(rs), 1)
+                              for t, rs in sorted(by_type.items()) if any(r.get("retrieved") is not None for r in rs)},
         "outcomes": dict(Counter(r["outcome"] for r in rows)),
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")

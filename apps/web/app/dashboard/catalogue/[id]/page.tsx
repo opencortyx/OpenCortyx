@@ -727,7 +727,7 @@ function AssetData({ assetId }: { assetId: string }) {
   }, [assetId, offset]);
   if (!page) return <div className="text-sm text-stone-500 p-4">Loading…</div>;
   if (!page.available) {
-    return <div className="text-sm text-stone-500 p-4">This asset's data lives in the graph (a workspace from before 0.2.0). Its parts are under Lineage.</div>;
+    return <div className="text-sm text-stone-500 p-4">This asset&apos;s data lives in the graph (a workspace from before 0.2.0). Its parts are under Lineage.</div>;
   }
   if (page.error) return <div className="text-sm text-red-600 p-4">The source could not be read: {page.error}</div>;
   return (

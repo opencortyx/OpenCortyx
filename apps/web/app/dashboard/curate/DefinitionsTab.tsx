@@ -92,7 +92,7 @@ export default function DefinitionsTab({ flash }: { flash: (text: string, ok?: b
 
       <section className="rounded-lg border border-stone-200 bg-white p-4 space-y-3">
         <h3 className="font-semibold flex items-center gap-2"><Filter size={16} /> Segments</h3>
-        <p className="text-xs text-stone-500">A named filter, e.g. "active licence" = <code>status = 'ACTIVE'</code>. Metrics can be scoped to one.</p>
+        <p className="text-xs text-stone-500">A named filter, e.g. &ldquo;active licence&rdquo; = <code>status = &apos;ACTIVE&apos;</code>. Metrics can be scoped to one.</p>
         <List kind="Segment" render={(d) => (<>
           <div className="font-medium">{d.name}</div>
           <code className="text-xs text-stone-600">{d.condition}</code> <span className="text-xs text-stone-400">on {d.table} · {d.rows_matched} rows</span>
