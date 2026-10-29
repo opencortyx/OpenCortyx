@@ -208,6 +208,10 @@ def _crag_rejects(trust_score: float, threshold: float, pkg: dict) -> bool:
     """
     if trust_score >= threshold:
         return False
+    if pkg.get("low_relevance"):
+        # Retrieval found nothing closely resembling the question and said so instead of refusing:
+        # here neither the citation count nor its confidence vouches - the judge alone decides.
+        return True
     enough_citations = len(pkg.get("citations") or []) >= rc.crag_min_citations()
     confident_retrieval = float(pkg.get("confidence") or 0.0) >= threshold
     return not (enough_citations or confident_retrieval)
@@ -318,7 +322,8 @@ async def _run_pipeline(query: str, ctx: RetrieveContext, stream: bool):
                 "tokens_prompt": spend["in"], "tokens_completion": spend["out"],
                 "tokens_total": spend["in"] + spend["out"], **extra, **base}
 
-    if pkg.get("abstained"):
+    if pkg.get("abstained") or (pkg.get("low_relevance") and getattr(ctx, "fast", False)):
+        # Fast mode runs no relevance judge, so a low-relevance context is refused as before.
         if stream:
             yield {"type": "token", "text": _abstain([])["answer"]}
         yield _abstain(pkg.get("caveats", []), confidence=pkg.get("confidence", 0.0))
@@ -329,17 +334,21 @@ async def _run_pipeline(query: str, ctx: RetrieveContext, stream: bool):
     util_spec = await resolve_model(ctx.workspace_id, "utility")
     na_phrases, rf_phrases = await _abstain_phrases(ctx.workspace_id)
 
-    # CRAG evaluate step — fast mode skips this extra LLM round-trip
-    _crag = await score_relevance(ctx.workspace_id, query, context, util_spec=util_spec,
-                                  fast=getattr(ctx, "fast", False))
+    threshold = ctx.abstain_threshold
+    if threshold is None:
+        threshold = rc.abstain_threshold()
+    # CRAG evaluate step - only where its verdict can decide the answer (`_crag_rejects`): with solid
+    # retrieval it is advisory, so it is not run and the trust score is retrieval's own measured
+    # confidence. Fast mode skips it too. On a CPU model the judge costs a minute or more.
+    if getattr(ctx, "fast", False) or not _crag_rejects(0.0, threshold, pkg):
+        _crag = {"trust_score": round(float(pkg.get("confidence") or 0.0), 3), "tokens_in": 0, "tokens_out": 0,
+                 "eval_context": context[:6000]}
+    else:
+        _crag = await score_relevance(ctx.workspace_id, query, context, util_spec=util_spec)
     trust_score = _crag["trust_score"]
     spend["in"] += _crag["tokens_in"]
     spend["out"] += _crag["tokens_out"]
     eval_context = _crag["eval_context"]
-
-    threshold = ctx.abstain_threshold
-    if threshold is None:
-        threshold = rc.abstain_threshold()
     if _crag_rejects(trust_score, threshold, pkg):
         if stream:
             yield {"type": "token", "text": _ABSTAIN}

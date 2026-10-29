@@ -442,6 +442,61 @@ payload ─► Delta `semistructured/<asset_id>` (one row per record, json_path,
 
 ---
 
+### 3.5 Semantic layer: what the data means (Mapper)
+
+Records stay in Delta. What they *mean* - entity types, identifiers, links - is declared once and
+kept where meaning already lives, never in a store of its own:
+
+| What | Where | Written by |
+|---|---|---|
+| Entity and relationship types; a type's identifier (`identify_by`); a link (a reference rule) | `type_registry` | the Detector, or a person (Ontology, Mapper) |
+| Which assets hold a type, at which record path, each property's field, materialize or not | a Mapper mapping's `knowledge` section | the Detector (status `auto` / `draft`) or a person in the Mapper |
+| The entities and links themselves | the graph - only for a type marked *materialize*, or with `knowledge_publish` | `POST /schema-mappings/publish` / the detection task |
+
+Two ways to get there:
+
+- **Default (Mode A).** After an ingestion settles, the Detector (`knowledge/semantic/detector.py`)
+  reads the data: record sources (a table's rows; an object or list inside JSON/YAML/XML records),
+  groups of one shape, field profiles, identifiers (never empty, never repeated; the one others refer
+  to wins; one whose values all come from a larger key elsewhere is a reference), types (groups whose
+  keys hold the same values), links (inclusion dependencies) and names (the model picks among the
+  words the data uses). Confident proposals are `auto` mappings; the rest wait as `draft`. Nothing is
+  written to the graph unless `knowledge_publish` is on (**Mode A.1**).
+- **Mapper (Mode B).** A person declares entities and relationships in a mapping's Knowledge panel:
+  type, identifier (or several fields), sources and their fields, materialize, relationship name,
+  direction and fields. Validate reports missing sources and columns, empty or repeated identifiers,
+  references to nothing and ambiguous joins; Preview shows the entities and links the data yields;
+  every save is a version that can be restored. A curated mapping is never overwritten by detection.
+
+Each type is one logical table over every asset bound to it (`knowledge/semantic/views.py`); the
+data route, validation, preview, publishing and extractor inputs (`source.data: {type: ...}`) all
+read it, so what the Mapper shows is what a question sees.
+
+**Text inside records.** The Detector profiles each text field's words per value: free text (a
+median of 8 words or more) is `prose`, a short value `text`, and of the nearly unique short text
+fields the model picks the one that names a record (the type's `label`, "Named by" in the Mapper).
+Nothing is read out of a field until a person picks extractors for it in the Knowledge panel
+("Extract from text"; `Property.extract`). Then each record's text runs through them
+(`knowledge/semantic/text_fields.py`) - when the record's ingest settles, and over existing records
+when the choice is saved:
+
+| Type published? | Input | What the extractor's `source -> emitted` edge connects |
+|---|---|---|
+| yes | the record's own entity node, carrying the text | the record and what its text names (Customer "Alice Smith" -MENTIONS-> Product "X200") |
+| no | a data input (asset + record key), never written | the asset; the output cites the row |
+
+What is extracted is then resolved by name (`resolution/mentions.py`): an extracted entity whose
+normalised label names exactly one published record is drawn SAME_AS it - a person named in a
+ticket meets the customer of that name. Two records with the same name are not guessed between.
+Published records are labelled by their name for this, the key kept as a property. The same name
+resolution runs for entities extracted from documents, in each asset's resolution pass.
+
+**Choices survive detection.** "Publish to graph", the extractors picked for a field and the Add
+data choice "Also add to the knowledge graph" (for tables and JSON, applied to the types detection
+finds in that upload; for documents, the extractors picked there read the text) are a person's; the Detector keeps them when it rewrites a mapping's structure.
+"Re-detect this mapping" takes the Detector's current proposal for one mapping - its own assets, its
+links to other files - as a new version, the previous one kept, the choices kept.
+
 ## 4. Answer / retrieval flow (edited)
 
 Today's pipeline, `L0 → L1 → L2 → L3 → L4 → answer`, stays. There are three additions:

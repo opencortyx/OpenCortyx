@@ -19,25 +19,62 @@ def _toks(s: str) -> int:
     return max(0, len(s or "") // 4)
 
 
+#: The context is judged in windows of this many characters, at most WINDOWS of them, best one wins:
+#: an answer in the fifth passage of a long context is as relevant as one in the first. (Judging only
+#: the first 6,000 characters said NO to contexts whose answer sat further down.)
+WINDOW_CHARS = 4000
+WINDOWS = 4
+
+
+def _windows(context: str) -> list[str]:
+    """Consecutive windows of `context`, cut at line ends (a context block is one line)."""
+    out, cur = [], ""
+    for line in (context or "").splitlines(keepends=True):
+        if cur and len(cur) + len(line) > WINDOW_CHARS:
+            out.append(cur)
+            cur = ""
+            if len(out) == WINDOWS:
+                break
+        cur += line[:WINDOW_CHARS]
+    if cur and len(out) < WINDOWS:
+        out.append(cur)
+    return out or [""]
+
+
 async def score_relevance(workspace_id, query: str, context: str, util_spec=None, fast: bool = False) -> dict:
     """CRAG relevance evaluation → {trust_score, tokens_in, tokens_out, eval_context}. Fast mode skips
-    the LLM round-trip (retrieval is already abstain-gated). Never raises (0.5 on error)."""
+    the LLM round-trip (retrieval is already abstain-gated). Never raises (0.5 on error).
+
+    The score is graded, not a YES/NO coin: the model's own likelihood of YES against NO
+    (core/inference/choice.py), calibrated against the same prompt with no context, for each window
+    of the context; the best window is the score. A model that answers only in text (a remote API)
+    is asked for the word, as before."""
+    import math
     if fast:
         return {"trust_score": 1.0, "tokens_in": 0, "tokens_out": 0, "eval_context": context[:6000]}
     # lazy import to avoid a load-time cycle (answer.py imports this module's owner indirectly)
+    from opencortyx.core.inference import choice
     from opencortyx.retrieval.answering.answer import _answer_prompt, _DEFAULT_RELEVANCE
-    from opencortyx.core.inference.llm import complete
-    eval_context = context[:6000]
     tmpl = await _answer_prompt(workspace_id, "builtin:answer.relevance", _DEFAULT_RELEVANCE)
-    prompt = tmpl.replace("{context}", eval_context).replace("{query}", query)
     sys = "You only output YES or NO."
+    best, best_window, spent = 0.0, "", 0
     try:
-        out = await complete(prompt, system=sys, max_tokens=10, temperature=0.0, model_spec=util_spec)
-        return {"trust_score": 1.0 if "yes" in (out or "").lower() else 0.0,
-                "tokens_in": _toks(prompt) + _toks(sys), "tokens_out": _toks(out),
-                "eval_context": eval_context}
+        for window in _windows(context):
+            prompt = tmpl.replace("{context}", window).replace("{query}", query)
+            c = await choice.choose(prompt, ["YES", "NO"], model_spec=util_spec, system=sys,
+                                    baseline=tmpl.replace("{context}", "").replace("{query}", query))
+            if c is None:
+                break
+            p = 1.0 / (1.0 + math.exp(-(c.scores[0] - c.scores[1])))   # P(YES) over YES and NO
+            spent += _toks(prompt)
+            if p > best:
+                best, best_window = p, window
+            if best >= 0.5:
+                break                                   # the context answers it: no need to read further
+        return {"trust_score": round(best, 3), "tokens_in": spent + _toks(sys), "tokens_out": 0,
+                "eval_context": best_window or context[:6000]}
     except Exception:
-        return {"trust_score": 0.5, "tokens_in": 0, "tokens_out": 0, "eval_context": eval_context}
+        return {"trust_score": 0.5, "tokens_in": 0, "tokens_out": 0, "eval_context": context[:6000]}
 
 
 class TrustScoring(Capability):

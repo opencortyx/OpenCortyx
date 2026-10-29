@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { contextV2Api } from "@/lib/api/contextV2";
 import { AlertCircle, CheckCircle2, Trash2, RefreshCw, ChevronDown, ChevronUp, FileText, Wand2 } from "lucide-react";
+import ReviewTabs from "@/components/layout/ReviewTabs";
 import PageHeader from "@/components/layout/PageHeader";
 import Button from "@/components/ui/Button";
 
@@ -114,6 +115,7 @@ export default function QuarantinePage() {
         icon={AlertCircle}
         description="What did not make it into the graph: model outputs that could not be parsed, and writes the substrate recorded instead of dropping."
       />
+      <ReviewTabs />
 
       <WriteLosses onLoaded={setWritesOpen} />
 

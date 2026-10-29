@@ -37,6 +37,8 @@ _YEAR = re.compile(r"\b(19|20)\d{2}\b")
 _QUARTER = re.compile(r"\b((?:19|20)\d{2})-?Q([1-4])\b", re.I)
 _ROUND = re.compile(r"\b(?:rounded to|to)\s+(one|two|three|\d)\s+decimal", re.I)
 _NUM = {"one": 1, "two": 2, "three": 3}
+#: A record id as people write one: letters and digits together ("LIC-1057", "C101", "P-003").
+_IDENT = re.compile(r"(?<![\w-])(?=[\w.-]*\d)(?=[\w.-]*[A-Za-z])[A-Za-z0-9][\w.-]{2,}(?<![.-])")
 
 
 def _q(name: str) -> str:
@@ -119,6 +121,57 @@ def _group_column(question: str, t: Table, filtered: list[str]):
     return None
 
 
+def decimals(question: str) -> Optional[int]:
+    """"rounded to two decimals" -> 2."""
+    m = _ROUND.search(question)
+    if not m:
+        return None
+    g = m.group(1).lower()
+    return int(g) if g.isdigit() else _NUM.get(g)
+
+
+def rounded(expr: str, digits: int) -> str:
+    """`expr` to exactly `digits` decimals, as text: 106001 reads "106001.00", as asked."""
+    return f"printf('%.{int(digits)}f', round({expr}, {int(digits)}))"
+
+
+def identifiers(question: str) -> list[str]:
+    """Record ids the question names, in order (years and quarters are not ids)."""
+    out: list[str] = []
+    for m in _IDENT.finditer(question or ""):
+        tok = m.group(0)
+        if _QUARTER.fullmatch(tok) or tok.lower() in (o.lower() for o in out):
+            continue
+        out.append(tok)
+    return out[:5]
+
+
+def is_aggregate(question: str) -> bool:
+    return bool(_RANK.search(question) or any(rx.search(question) for rx, _ in _AGG))
+
+
+def key_columns(t: Table) -> list[str]:
+    """The columns a record of `t` is identified by: declared or detected keys, else its id columns."""
+    if t.key_columns:
+        return list(t.key_columns)
+    pk = [c.name for c in t.columns if c.primary_key]
+    return pk or [c.name for c in t.columns if words(c.name)[-1:] == ["id"]]
+
+
+def lookup_plans(matches: list[tuple[str, Table]]) -> list[Plan]:
+    """`LIC-1057` and the table keyed by it: that record, every column - the row is the evidence for
+    whatever value of it the question asks for. One plan per table, in the order given."""
+    out = []
+    for token, t in matches:
+        cols = key_columns(t)
+        if not cols:
+            continue
+        cond = " OR ".join(f"lower(CAST({_q(c)} AS VARCHAR)) = {_lit(token.lower())}" for c in cols)
+        out.append(Plan(sql=f"SELECT * FROM {_q(t.view)} WHERE {cond}", tables=[t.view], method="lookup",
+                        confidence=0.9, notes=[f"record {token}"]))
+    return out
+
+
 def rule_plan(question: str, schema: Schema) -> Optional[Plan]:
     agg = next((name for rx, name in _AGG if rx.search(question)), None)
     rank = _RANK.search(question)
@@ -151,11 +204,7 @@ def rule_plan(question: str, schema: Schema) -> Optional[Plan]:
         used += u2
         tables.append(other)
     measure = _measure(question, anchor)
-    rnd = _ROUND.search(question)
-    digits = None
-    if rnd:
-        g = rnd.group(1).lower()
-        digits = int(g) if g.isdigit() else _NUM.get(g)
+    digits = decimals(question)
     frm = f"FROM {_q(anchor.view)}{joins_sql}"
     cond = f" WHERE {' AND '.join(where)}" if where else ""
     if rank:
@@ -184,7 +233,7 @@ def rule_plan(question: str, schema: Schema) -> Optional[Plan]:
         col = f"{_q(anchor.view)}.{_q(measure.name)}"
         expr = f"{agg}({col})"
         if digits is not None:
-            expr = f"round({expr}, {int(digits)})"
+            expr = rounded(expr, digits)
     group = _group_column(question, anchor, used)
     if group is not None:
         g = f"{_q(anchor.view)}.{_q(group.name)}"

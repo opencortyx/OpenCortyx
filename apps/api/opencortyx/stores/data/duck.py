@@ -160,7 +160,8 @@ class Views:
     """One connection with one workspace's assets as views. Use as a context manager."""
 
     def __init__(self, workspace_id, assets: Iterable[AssetRef], *, root: Optional[str] = None,
-                 lock: bool = False, **conn_kwargs):
+                 lock: bool = False, logical: Iterable[tuple] = (), view_names: Optional[dict] = None,
+                 **conn_kwargs):
         self.workspace_id = workspace_id
         self.root = root or _settings().DATA_ROOT
         assets = list(assets)
@@ -173,9 +174,20 @@ class Views:
         self.con = connect(extensions=sorted(exts), **conn_kwargs)
         self.names: dict[str, str] = {}                       # view -> asset_id
         self._taken: set[str] = set()
+        #: asset_id -> the view name to give it (a caller that opens a few of a workspace's assets keeps
+        #: the names the whole workspace would give them, so SQL written for the workspace still runs)
+        self._fixed = dict(view_names or {})
         self._attached = 0
         for a in assets:
             self.add(a)
+        # Views over the asset views - an object type's one logical table over every asset bound to
+        # it (knowledge/semantic/views.py). One that does not build is left out, not fatal.
+        for name, sql in logical:
+            try:
+                self.con.execute(f'CREATE VIEW "{name}" AS {sql}')
+                self.names[name] = ""
+            except Exception:                                 # noqa: BLE001
+                pass
         if lock:
             # Question-time: nothing the SQL runs can change these settings, re-enable downloads or
             # widen the limits.
@@ -195,7 +207,7 @@ class Views:
             source = scan_sql(ref, self.root, self.workspace_id)
             if source is None:
                 return None
-        view = layout.view_name(ref.name, self._taken)
+        view = self._view_name(ref)
         self.con.execute(f'CREATE VIEW "{view}" AS SELECT * FROM {source}')
         self.names[view] = ref.asset_id
         return view
@@ -208,10 +220,17 @@ class Views:
         cap = int(_settings().DATA_ADAPTER_MAX_ROWS)
         batches = list(adapter.scan(source, filters=ref.options.get("filters"), limit=cap))
         table = pa.Table.from_batches(batches) if batches else pa.table({})
-        view = layout.view_name(ref.name, self._taken)
+        view = self._view_name(ref)
         self.con.register(view, table)
         self.names[view] = ref.asset_id
         return view
+
+    def _view_name(self, ref: AssetRef) -> str:
+        fixed = self._fixed.get(ref.asset_id)
+        if fixed:
+            self._taken.add(fixed)
+            return fixed
+        return layout.view_name(ref.name, self._taken)
 
     def query(self, sql: str, params: Optional[list] = None, timeout: Optional[float] = None):
         return run(self.con, sql, params, timeout)

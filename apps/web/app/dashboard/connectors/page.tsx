@@ -1,11 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { contextV2Api, Connector, ConnectorSpec, SecretRef } from "@/lib/api/contextV2";
 import {
   Cable, Database, Plus, Trash2, Pencil, Plug, KeyRound, X, CheckCircle2, AlertCircle,
-  Loader2, Table2, ChevronDown, ChevronUp, FileCode, ShieldCheck, Bot, Copy, Terminal, Sparkles, Search, HelpCircle
-} from "lucide-react";
+  Loader2, Table2, ChevronDown, ChevronUp, FileCode, ShieldCheck, Bot, Copy, Terminal, Sparkles, Search, HelpCircle, Clock } from "lucide-react";
 import PageHeader from "@/components/layout/PageHeader";
 import Button from "@/components/ui/Button";
 
@@ -242,7 +242,9 @@ const MCP_CLIENTS: McpClient[] = [
 function getConnectorDescription(c: CatalogConnector): string {
   switch (c.category) {
     case "Databases":
-      return `Connect to your ${c.name} SQL database, introspect relational schemas, and sync catalog metadata.`;
+      return /mongo/i.test(c.name)
+        ? `Read your ${c.name} collections in place: their documents, keys and types, without copying them.`
+        : `Read your ${c.name} database in place: its tables, columns and keys, without copying them.`;
     case "Data Warehouses":
       return `Sync tables, views, and execution metrics from your ${c.name} cloud data warehouse.`;
     case "Data Lakehouses":
@@ -1001,6 +1003,12 @@ export default function ConnectorsPage() {
                   </span>
                 )}
               </button>
+              {/* Ingestion left the sidebar (lib/simple.ts): its scheduled syncs are a connection's business. */}
+              <Link href="/dashboard/ingest"
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm text-left text-stone-600 hover:bg-stone-50 hover:text-stone-900">
+                <Clock size={16} className="text-stone-400" />
+                <span className="flex-1">Scheduled syncs</span>
+              </Link>
             </div>
 
             {/* Divider */}

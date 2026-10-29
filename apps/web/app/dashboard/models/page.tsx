@@ -21,12 +21,13 @@ const PROVIDERS = [
   { id: "transformers", label: "Hugging Face model in OpenCortyx (CPU, download first)", needsKey: false, base: "" },
   { id: "fastembed", label: "fastembed (in OpenCortyx, ONNX on CPU: embedding, rerank)", needsKey: false, base: "" },
   { id: "sentence-transformers", label: "sentence-transformers (in-process, needs INSTALL_RERANK=1)", needsKey: false, base: "" },
+  { id: "spacy", label: "spaCy pipeline in OpenCortyx (entities: downloaded on first use)", needsKey: false, base: "" },
 ];
 // providers that expose a live model list at /v1/models; for `transformers`, what is downloaded;
 // for `fastembed`, every model it can run for the role
 const DISCOVERABLE = new Set(["openai", "groq", "openai_compatible", "together", "azure", "huggingface", "transformers", "fastembed"]);
 // providers with no address and no key: they run inside OpenCortyx
-const IN_PROCESS = new Set(["fastembed", "sentence-transformers", "transformers"]);
+const IN_PROCESS = new Set(["fastembed", "sentence-transformers", "transformers", "spacy"]);
 // priority tiers shown as badges (matches the model-stack matrix)
 const TIER: Record<string, { label: string; cls: string }> = {
   mandatory:   { label: "Required",    cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
@@ -45,6 +46,9 @@ const ROLES = [
   { id: "extraction", label: "Extraction", icon: Tags, tier: "recommended", wired: true,
     purpose: "Run the per-chunk extractors (entities, claims, and your custom extractors).",
     hint: "The high-volume per-chunk calls. A cheaper/faster model here cuts ingest cost; with none set, the Generation model is used. Per-extractor model overrides on each Extractor card still win." },
+  { id: "entities", label: "Entities (in-process)", icon: Tags, tier: "useful", wired: true,
+    purpose: "Read entities and how sentences connect them, from documents and free-text fields - no LLM.",
+    hint: "A spaCy pipeline from Hugging Face (Model ID like spacy/en_core_web_sm, provider spacy), run inside OpenCortyx. Used when \"Extract entities and relationships\" is ticked in Add data." },
   { id: "utility", label: "Utility / Judge", icon: Brain, tier: "recommended", wired: true,
     purpose: "The relevance check (CRAG) and the grounding / entailment judge that enforce abstention.",
     hint: "Give this a capable model to make strict (entailment) abstention reliable — a weak judge over-rejects. With none set, the Generation model is used." },

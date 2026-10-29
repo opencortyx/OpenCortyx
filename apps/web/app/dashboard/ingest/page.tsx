@@ -15,6 +15,7 @@
  * smaller scale — and it hid the summary until after every decision had already been made.
  */
 
+import { SHOW_UPLOAD_INGESTIONS } from "@/lib/simple";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { contextV2Api, Pipeline, Connector, Ingestion, BrowseSchema, SchemaSelection, ProgressRun, IngestFormats } from "@/lib/api/contextV2";
@@ -119,7 +120,8 @@ export default function IngestPage() {
     const [ingR, conR, plR] = await Promise.allSettled([
       contextV2Api.listIngestions(), contextV2Api.connectors(), contextV2Api.listPipelines(),
     ]);
-    if (ingR.status === "fulfilled") setIngestions(ingR.value?.items || []);
+    if (ingR.status === "fulfilled") setIngestions((ingR.value?.items || [])
+      .filter((i: Ingestion) => SHOW_UPLOAD_INGESTIONS || i.mode !== "one_time"));
     else {
       console.error("listIngestions failed", ingR.reason);
       const detail = (ingR.reason as any)?.response?.data?.detail || (ingR.reason as any)?.message || String(ingR.reason);

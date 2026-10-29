@@ -24,7 +24,6 @@ Customer's `id`") are drawn while the file is walked when both ends are in it, a
 rules the resolution engine applies across files. Bounded by `max_depth` / `max_array`. Each node stores a `text` summary (so lexical retrieval works); embeddings
 are optional (`embed_nodes`) since a big payload would otherwise make one embed call per node.
 """
-import contextlib
 import os
 import re
 import uuid
@@ -1144,8 +1143,9 @@ async def ingest_json(workspace_id: uuid.UUID, data: Any, *, source_label: str =
                       collect_ids: bool = False,
                       walk_spec: Optional[dict] = None, auto_zip: bool = True,
                       checksum: Optional[str] = None, replace: bool = False,
-                      external: Optional[dict] = None) -> dict:
-    """Walk a parsed JSON payload into the graph. `external` ({format, location, connector_id}):
+                      external: Optional[dict] = None, whole_data: bool = False) -> dict:
+    """Walk a parsed JSON payload into the graph. `whole_data` (Add data's "add the whole data"):
+    with the records in Delta, walk every key and value into the graph as well. `external` ({format, location, connector_id}):
     the payload was read from a source that stays where it is (a MongoDB collection) - with the
     workspace's data in Delta it is registered in place instead of stored. A `Source` node is created for provenance; a list
     root attaches each element under it (HAS_RECORD), an object root walks directly.
@@ -1186,18 +1186,17 @@ async def ingest_json(workspace_id: uuid.UUID, data: Any, *, source_label: str =
         walker = SemiStructuredWalker(workspace_id=workspace_id, repo=_repo, max_depth=max_depth, max_array=max_array,
                                       default_node_type=_KEYNODE)
         if delta_mode:
-            # The same walk as always (the same graph), each top-level record's writes inside its own
-            # evidence unit - a node opens its record - and every record a row in the data store.
+            # Nothing declared: every record a row in the data store, its fields profiled as the
+            # asset's Attributes - and no node per record or per nested object. What the records
+            # MEAN comes from a mapping (declared or detected), not from walking each one.
             is_list = isinstance(data, list)
             elems = list(enumerate(data[:max_records])) if is_list else [(0, data)]
             rows = [_sdp.record_row(f"{source_label}:{i}" if is_list else source_label, i, e) for i, e in elems]
-            if is_list:
-                walker.record_unit = lambda idx, item: _record_unit(src.id, f"{source_label}:{idx}", item)
-            with (contextlib.nullcontext() if is_list else _record_unit(src.id, source_label, data)):
+            res = {"nodes": 0, "edges": 0, "created_by_type": {}}
+            await _store_records(workspace_id, src.id, rows, source_label, {}, collection_id, spec, external)
+            if whole_data:
                 res = await walker.walk(data, source_label=source_label, collection_id=collection_id,
                                         root_id=src.id)
-            await _store_records(workspace_id, src.id, rows, source_label, res.get("created_by_type") or {},
-                                 collection_id, spec, external)
         else:
             res = await walker.walk(data, source_label=source_label, collection_id=collection_id,
                                     root_id=src.id)
@@ -1354,7 +1353,9 @@ async def ingest_json_stream(workspace_id: uuid.UUID, source, *, source_label: s
                 # one Source for the file; `path_suffix` keeps same-shaped records on distinct ids
                 rid = f"{source_label}:{n}"
                 if delta_mode:
-                    rows.append(_sdp.record_row(rid, n, rec))
+                    rows.append(_sdp.record_row(rid, n, rec))   # a row, not a node (see ingest_json)
+                    n += 1
+                    continue
                 with _record_unit(src.id, rid, rec):
                     res = await simple.walk(rec, source_label=source_label, collection_id=collection_id,
                                             root_id=src.id, path_suffix=str(n))

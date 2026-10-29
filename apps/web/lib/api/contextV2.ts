@@ -1177,6 +1177,17 @@ export const contextV2Api = {
     apiClient.get(`/api/v2/assets/${assetId}/data`, { params: { offset, limit } }).then((r) => r.data),
   listDefinitions: () =>
     apiClient.get("/api/v2/definitions").then((r) => r.data as DefinitionsList),
+  knowledgeLayer: () =>
+    apiClient.get("/api/v2/schema-mappings/knowledge").then((r) => r.data as SemanticLayer),
+  validateMapping: (id: string) =>
+    apiClient.post(`/api/v2/schema-mappings/${id}/validate`).then((r) => r.data as MappingValidation),
+  previewMapping: (id: string, limit = 10) =>
+    apiClient.get(`/api/v2/schema-mappings/${id}/preview`, { params: { limit } }).then((r) => r.data as MappingPreview),
+  mappingHistory: (id: string) =>
+    apiClient.get(`/api/v2/schema-mappings/${id}/history`).then((r) => r.data as MappingHistory),
+  /** Re-detect one mapping: a new version from what the data shows now, choices kept. */
+  redetectMapping: (id: string) =>
+    apiClient.post<SchemaMappingRecord>(`/api/v2/schema-mappings/${id}/detect`).then((r) => r.data),
   addMetric: (spec: MetricInput) =>
     apiClient.post("/api/v2/definitions/metrics", spec).then((r) => r.data),
   addSegment: (spec: SegmentInput) =>
@@ -1437,12 +1448,22 @@ export const contextV2Api = {
                                     *  the server detects the file's kind and uses that one, else its default */
                                    pipelineIds?: Record<string, string>;
                                    /** read it again even if this exact file is already in */
-                                   replace?: boolean; tags?: string[] }) => {
+                                   replace?: boolean; tags?: string[];
+                                   /** entities and relationships into the graph (records; text read without an LLM) */
+                                   extractKnowledge?: boolean;
+                                   /** the data itself into the graph too: rows, keys and values, passages */
+                                   wholeData?: boolean;
+                                   /** Custom: mappings that shape tables / JSON; extractors that read documents */
+                                   mappingIds?: string[]; extractors?: string[] }) => {
     const fd = new FormData();
     fd.append("file", file);
     const perKind = Object.fromEntries(Object.entries(opts?.pipelineIds || {}).filter(([, id]) => id));
     if (Object.keys(perKind).length) fd.append("pipeline_ids", JSON.stringify(perKind));
     if (opts?.replace) fd.append("replace", "true");
+    if (opts?.extractKnowledge) fd.append("extract_knowledge", "true");
+    if (opts?.wholeData) fd.append("whole_data", "true");
+    if (opts?.mappingIds?.length) fd.append("mapping_ids", JSON.stringify(opts.mappingIds));
+    if (opts?.extractors?.length) fd.append("extractors", JSON.stringify(opts.extractors));
     if (opts?.tags?.length) fd.append("tags", JSON.stringify(opts.tags));
     if (opts?.pipelineId) fd.append("pipeline_id", opts.pipelineId);
     if (opts?.collectionId) fd.append("collection_id", opts.collectionId);
@@ -1465,3 +1486,74 @@ export const contextV2Api = {
   updateCapability: (name: string, values: Record<string, any>) =>
     apiClient.put(`/api/v2/capabilities/${name}`, { values }).then((r) => r.data),
 };
+
+// A mapping's knowledge (knowledge/semantic): the entity types, identifiers and relationships it
+// declares, as the Detector or a person wrote them.
+export interface KnowledgeEntity {
+  type: string;
+  keys: string[];
+  kind: "entity" | "event";
+  path: string;
+  assets: { id: string; name: string; fields: Record<string, string> }[];
+  properties: KnowledgeProperty[];
+  materialize: boolean;
+  /** the property that names a record ("name", "title"): published records are labelled by it,
+   *  and a name read from text is matched against it */
+  label?: string;
+  status: "accepted" | "suggested" | "rejected";
+  confidence: number;
+  rows: number;
+  description?: string;
+}
+
+export interface KnowledgeProperty {
+  name: string;
+  data_type: string;
+  /** key | reference | category | measure | time | text | prose (free text an extractor can read) */
+  role: string;
+  value_set?: Record<string, number>;
+  distinct?: number;
+  /** median words per value */
+  words?: number;
+}
+
+export interface KnowledgeRelationship {
+  name: string;
+  from_type: string;
+  from_field: string;
+  to_type: string;
+  to_field: string;
+  origin: "declared" | "inferred";
+  coverage: number;
+  status: "accepted" | "suggested" | "rejected";
+}
+
+export interface MappingKnowledge {
+  entities: KnowledgeEntity[];
+  relationships: KnowledgeRelationship[];
+  curated?: boolean;
+  version?: number;
+}
+
+export interface SemanticLayer {
+  types: { id: string; name: string; keys: string[]; kind: string; status: string; materialize: boolean;
+           confidence: number; rows: number; bindings: number; assets: string[];
+           properties: { name: string; type: string; role: string }[] }[];
+  links: { id: string; name: string; from: string; to: string; origin: string; coverage: number; status: string }[];
+}
+
+export interface MappingValidation {
+  valid: boolean;
+  issues: { level: "error" | "warning"; where: string; text: string; examples?: string[] }[];
+}
+
+export interface MappingPreview {
+  entities: { type: string; keys: string[]; records: number; sources: string[]; fields: Record<string, string>;
+              rows: Record<string, any>[] }[];
+  relationships: { name: string; from: string; to: string; origin: string; rows: Record<string, any>[] }[];
+}
+
+export interface MappingHistory {
+  current?: number;
+  versions: { version: number; at: string | null; current: boolean; knowledge: MappingKnowledge }[];
+}

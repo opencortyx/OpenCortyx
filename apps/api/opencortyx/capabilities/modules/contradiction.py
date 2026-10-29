@@ -336,6 +336,12 @@ class StatementView:
             # its neighbours with an LLM call each — on every upload, including an unchanged one.
             return None
 
+        if attr("type") in _DATA_LAYER_TYPES or _is_asset(node):
+            # Schema, not a claim: a column's profile, a data definition, the asset itself. Judged as
+            # statements, every table's columns were compared with every other table's (two minutes
+            # of model calls per file), and `licences-07.fee` "superseded" `licences-06.fee`.
+            return None
+
         if prop(IDENTITY_KEY):
             # A resolved entity is a NAME, not an assertion: two names are the same thing (entity
             # resolution merges them into aliases) or different things — never a contradiction.
@@ -714,6 +720,18 @@ IDENTITY_KEY = "__identity"
 #: The stamp the document reader puts on its reading units (see ingest.ingest_unstructured).
 READING_UNIT_KEY = "__reading_unit"
 _READING_UNIT_TYPES = None
+
+
+#: The data layer's own vocabulary (a column's profile, the data definitions): descriptions of data,
+#: never assertions about the world.
+_DATA_LAYER_TYPES = frozenset({"Attribute", "Metric", "Segment", "VerifiedQuery"})
+
+
+def _is_asset(node) -> bool:
+    from opencortyx.domain.ontology import ASSET_TYPES, base_type_of
+    if isinstance(node, dict):
+        return ((node.get("properties") or {}).get("__base_type") or node.get("type")) in ASSET_TYPES
+    return base_type_of(node) in ASSET_TYPES
 
 
 def _reading_unit_types() -> frozenset:

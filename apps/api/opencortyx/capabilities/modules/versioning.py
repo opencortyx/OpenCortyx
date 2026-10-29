@@ -58,8 +58,12 @@ async def _canonical_text(workspace_id: uuid.UUID, unit: Node) -> str:
 
 async def detect_version(workspace_id: uuid.UUID, unit_id: uuid.UUID, max_distance: int) -> dict | None:
     """Fingerprint `unit_id` (storing `__simhash` if absent), then find the nearest other unit of the
-    same node type within `max_distance` bits. On a match the newer unit supersedes the older one, or
-    the supersession is proposed for review. Best-effort; never raises."""
+    same node type AND the same name within `max_distance` bits. On a match the newer unit supersedes
+    the older one, or the supersession is proposed for review. Best-effort; never raises.
+
+    The same name: a new version is the same file uploaded again with changes. Compared with every
+    unit of the type, short texts that share their wording (chat sessions with the same headers) were
+    proposed as versions of each other by the hundred, and each upload read the whole workspace."""
     try:
         unit = await _repo.get(workspace_id, unit_id)
         if unit is None:
@@ -72,7 +76,7 @@ async def detect_version(workspace_id: uuid.UUID, unit_id: uuid.UUID, max_distan
             await _repo.patch_properties(workspace_id, [unit.id], {"__simhash": to_str(fingerprint)}, bump_version=False)
 
         best, best_d = None, 65
-        for other in await _repo.find(workspace_id, exact_types=[unit.type]):
+        for other in await _repo.find(workspace_id, exact_types=[unit.type], label=unit.label):
             props = other.properties or {}
             if other.id == unit.id or props.get("superseded") in ("true", "proposed"):
                 continue

@@ -113,7 +113,7 @@ export default function CataloguePage() {
         }
       />
 
-      {/* KPIs & Stats Metric Cards Strip */}
+      {/* KPIs & Stats Metric Cards Strip - "…" while loading: a zero there read as "your data is gone" */}
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
         <div className="bg-white dark:bg-stone-900 p-3.5 rounded-xl border border-stone-200 dark:border-stone-800 shadow-xs space-y-1">
           <div className="p-2 rounded-lg bg-blue-50 dark:bg-blue-950 text-blue-600 w-max">
@@ -121,7 +121,7 @@ export default function CataloguePage() {
           </div>
           <div className="text-[11px] text-stone-400 font-medium">Total Nodes</div>
           <div className="text-lg font-bold text-stone-900 dark:text-stone-100">
-            {stats?.total_nodes?.toLocaleString() ?? 0}
+            {loading ? "…" : stats?.total_nodes?.toLocaleString() ?? 0}
           </div>
         </div>
 
@@ -131,7 +131,7 @@ export default function CataloguePage() {
           </div>
           <div className="text-[11px] text-stone-400 font-medium">Relationships</div>
           <div className="text-lg font-bold text-stone-900 dark:text-stone-100">
-            {stats?.total_edges?.toLocaleString() ?? 0}
+            {loading ? "…" : stats?.total_edges?.toLocaleString() ?? 0}
           </div>
         </div>
 
@@ -141,7 +141,7 @@ export default function CataloguePage() {
           </div>
           <div className="text-[11px] text-stone-400 font-medium">Embedded Assets</div>
           <div className="text-lg font-bold text-stone-900 dark:text-stone-100">
-            {stats?.embedded_nodes?.toLocaleString() ?? 0}
+            {loading ? "…" : stats?.embedded_nodes?.toLocaleString() ?? 0}
           </div>
         </div>
 
@@ -151,7 +151,7 @@ export default function CataloguePage() {
           </div>
           <div className="text-[11px] text-stone-400 font-medium">Node Types</div>
           <div className="text-lg font-bold text-stone-900 dark:text-stone-100">
-            {Object.keys(stats?.nodes_by_type || {}).length}
+            {loading ? "…" : Object.keys(stats?.nodes_by_type || {}).length}
           </div>
         </div>
 
@@ -160,7 +160,7 @@ export default function CataloguePage() {
             <Table2 size={18} />
           </div>
           <div className="text-[11px] text-stone-400 font-medium">Catalogued Assets</div>
-          <div className="text-lg font-bold text-stone-900 dark:text-stone-100">{assets.length}</div>
+          <div className="text-lg font-bold text-stone-900 dark:text-stone-100">{loading ? "…" : assets.length}</div>
         </div>
 
         <div className="bg-white dark:bg-stone-900 p-3.5 rounded-xl border border-stone-200 dark:border-stone-800 shadow-xs space-y-1">
@@ -169,7 +169,7 @@ export default function CataloguePage() {
           </div>
           <div className="text-[11px] text-stone-400 font-medium">Unique Fingerprints</div>
           <div className="text-lg font-bold text-stone-900 dark:text-stone-100">
-            {new Set(assets.map((m) => m.fingerprint).filter(Boolean)).size}
+            {loading ? "…" : new Set(assets.map((m) => m.fingerprint).filter(Boolean)).size}
           </div>
         </div>
 
@@ -178,7 +178,7 @@ export default function CataloguePage() {
             <Library size={18} />
           </div>
           <div className="text-[11px] text-stone-400 font-medium">Collections</div>
-          <div className="text-lg font-bold text-stone-900 dark:text-stone-100">{collections.length}</div>
+          <div className="text-lg font-bold text-stone-900 dark:text-stone-100">{loading ? "…" : collections.length}</div>
         </div>
       </div>
 

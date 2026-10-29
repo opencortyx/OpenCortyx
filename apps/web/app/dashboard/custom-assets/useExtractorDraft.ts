@@ -30,7 +30,13 @@ export function useExtractorDraft() {
   // Bound = runs OVER existing nodes; Independent = self-seeded, runs once. This is the extractor's
   // input SHAPE (its signature) and stays with the definition. WHICH concrete nodes/attributes a
   // bound extractor reads is bound per-stage in the pipeline (Add-Step editor), not here.
-  const [sourceMode, setSourceMode] = useState<"dependent"|"independent">("dependent");
+  const [sourceMode, setSourceMode] = useState<"dependent"|"independent"|"data">("dependent");
+  // `source.data`: input read from the data store - an asset (and a column or JSON path), or an entity type's records
+  const [dataInput, setDataInput] = useState<{ asset: string; field: string; type: string }>({ asset: "", field: "", type: "" });
+  const dataSpec = () => dataInput.type.trim() ? { type: dataInput.type.trim() }
+    : { asset: dataInput.asset.trim(),
+        ...(dataInput.field.trim().startsWith("$") ? { path: dataInput.field.trim() }
+          : dataInput.field.trim() ? { column: dataInput.field.trim() } : {}) };
   const [mechRef, setMechRef] = useState(DEPENDENT_MECHANISMS[0]);
   const [mechPrompt, setMechPrompt] = useState("");
   const [mechSeedItems, setMechSeedItems] = useState("[\n  { \"name\": \"financial_crime\", \"parent\": null }\n]");
@@ -144,7 +150,9 @@ export function useExtractorDraft() {
     let yaml = `extraction:\n  name: ${extName || "untitled_extraction"}\n`;
     // Bound extractor stays generic — `select: "*"` = "any node; the pipeline stage decides which".
     // Independent = self-seeded (source: null).
-    yaml += sourceMode === "independent" ? `  source: null\n` : `  source: { select: "*" }\n`;
+    yaml += sourceMode === "independent" ? `  source: null\n`
+      : sourceMode === "data" ? `  source: { data: ${JSON.stringify(dataSpec())} }\n`
+      : `  source: { select: "*" }\n`;
     if (mechRef === "seed.literal") {
       yaml += `  mechanism:\n    ref: seed.literal\n    items: ${mechSeedItems.includes('\\n') ? '\n      ' + mechSeedItems.replace(/\\n/g, '\n      ') : mechSeedItems}\n`;
     } else if (mechRef === "unstructured.dictionary") {
@@ -268,6 +276,7 @@ export function useExtractorDraft() {
   // Bound extractors normally bind their node per pipeline stage ({select:"*"}); when enriching a
   // specific existing node type, bind straight to it so the extractor targets that node.
   const sourceSpec = () => sourceMode === "independent" ? null
+    : sourceMode === "data" ? { select: "*", data: dataSpec() }
     : (emitMode === "source" && enrichType) ? { select: enrichType }
     : { select: "*" };
 
@@ -502,7 +511,9 @@ export function useExtractorDraft() {
   const handleEditExtraction = (ext: any) => {
     setExtName(ext.name);
     setEditingBuiltin(String(ext.name || "").startsWith("builtin:"));
-    setSourceMode(ext.source ? "dependent" : "independent");
+    setSourceMode(ext.source?.data ? "data" : ext.source ? "dependent" : "independent");
+    { const dt = ext.source?.data || {};
+      setDataInput({ asset: dt.asset || "", field: dt.path || dt.column || "", type: dt.type || "" }); }
     { const sel = ext.source?.select; setEnrichType(typeof sel === "string" && sel !== "*" ? sel : ""); }
     setMechRef(ext.mechanism.ref || "unstructured.llm");
     setMechPrompt(ext.mechanism.prompt || "");
@@ -535,6 +546,7 @@ export function useExtractorDraft() {
     setExtName("");
     setEditingBuiltin(false);
     setSourceMode("dependent");
+    setDataInput({ asset: "", field: "", type: "" });
     setMechRef(DEPENDENT_MECHANISMS[0]);
     setMechPrompt(""); setMechCode(""); setMechModel(""); setMechPattern("");
     setMechModelCapable(false);
@@ -629,7 +641,7 @@ export function useExtractorDraft() {
     savedExtractions, availableNodes, nodeAttrsByType, genModels, proposals, decideProposal,
     handleEditExtraction, startNewExtraction, handleDelete, handleRun, modelLabel,
     // extractor draft
-    extName, setExtName, sourceMode, setSourceMode, mechRef, setMechRef, mechPrompt, setMechPrompt,
+    extName, setExtName, sourceMode, setSourceMode, dataInput, setDataInput, mechRef, setMechRef, mechPrompt, setMechPrompt,
     mechSeedItems, setMechSeedItems, mechGazetteer, setMechGazetteer, mechTerms, setMechTerms,
     mechPattern, setMechPattern, mechCode, setMechCode, mechModelCapable, setMechModelCapable,
     mechTopN, setMechTopN, mechModel, setMechModel,

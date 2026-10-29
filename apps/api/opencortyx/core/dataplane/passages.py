@@ -28,6 +28,8 @@ def record(workspace_id, row: dict, *, collection_id=None, version_ref=None) -> 
              "__version_ref": None if version_ref is None else str(version_ref)}
     if row.get("level") is not None:
         props["level"] = row["level"]
+    if row.get("table_grid"):
+        props["table"] = True               # its cells are data: read as a table, not as sentences
     return Node(id=uuid.UUID(row["chunk_id"]), workspace_id=uuid.UUID(str(workspace_id)),
                 type=row.get("element_type") or "Text",
                 label=(" ".join(text.split())[:80] or f"{row.get('element_type')} #{row.get('ordinal')}"),

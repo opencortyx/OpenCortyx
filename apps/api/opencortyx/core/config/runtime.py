@@ -6,7 +6,7 @@ below and persisted in the `runtime_setting` table so changes survive restarts. 
 (HNSW build params, pool size, replica URL, vector dim) remain env-only — the Settings UI shows
 those read-only with a "restart/reindex required" note.
 """
-from typing import Any
+from typing import Any, Optional
 
 import opencortyx.core.config.env as cfg
 from opencortyx.core.config.env import settings
@@ -67,6 +67,8 @@ _DEFAULTS = {
     "extraction_max_chunks": 400,
     "structured_default_mode": "row",       # 'row' (one node per row) | 'catalog' (schema only)
     "structured_default_max_rows": 1000,    # 0 = every row
+    "knowledge_detect": True,          # after ingestion: propose entity types, keys and links (metadata)
+    "knowledge_publish": False,        # ...and publish the confident ones to the graph (Mode A.1)
     "defer_extraction": True,
     # ── Chunking (read when a file is read or embedded; files already in keep theirs) ─────────
     "chunk_window_chars": 800,         # longest paragraph kept as one node / text embedded as one vector
@@ -286,6 +288,17 @@ SCHEMA: list[dict[str, Any]] = [
      "help": "How a tabular file with NO pipeline assigned is read. 'row' makes one node per row "
      "(what you usually want when you drop a CSV in); 'catalog' records only the schema. A "
      "pipeline's own Step-1 reading rules always override this."},
+    {"key": "knowledge_detect", "label": "Detect entity types and links after ingestion", "kind": "bool",
+     "group": "Structured",
+     "help": "Read the tables and records once an ingestion settles and propose what they mean: entity "
+     "types with their identifiers, where each lives, and the references between them. Proposals "
+     "appear in the Mapper (status 'auto' when confident, 'draft' when not) and let questions read "
+     "a type across every file that holds it. Nothing is written to the graph by this alone."},
+    {"key": "knowledge_publish", "label": "Publish detected entities to the graph", "kind": "bool",
+     "group": "Structured",
+     "help": "Also make the confident detected entities and their links graph nodes and edges, resolved "
+     "against what the graph already holds. Off by default: the records stay in their tables and "
+     "the graph holds only the knowledge a mapping or an extractor declares."},
     {"key": "structured_default_max_rows", "label": "Default rows sampled per table", "kind": "int",
      "min": 0, "max": 100000000, "group": "Structured",
      "help": "How many rows become nodes when no pipeline says otherwise. 0 = every row. A sample "
@@ -415,8 +428,32 @@ def _compute_snapshot() -> dict:
 _overrides: dict = {}     # loaded from DB; empty → use _DEFAULTS
 
 
+#: `.env` wins: OPENCORTYX_SETTING_<KEY> (e.g. OPENCORTYX_SETTING_ABSTAIN_THRESHOLD=0.3) sets a runtime
+#: setting for this deployment. The engine's tuning knobs are not on the Settings page; this is where
+#: an operator changes one. Read once per process.
+_ENV_PREFIX = "OPENCORTYX_SETTING_"
+_env: Optional[dict] = None
+
+
+def _from_env() -> dict:
+    global _env
+    if _env is None:
+        import os
+        _env = {k[len(_ENV_PREFIX):].lower(): v for k, v in os.environ.items() if k.startswith(_ENV_PREFIX)}
+        _env = {k: _coerce(k, v) for k, v in _env.items() if k in _DEFAULTS}
+    return _env
+
+
 def get(key):
+    env = _from_env()
+    if key in env:
+        return env[key]
     return _overrides.get(key, _DEFAULTS.get(key))
+
+
+def env_overridden() -> list[str]:
+    """The settings `.env` sets for this deployment (shown as fixed on the Settings page)."""
+    return sorted(_from_env())
 
 
 # typed hot-path accessors
@@ -476,6 +513,8 @@ def structured_default_max_rows() -> int:
 
 
 def defer_extraction() -> bool: return bool(get("defer_extraction"))
+def knowledge_detect() -> bool: return bool(get("knowledge_detect"))
+def knowledge_publish() -> bool: return bool(get("knowledge_publish"))
 def chunk_window_chars() -> int: return max(200, min(8000, int(get("chunk_window_chars") or 800)))
 def chunk_overlap_chars() -> int:
     return max(0, min(chunk_window_chars() // 2, int(get("chunk_overlap_chars") or 0)))

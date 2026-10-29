@@ -53,8 +53,18 @@ class Api:
         self.http.headers["Authorization"] = f"Bearer {r.json()['access_token']}"
 
     def call(self, method: str, path: str, **kw):
+        import httpx
         for attempt in range(6):
-            r = self.http.request(method, path, **kw)
+            try:
+                r = self.http.request(method, path, **kw)
+            except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError) as e:
+                # A kept-alive connection the server already closed, or the API restarting: try again.
+                if attempt == 5:
+                    raise
+                time.sleep(2 ** attempt)
+                if isinstance(e, httpx.ConnectError):
+                    time.sleep(5)
+                continue
             if r.status_code == 401 and attempt == 0:
                 self.login()
                 continue
@@ -71,7 +81,7 @@ class Api:
         while pending and time.time() < end:
             for rid in list(pending):
                 st = (self.call("GET", f"/progress/{rid}") or {}).get("status")
-                if st in ("completed", "failed", "canceled"):
+                if st in ("completed", "duplicate", "failed", "canceled"):
                     pending.discard(rid)
             time.sleep(3)
 
@@ -140,11 +150,27 @@ def score(q: dict, res: dict) -> dict:
             "unsupported": q["outcome"] == "UNKNOWN" and outcome == "ANSWERED"}
 
 
+def stratified(qs: list, n: int) -> list:
+    """`n` questions with every type in proportion and at least two of each, in a fixed order."""
+    import random
+    by: dict = defaultdict(list)
+    for q in qs:
+        by[q["type"]].append(q)
+    rnd = random.Random(7)
+    picked = []
+    for t, items in sorted(by.items()):
+        k = max(2, round(n * len(items) / len(qs)))
+        picked += rnd.sample(items, min(k, len(items)))
+    return sorted(picked, key=lambda q: q["id"])[: max(n, len(by) * 2)]
+
+
 def cmd_ask(args) -> dict:
     api = Api(args.api)
     qs = json.loads(Path(args.dir, "questions.json").read_text(encoding="utf-8"))
     if args.limit:
         qs = qs[:args.limit]
+    if args.sample:
+        qs = stratified(qs, args.sample)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     rows, lat = [], []
@@ -159,6 +185,14 @@ def cmd_ask(args) -> dict:
                     retrieved = all(any(_norm(m) in ctext for m in g) for g in q["expect"])
                 except Exception:                            # noqa: BLE001
                     retrieved = False
+            if args.retrieval_only:
+                if retrieved is None:
+                    continue                  # nothing to find for an UNKNOWN / CLARIFY question
+                row = {**q, "retrieved": retrieved}
+                rows.append(row)
+                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+                fh.flush()
+                continue
             t0 = time.perf_counter()
             try:
                 res = api.call("POST", "/answer", json={"query": q["question"], "save_chat": False})
@@ -173,7 +207,17 @@ def cmd_ask(args) -> dict:
                    "citations": [c.get("source") or c.get("node_id") for c in (res or {}).get("citations") or []][:8]}
             rows.append(row)
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+            fh.flush()
     by_type = defaultdict(list)
+    if args.retrieval_only:
+        for r in rows:
+            by_type[r["type"]].append(r)
+        summary = {"questions": len(rows), "retrieval_rate": round(100 * sum(r["retrieved"] for r in rows) / max(1, len(rows)), 1),
+                   "retrieval_by_type": {t: round(100 * sum(r["retrieved"] for r in rs) / len(rs), 1)
+                                         for t, rs in sorted(by_type.items())}}
+        (out / "summary.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
+        print(json.dumps(summary, indent=1))
+        return summary
     for r in rows:
         by_type[r["type"]].append(r)
     summary = {
@@ -206,6 +250,8 @@ def main() -> None:
     p.add_argument("--container-dir", default="/host/goldset")
     p.add_argument("--out", default="results/goldset")
     p.add_argument("--limit", type=int, default=0)
+    p.add_argument("--sample", type=int, default=0, help="a stratified sample of this many questions")
+    p.add_argument("--retrieval-only", action="store_true", help="score /context only, no /answer")
     a = p.parse_args()
     if a.command in ("write", "all"):
         cmd_write(a)

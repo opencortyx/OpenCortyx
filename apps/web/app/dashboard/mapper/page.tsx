@@ -19,7 +19,7 @@ import PageHeader from "@/components/layout/PageHeader";
 import Button from "@/components/ui/Button";
 import { contextV2Api } from "@/lib/api/contextV2";
 import {
-  Workflow, Search, Plus, Trash2, AlertTriangle, Loader2, Wand2, RefreshCw, ChevronRight,
+  Workflow, Search, Plus, Trash2, AlertTriangle, Loader2, RefreshCw, ChevronRight,
 } from "lucide-react";
 import { PARADIGM_META } from "@/components/mapper/panels";
 import type { Paradigm } from "@/components/mapper/model";
@@ -32,6 +32,18 @@ type Row = {
 };
 
 const PARADIGMS: Paradigm[] = ["semistructured", "structured", "unstructured"];
+
+const STATUS_STYLE: Record<string, string> = {
+  active: "bg-lime-50 text-lime-700 border-lime-200",
+  auto: "bg-sky-50 text-sky-700 border-sky-200",
+  draft: "bg-amber-50 text-amber-700 border-amber-200",
+  paused: "bg-stone-100 text-stone-500 border-stone-200",
+  disabled: "bg-stone-100 text-stone-500 border-stone-200",
+};
+const STATUS_HELP: Record<string, string> = {
+  auto: "Detected from the data and in use. Open it to review, edit or turn it off.",
+  draft: "Detected, but not sure enough to use. Open it to check and accept it.",
+};
 
 export default function MapperHubPage() {
   const router = useRouter();
@@ -66,6 +78,7 @@ export default function MapperHubPage() {
     for (const p of PARADIGMS) c[p] = rows.filter((r) => r.paradigm === p).length;
     return c;
   }, [rows]);
+
 
   const create = async (paradigm: Paradigm) => {
     setBusy("create");
@@ -114,7 +127,7 @@ export default function MapperHubPage() {
       <PageHeader
         title="Mapper"
         icon={Workflow}
-        description="Declare the nodes, edges and attributes every source becomes. One builder for JSON, tables and documents."
+        description="What your data means - found automatically after each upload. Open one to correct it (the identifier, a link, a name, whether its records go into the graph), or create one to shape the graph yourself."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="secondary" size="sm" icon={RefreshCw} onClick={load}>Refresh</Button>
@@ -207,8 +220,8 @@ export default function MapperHubPage() {
                       ⬢ {nodes} nodes &nbsp;──► {edges} edges
                     </td>
                     <td className="px-4 py-3">
-                      <span className="text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded
-                                       bg-lime-50 text-lime-700 border border-lime-200">
+                      <span className={`text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded border ${STATUS_STYLE[r.status || "active"] || STATUS_STYLE.active}`}
+                        title={STATUS_HELP[r.status || "active"] || ""}>
                         {r.status || "active"}
                       </span>
                     </td>

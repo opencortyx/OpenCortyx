@@ -36,6 +36,7 @@ class Column:
     role: str = ""
     pii: bool = False
     primary_key: bool = False
+    semantic: bool = False          # a property of an object type (its role was read from the values)
 
     @property
     def numeric(self) -> bool:
@@ -44,6 +45,8 @@ class Column:
 
     @property
     def temporal(self) -> bool:
+        if self.semantic:
+            return self.role == "time"            # an object-type property: its role read from the values
         t = self.data_type.lower()
         return any(x in t for x in ("date", "time")) or bool(re.search(r"(date|_at|_on|issued|expir|created)$",
                                                                        self.name.lower()))
@@ -61,6 +64,8 @@ class Table:
     description: str = ""
     rows: Optional[int] = None
     version_ref: Optional[str] = None
+    key_columns: list = field(default_factory=list)      # the columns a record is identified by
+    assets: list = field(default_factory=list)           # an object type's table: the assets bound to it
 
     def column(self, name: str) -> Optional[Column]:
         return next((c for c in self.columns if c.name.lower() == str(name).lower()), None)
@@ -80,6 +85,40 @@ class Schema:
     tables: dict = field(default_factory=dict)       # view -> Table
     joins: list = field(default_factory=list)
     refs: list = field(default_factory=list)         # stores.data AssetRef, in view order
+    #: (view, SQL) of each accepted object type's logical table (knowledge/semantic/views.py)
+    logical: list = field(default_factory=list)
+
+    def scoped(self, asset_ids) -> "Schema":
+        """Only the tables of these assets - a question scoped to collections reads their data alone.
+        An object type spans every collection its records are in, so it is left out."""
+        keep = {str(a) for a in asset_ids}
+        tables = {v: t for v, t in self.tables.items() if t.kind != "object" and t.asset_id in keep}
+        return Schema(tables=tables, joins=[j for j in self.joins if j.left in tables and j.right in tables],
+                      refs=[r for r in self.refs if r.asset_id in keep], logical=[])
+
+    def needs(self, views) -> dict:
+        """What a query over `views` must open: only those assets (an object type's table, the assets
+        bound to it), under the names the workspace gives them - instead of every asset it has."""
+        want: set = set()
+        logical = []
+        defs = dict(self.logical)
+        for v in views or []:
+            t = self.tables.get(v) or self.tables.get(str(v).lower())
+            if t is None:
+                continue
+            if t.kind == "object":
+                want |= set(t.assets)
+                if t.view in defs:
+                    logical.append((t.view, defs[t.view]))
+            else:
+                want.add(t.asset_id)
+        names = {t.asset_id: t.view for t in self.tables.values() if t.kind != "object"}
+        return {"assets": [r for r in self.refs if r.asset_id in want], "logical": logical,
+                "view_names": {a: names[a] for a in want if a in names}}
+
+    def objects(self) -> list:
+        """The object-type tables: one per accepted type of the semantic layer."""
+        return [t for t in self.tables.values() if t.kind == "object"]
 
     def table_of(self, asset_id: str) -> Optional[Table]:
         return next((t for t in self.tables.values() if t.asset_id == str(asset_id)), None)
@@ -118,7 +157,8 @@ async def _build(workspace_id) -> Schema:
         meta = dict(getattr(row, "metadata_", None) or {})
         t = Table(asset_id=ref.asset_id, view=view, name=ref.name, kind=ref.kind, storage=ref.storage,
                   format=ref.format, rows=meta.get("rows") or meta.get("records"),
-                  version_ref=getattr(row, "version_ref", None))
+                  version_ref=getattr(row, "version_ref", None),
+                  key_columns=[str(k) for k in (meta.get("key_columns") or []) if k])
         out.tables[view] = t
         by_asset[ref.asset_id] = t
     repo = NodeRepo()
@@ -152,7 +192,39 @@ async def _build(workspace_id) -> Schema:
         if ts and td and p.get("from_key") and p.get("to_key"):
             out.joins.append(Join(ts.view, p["from_key"], td.view, p["to_key"], "declared"))
     out.joins.extend(_detected_joins(out))
+    await _semantic_layer(workspace_id, out, by_asset, taken)
     return out
+
+
+async def _semantic_layer(workspace_id, out: Schema, by_asset: dict, taken: set) -> None:
+    """Each accepted object type as a table over every asset bound to it, and each accepted link
+    type as the join between two of them."""
+    from opencortyx.knowledge import semantic
+    from opencortyx.knowledge.semantic import views as sviews
+    try:
+        layer = (await semantic.load(workspace_id)).accepted()
+    except Exception:                                         # noqa: BLE001 - no layer, asset tables only
+        return
+    asset_views = {aid: t.view for aid, t in by_asset.items()}
+    view_of: dict = {}
+    for ot in layer.types:
+        sql = sviews.type_sql(ot, asset_views)
+        if not sql:
+            continue
+        view = sviews.view_name(ot, taken)
+        view_of[ot.id] = view
+        out.logical.append((view, sql))
+        t = Table(asset_id=ot.id, view=view, name=ot.name, kind="object", storage="logical",
+                  format=ot.kind, rows=ot.rows, description=ot.description,
+                  key_columns=list(ot.keys), assets=sorted({b.asset_id for b in ot.bindings}))
+        for p in ot.properties:
+            t.columns.append(Column(name=p.name, data_type={"number": "DOUBLE", "date": "DATE"}.get(p.data_type, "VARCHAR"),
+                                    description=p.description, value_set=dict(p.value_set or {}), role=p.role,
+                                    primary_key=(p.name in ot.keys), semantic=True))
+        out.tables[view] = t
+    for lk in layer.links:
+        if lk.source in view_of and lk.target in view_of:
+            out.joins.append(Join(view_of[lk.source], lk.source_prop, view_of[lk.target], lk.target_prop, "declared"))
 
 
 def _detected_joins(schema: Schema) -> list[Join]:
@@ -180,6 +252,16 @@ def _detected_joins(schema: Schema) -> list[Join]:
                 if target and (a.view, n, b.view, target.lower()) not in declared:
                     found.append(Join(a.view, col.name, b.view, target, "detected"))
     return found
+
+
+def named_table(schema: Schema, question: str) -> Optional[Table]:
+    """The table the question names outright ("in licences-17", "the orders table"), if one."""
+    qtext = " " + " ".join(words(question)) + " "
+    hits = [t for t in schema.tables.values()
+            if any(f" {' '.join(words(nm))} " in qtext for nm in (t.name, t.view) if words(nm))]
+    # "licences 17" names licences-17, not a table called just "licences": the longest name wins.
+    hits.sort(key=lambda t: -len(words(t.name)))
+    return hits[0] if hits else None
 
 
 def score_tables(schema: Schema, question: str) -> list[tuple[float, Table]]:

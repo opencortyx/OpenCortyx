@@ -32,7 +32,9 @@ async def test_json_walker_properties_conformance(live_org):
             }
         }
     }
-    res = await ingest_json(live_org, data, source_label="test_run", embed_nodes=False)
+    # whole_data: the walk itself, whatever the workspace stores records in (a Delta workspace walks
+    # a plain JSON file only when the upload asks for the whole data in the graph).
+    res = await ingest_json(live_org, data, source_label="test_run", embed_nodes=False, whole_data=True)
     assert res["status"] == "ok"
 
     today_str = _utc_today()
@@ -76,7 +78,9 @@ async def test_json_walker_preserves_existing_audit_properties(live_org):
             "__audit_version": 999
         }
     }
-    res = await ingest_json(live_org, data, source_label="test_run", embed_nodes=False)
+    # whole_data: the walk itself, whatever the workspace stores records in (a Delta workspace walks
+    # a plain JSON file only when the upload asks for the whole data in the graph).
+    res = await ingest_json(live_org, data, source_label="test_run", embed_nodes=False, whole_data=True)
     assert res["status"] == "ok"
 
     programme = next(n for n in await _key_nodes(live_org) if n.properties.get("Label") == "Programme")

@@ -270,6 +270,9 @@ BUILTIN_EMBED_MODEL = BUILTIN_EMBED_MODELS.get(settings.EMBED_DIMENSIONS, BUILTI
 #: INSTALL_RERANK=1 image can run, so on a release install every question skipped the reranker.
 BUILTIN_RERANK_PROVIDER = "fastembed"
 BUILTIN_RERANK_MODEL = "Xenova/ms-marco-MiniLM-L-12-v2"
+#: The `entities` role: a small spaCy pipeline (MIT) that reads entities and sentence grammar
+#: in-process, downloaded from Hugging Face on first use (ingest/extraction/text_reader.py).
+BUILTIN_ENTITIES_MODEL = "spacy/en_core_web_sm"
 #: The generation model a new workspace's registry is seeded with: small enough to run inside the
 #: API and the extraction worker on CPU (about 1.2 GB each, bf16), carried in the image so nothing is
 #: downloaded on first use. Answers and extraction use it until a larger model

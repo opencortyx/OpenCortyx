@@ -189,9 +189,13 @@ async def test_declared_json_mapping_shapes_the_graph(fake_repo):
     assert res["records"] == 2
 
 
-async def test_auto_json_walk_keeps_keynodes_with_a_semantic_label(fake_repo):
+async def test_auto_json_walk_keeps_keynodes_with_a_semantic_label(fake_repo, monkeypatch):
+    from opencortyx.ingest.semistructured import ingest as walker_module
     from opencortyx.ingest.semistructured.ingest import ingest_json
 
+    async def graph_workspace(_):
+        return False        # the plain walker writes records only where records live in the graph
+    monkeypatch.setattr(walker_module, "_uses_delta", graph_workspace)
     await ingest_json(uuid.uuid4(), DELIVERIES, source_label="auto.json")
     labels = {n["properties"].get("Label") for n in fake_repo.nodes.values() if n["type"] == "KeyNode"}
     assert {"Carrier", "Items"} <= labels      # the plain walker labels by key, unsingularised
@@ -528,7 +532,7 @@ def test_the_model_registry_is_the_only_source_of_models():
     # A new workspace starts with the models that run inside OpenCortyx and ship in its image, named
     # plainly: the generation one runs in-process too, so it has no server address to be missing.
     rows = registry._builtin_rows()
-    assert sorted(r["role"] for r in rows) == ["embedding", "generation", "rerank"]
+    assert sorted(r["role"] for r in rows) == ["embedding", "entities", "generation", "rerank"]
     assert not any("built-in" in r["name"] for r in rows)
     assert all(r["provider"] in registry.IN_PROCESS_PROVIDERS and r["base_url"] is None for r in rows)
 

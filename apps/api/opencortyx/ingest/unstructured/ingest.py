@@ -615,6 +615,10 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
             await reporter.step(1, "Ignored — no matching schema mapping", "completed", 0)
         return {"status": "ignored", "title": filename, "reason": _ignored, "chunks": 0}
     plan = dict(plan or {})
+    # Add data's "add the whole data": with the passages in Delta, every layout element is a graph
+    # node as well. Without it the graph gets the document's outline only - its headings, tables and
+    # figures - and the text stays in Delta.
+    whole_data = bool(plan.get("whole_data"))
     parsed = parse_content(content, mime_type, filename=filename)
     text = parsed["raw_text"] or ""
     title = (filename or extract_title(text))[:300]
@@ -764,7 +768,10 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
         from opencortyx.core.config import runtime as _rc
         unit_cap = _rc.reading_unit_max_chars()           # Settings > Chunking
         heading_path: list = []                           # (level, heading) above the element
+        ast_parent: dict = {}                             # element -> its parent element (AST ids)
+        outline: dict = {}                                # element -> its outline node, Delta without whole data
         for i, ast_node in enumerate(ast_nodes):
+            ast_parent[ast_node.id] = ast_node.parent_id
             nid = uuid.uuid5(source_id, ast_node.id)
             props = {
                 "text": ast_node.text,
@@ -806,6 +813,33 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
                         units.append([nid, [ast_node.text]])
                     else:
                         units[-1][1].append(ast_node.text)
+                if whole_data:
+                    # The element a graph node too, as a graph workspace writes it (same id as its row).
+                    node_specs.append({"node_id": nid, "type": ntype,
+                                       "label": _element_label(ast_node.text) or f"{ntype} #{i}",
+                                       "properties": props, "source_ref": source_id,
+                                       "collection_id": collection_id, "level": 0})
+                    edge_specs_out.append({"source_id": created_nodes.get(ast_node.parent_id) or source_id,
+                                           "target_id": nid, "type": "CONTAINS"})
+                    if prev:
+                        edge_specs_out.append({"source_id": prev, "target_id": nid, "type": "NEXT"})
+                    prev = nid
+                elif ast_node.level is not None or kind in ("table", "image"):
+                    # The outline: a heading, table or figure as a node under the nearest one above it.
+                    # Its own id - the element's text is a row in Delta, not on this node.
+                    oid = uuid.uuid5(source_id, f"outline:{ast_node.id}")
+                    up = ast_node.parent_id
+                    while up is not None and up not in outline:
+                        up = ast_parent.get(up)
+                    node_specs.append({"node_id": oid, "type": ntype,
+                                       "label": _element_label(ast_node.text) or f"{ntype} #{i}",
+                                       "properties": {k: v for k, v in props.items()
+                                                      if k not in ("text", "grid", "bounding_box", READING_UNIT_KEY)}
+                                       | {"outline": True, "element_id": str(nid)},
+                                       "source_ref": source_id, "collection_id": collection_id, "level": 0})
+                    edge_specs_out.append({"source_id": outline.get(up) or source_id, "target_id": oid,
+                                           "type": "CONTAINS"})
+                    outline[ast_node.id] = oid
                 continue
             node_specs.append({"node_id": nid, "type": ntype,
                                "label": _element_label(ast_node.text) or f"{ntype} #{i}",
@@ -856,7 +890,19 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
                     section_path=str(discovered.get("heading") or "").strip()))
                 pairs.append((cid, ct))
                 offset += len(ct)
-                continue
+                if not whole_data:
+                    heading = str(discovered.get("heading") or "").strip()
+                    if build_sections and heading and heading not in sections:
+                        # The outline: one node per section heading, the text staying in Delta.
+                        snode = await _repo.upsert_node(node_id=_det_section_id(source_id, heading), workspace_id=workspace_id,
+                            type=section_type, label=heading[:300],
+                            properties={"heading": heading, "level": discovered.get("level"),
+                                        "__source": "document", "outline": True},
+                            source_ref=source_id, collection_id=collection_id, level=0)
+                        sections[heading] = snode.id
+                        await _repo.add_edge(workspace_id=workspace_id, source_id=source_id,
+                                             target_id=snode.id, type=section_edge)
+                    continue
             # The SECTION this chunk belongs to — the heading the chunker reported for it. One node
             # per distinct heading, so an over-long section's several chunks share their section.
             parent_id = source_id
@@ -893,8 +939,9 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
             prev = node.id
             if edge_specs:
                 await _draw_chunk_edges(workspace_id, node.id, props, edge_specs, collection_id)
-            pairs.append((node.id, ct))
-            offset += len(ct)
+            if not delta_mode:                     # a Delta passage was counted above
+                pairs.append((node.id, ct))
+                offset += len(ct)
 
     _els = (document_elements(text) if elements_cfg and not delta_mode
             else {"tables": [], "images": []})
@@ -940,6 +987,17 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
         await reporter.step(1, "Parse & chunk", "completed", len(pairs))
 
     version_info = None
+
+    if defer_extraction and not pipeline and not plan.get("templates"):
+        # Nothing to defer: no extractor named, no pipeline. Queued anyway, the deferred half re-read
+        # every passage only to find nothing to run, then ran the post-ingest steps and resolution a
+        # second time - ~2.6 s of a CPU per document, through a whole chat import.
+        if delta_mode:
+            await _udata.mark_stale(workspace_id, source_id, data_version)
+        await _mark_ingested_ok(workspace_id, source_id)
+        return {**_reader_fields(layout_reader), "status": "ok", "source_id": str(source_id), "title": title,
+                "version": version, "chunks": len(pairs), "doc_version": version_info, "rels": 0,
+                "extraction": "none"}
 
     if defer_extraction:
         # NOT stamped complete here: the deferred half stamps it when it finishes. Stamped at

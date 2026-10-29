@@ -29,6 +29,23 @@ def result_source_ids(res) -> list[str]:
     return sids
 
 
+async def embeddable(repo, oid, sid) -> list:
+    """Everything one asset embeds: its graph subtree at any depth and, in a Delta workspace, its
+    document's passages (in the data store, not the graph). One definition, read by the embedding
+    job and by resolution's "are the embeddings done?" - which, reading the graph alone, resolved a
+    document (and called its run complete) before its passages were searchable."""
+    from opencortyx.ingest.structured.dataplane import uses_delta
+    root = await repo.get(oid, sid)
+    subtree = ([root] if root else []) + await repo.descendants(oid, [sid])
+    if await uses_delta(oid):
+        from opencortyx.ingest.unstructured import dataplane as _udata
+        # In the document's collection: a passage point without one is visible to every
+        # collection's search (a question scoped to one collection read another's passages).
+        subtree += list((await _udata.load_records(
+            oid, sid, collection_id=getattr(root, "collection_id", None))).values())
+    return [n for n in subtree if str((n.properties or {}).get("__structural") or "") != "true"]
+
+
 def _queue_embed_pass(workspace_id: str, res) -> None:
     """Queue the deferred embedding pass for whatever source this ingest just wrote.
 
@@ -75,15 +92,7 @@ def v2_embed_source(self, workspace_id: str, source_id: str):
 
         repo = NodeRepo()
         oid, sid = uuid.UUID(workspace_id), uuid.UUID(source_id)
-        root = await repo.get(oid, sid)
-        subtree = ([root] if root else []) + await repo.descendants(oid, [sid])
-        from opencortyx.ingest.structured.dataplane import uses_delta
-        if await uses_delta(oid):
-            # A document's chunks are in the data store, not the graph: their passages are embedded
-            # from there, as the chunk nodes' were.
-            from opencortyx.ingest.unstructured import dataplane as _udata
-            subtree += list((await _udata.load_records(oid, sid)).values())
-        subtree = [n for n in subtree if str((n.properties or {}).get("__structural") or "") != "true"]
+        subtree = await embeddable(repo, oid, sid)
         pending = await repo.unembedded(oid, subtree)
         if pending:
             await repo.index_embeddings(oid, pending, embed_batch, batch_size=_rc.embed_batch_size())
@@ -91,10 +100,14 @@ def v2_embed_source(self, workspace_id: str, source_id: str):
             if str((spec or {}).get("provider") or "").lower() in ("fastembed", "onnx"):
                 gc.collect()
         # Read again, not from before embedding: the asset's resolution may have started waiting
-        # for these vectors in the meantime.
+        # for these vectors in the meantime. An asset not resolved yet is queued too: keyed on the
+        # waiting mark alone, a resolution that marked it just after this read waited for the
+        # 30-minute backstop - and its ingest run stayed unfinished that long. Resolution is
+        # idempotent, so one queued twice costs a second (cheap) pass, nothing more.
         from opencortyx.resolution.engine import RESOLVE_WAITING
         root = await repo.get(oid, sid)
-        if root and (root.properties or {}).get(RESOLVE_WAITING):
+        props = (root.properties or {}) if root else {}
+        if root and (props.get(RESOLVE_WAITING) or not props.get("__resolved_at")):
             from opencortyx.tasks.resolution import v2_resolve_asset
             v2_resolve_asset.delay(workspace_id, source_id)
         return {"status": "ok", "source_id": source_id, "embedded": len(pending)}

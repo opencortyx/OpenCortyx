@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { contextV2Api, type TypeResolution } from "@/lib/api/contextV2";
+import ReviewTabs from "@/components/layout/ReviewTabs";
+import { SHOW_ALL_TYPES_BY_DEFAULT } from "@/lib/simple";
 import PageHeader from "@/components/layout/PageHeader";
 import Button from "@/components/ui/Button";
 import {
@@ -22,6 +24,8 @@ export default function SchemaPage() {
   const [domains, setDomains] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
+  // The types in this workspace's data; the built-in catalogue (hundreds of templates) on request.
+  const [showAll, setShowAll] = useState(SHOW_ALL_TYPES_BY_DEFAULT);
   const [draft, setDraft] = useState<any>(null);
   const [toast, setToast] = useState<{ text: string; ok: boolean } | null>(null);
   const flash = (text: string, ok = true) => { setToast({ text, ok }); setTimeout(() => setToast(null), 3000); };
@@ -37,7 +41,9 @@ export default function SchemaPage() {
 
   const isOn = (t: TypeRow) => t.status !== "disabled";
   // Framework internals (source="system": Chunk, Asset, …) stay out — this is the authored ontology.
-  const curated = types.filter((t) => t.source !== "system");
+  const authored = types.filter((t) => t.source !== "system");
+  const curated = authored.filter((t: any) => showAll || t.in_data !== false);
+  const catalogueOnly = authored.length - curated.length;
   const matches = (t: TypeRow) => !q.trim() || t.name.toLowerCase().includes(q.trim().toLowerCase());
   const nodeList = curated.filter((t) => (t.kind === "node" || t.kind === "entity") && matches(t)).sort((a, b) => a.name.localeCompare(b.name));
   const relList = curated.filter((t) => t.kind === "edge" && matches(t)).sort((a, b) => a.name.localeCompare(b.name));
@@ -85,6 +91,7 @@ export default function SchemaPage() {
         icon={Network}
         description="The whole ontology in one place — switch any node or relationship on/off (off = hidden from the graph and skipped by extraction), or edit it. No LLM."
       />
+      <ReviewTabs />
 
       {toast && (
         <div className={`rounded-lg border px-4 py-3 text-sm flex items-center gap-2 ${toast.ok ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-red-50 border-red-200 text-red-700"}`}>
@@ -100,6 +107,11 @@ export default function SchemaPage() {
               className="w-48 pl-8 pr-2 py-1.5 text-xs border border-stone-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500/20" />
           </div>
           <span className="text-[11px] text-stone-400"><b className="text-emerald-600">{onCount} on</b> / {curated.length}</span>
+          {(catalogueOnly > 0 || showAll) && (
+            <button onClick={() => setShowAll(!showAll)} className="text-[11px] font-semibold text-teal-700 hover:underline">
+              {showAll ? "Only the types in your data" : `Show the built-in catalogue too (${catalogueOnly} more)`}
+            </button>
+          )}
           <div className="ml-auto flex items-center gap-1.5">
             <button onClick={() => setBulk(curated, "active")} className="text-[11px] font-semibold text-stone-500 hover:text-emerald-600">Enable all</button>
             <span className="text-stone-300">·</span>

@@ -88,6 +88,24 @@ async def remove(workspace_id, asset_id) -> bool:
     return row is not None
 
 
+async def clear(workspace_id) -> int:
+    """Everything a workspace keeps on the data plane: its managed Delta tables (the workspace's whole
+    directory under DATA_ROOT), and its asset, evidence and source-key rows. External data is the
+    customer's own and is never touched. Returns how many assets were registered."""
+    import shutil
+
+    from opencortyx.core.config import settings
+    from opencortyx.stores.data import layout
+    ws = _uuid(workspace_id)
+    shutil.rmtree(layout.workspace_root(settings.DATA_ROOT, ws), ignore_errors=True)
+    async with V2Session() as db:
+        await db.execute(delete(Evidence).where(Evidence.workspace_id == ws))
+        await db.execute(delete(SourceKey).where(SourceKey.workspace_id == ws))
+        n = (await db.execute(delete(DataAsset).where(DataAsset.workspace_id == ws))).rowcount or 0
+        await db.commit()
+    return n
+
+
 async def refs(workspace_id, kinds: Optional[Iterable[str]] = None, ids: Optional[Iterable] = None):
     """The workspace's assets as view definitions for stores/data. External database assets get
     their connection string resolved here, for one connection only (never stored or logged)."""

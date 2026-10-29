@@ -93,7 +93,6 @@ def main() -> int:
     cfg = api.call("GET", "/config") or {}
     check("workspace on the data store", (cfg.get("tunable") or {}).get("data_store") == "delta",
           (cfg.get("tunable") or {}).get("data_store"))
-    api.call("PUT", "/resolution/types/KeyNode", json={"identify_by": ["customer_id", "name"], "enabled": True})
 
     # 2
     batch = args.batch or f"e2e300-{int(time.time())}"
@@ -111,7 +110,13 @@ def main() -> int:
     if args.skip_upload:
         runs = runs_of(api, batch)
     (out / "runs.json").write_text(json.dumps(runs), encoding="utf-8")
-    time.sleep(180)           # embeddings and resolution run after each asset
+    # Embeddings and resolution run after each asset; the semantic layer is detected once the batch
+    # settles (a pass booked tasks.maintenance.DETECT_DEBOUNCE_S after the last run, ~90 s to read).
+    for _ in range(40):
+        time.sleep(15)
+        if len((api.call("GET", "/schema-mappings/knowledge") or {}).get("types") or []) >= 5:
+            break
+    time.sleep(60)
 
     # 3
     tmp = Path(os.environ.get("TEMP", "/tmp")) / "expected300.json"
@@ -204,6 +209,25 @@ def main() -> int:
         check("delete removed the asset's data", page.get("available") is False, json.dumps(page)[:200])
     else:
         check("delete removed the asset's data", False, "no asset id for licences-02.csv")
+
+    # 8 - the Mapper: detected mappings validate, preview, and publish (Mode A.1) on request
+    maps = [m for m in (api.call("GET", "/schema-mappings?light=true") or {}).get("items") or [] if m["status"] == "auto"]
+    check("detected mappings listed in the Mapper", len(maps) >= 5, ", ".join(m["name"] for m in maps))
+    mid = next((m["id"] for m in maps if m["name"].startswith("Project")), maps[0]["id"] if maps else None)
+    if mid:
+        v = api.call("POST", f"/schema-mappings/{mid}/validate") or {}
+        check("a detected mapping validates", v.get("valid") is True, json.dumps(v.get("issues"))[:300])
+        pv = api.call("GET", f"/schema-mappings/{mid}/preview?limit=3") or {}
+        ents = pv.get("entities") or []
+        check("preview shows entities and links", bool(ents and ents[0].get("rows") and pv.get("relationships")),
+              json.dumps(pv)[:300])
+    graph_before = (api.call("GET", "/stats") or {}).get("nodes")
+    pub = api.call("POST", "/schema-mappings/publish?everything=true") or {}
+    check("publishing makes one node per entity", (pub.get("nodes") or 0) > 0 and (pub.get("edges") or 0) > 0,
+          json.dumps(pub))
+    lic = api.call("POST", "/context", json={"query": "Which customer holds licence LIC-1057?"}) or {}
+    check("a published entity is found with its link", "C-152" in (lic.get("context") or ""),
+          f"graph nodes before={graph_before} route={lic.get('route')}")
 
     (out / "results.json").write_text(json.dumps(RESULTS, indent=1), encoding="utf-8")
     failed = [r for r in RESULTS if not r["ok"]]

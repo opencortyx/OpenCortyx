@@ -926,6 +926,12 @@ async def _select_nodes(workspace_id, template, *, node_ids=None, source_key=Non
     if node_ids:
         nodes = await _repo.get_many(workspace_id, node_ids)
         return [n for n in nodes if not source_key or (n.properties or {}).get("source_key") == source_key]
+    data = template.source.get("data") if isinstance(template.source, dict) else None
+    if data:
+        # Input read where it lives - a table, a column, a JSON path, a document's chunks, an entity
+        # type's records - not copied into the graph first (data_inputs.py).
+        from opencortyx.ingest.extraction.data_inputs import select as _data_inputs
+        return await _data_inputs(workspace_id, data, limit=limit)
     return await _repo.find(workspace_id, NodeQuery(types=_select_types(template.source), source_key=source_key,
                                               limit=limit))
 

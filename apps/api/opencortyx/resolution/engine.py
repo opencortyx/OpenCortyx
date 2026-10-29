@@ -179,21 +179,28 @@ class Store:
         return len(new)
 
     async def pending_embeddings(self, workspace_id, source_id) -> bool:
-        """Whether any of the asset's nodes still wait for their embeddings (structural nodes, which are
-        never embedded, do not count)."""
-        root = await self.repo.get(workspace_id, source_id)
-        nodes = [n for n in ([root] if root else []) + await self.repo.descendants(workspace_id, [source_id])
-                 if str((n.properties or {}).get("__structural") or "") != "true"]
+        """Whether any of what the asset embeds still waits for its vectors - the same nodes and
+        passages the embedding job embeds (`tasks.graph.embeddable`)."""
+        from opencortyx.tasks.graph import embeddable
+        nodes = await embeddable(self.repo, workspace_id, source_id)
         return bool(nodes) and bool(await self.repo.unembedded(workspace_id, nodes))
 
     async def wait_for_embeddings(self, workspace_id, source_id) -> bool:
         """Whether the asset must wait for its embeddings; if so it is marked waiting, so the
-        embedding job that finishes them queues its resolution."""
+        embedding job that finishes them queues its resolution.
+
+        Checked again after the mark: an embedding job that finished between the first check and the
+        mark read no mark, queued nothing, and left the asset to the 30-minute backstop - and its
+        ingest run unfinished that long."""
         if not await self.pending_embeddings(workspace_id, source_id):
             return False
         await self.repo.patch_properties(workspace_id, [source_id], {RESOLVE_WAITING: "true"},
                                          bump_version=False)
-        return True
+        if await self.pending_embeddings(workspace_id, source_id):
+            return True
+        await self.repo.patch_properties(workspace_id, [source_id], {}, remove=[RESOLVE_WAITING],
+                                         bump_version=False)
+        return False
 
     async def waiting(self, workspace_id, source_id) -> bool:
         root = await self.repo.get(workspace_id, source_id)
@@ -335,6 +342,8 @@ async def resolve_asset(workspace_id, source_id, *, store=None) -> dict:
             await store.apply(workspace_id, node_type, plan, {**known, **{n.id: n for n in nodes}})
             out["types"][node_type] = plan.summary()
     out["links"] = await link_references(workspace_id, source_id, specs, nodes_of_asset, store)
+    from opencortyx.resolution.mentions import link_mentions
+    out["mentions"] = await link_mentions(workspace_id, nodes_of_asset, repo=getattr(store, "repo", None))
     out["statements"] = await store.statements(workspace_id, source_id)
     await store.mark_resolved(workspace_id, source_id, out["types"])
     log.info("resolution.asset", workspace_id=str(workspace_id), source_id=str(source_id), types=out["types"])

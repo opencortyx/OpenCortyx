@@ -11,6 +11,9 @@ shown, instead of counting whatever retrieval returned. Live databases, MongoDB 
 own lake tables are read in place, never copied.
 
 ### Upgrading
+- **A Delta workspace keeps records out of the graph**: a table with no pipeline reads as its schema
+  (rows answer through SQL), and a JSON / YAML / XML file with no mapping keeps its records in Delta
+  without a node per record or nested field. A pipeline's row mode or a mapping still makes nodes.
 - `opencortyx update`. A database migration (`0032_data_plane`) adds the `data_asset`, `evidence` and
   `source_key` tables and the workspace setting `data_store`.
 - **Existing workspaces keep their data in the graph** (`data_store = graph`), working as before, and
@@ -27,6 +30,41 @@ own lake tables are read in place, never copied.
   sqlite): reading a lake or attaching a database no longer downloads anything at query time.
 
 ### Added
+- **Published records connected to what text says about them** (`resolution/mentions.py`): the
+  Detector finds the field that names a record ("Named by" in the Mapper) and published records are
+  labelled by it; an entity read from text whose name names exactly one published record is drawn
+  SAME_AS it - a person named in a ticket meets the customer of that name. A record's own free text,
+  read when its upload asks, hangs what it mentions off the record itself.
+- **Mapper: "Re-detect this mapping"** takes what the Detector finds now for one mapping as a new
+  version (the previous one kept under Versions), keeping "Publish to graph". The list's "Detect
+  from data" button is gone: detection runs after each upload, and what goes into the graph is chosen
+  in Add data.
+- **`EMBEDDING_WORKER_CONCURRENCY`** (default 1): more embedding processes for large imports; each
+  holds the model, so raise `EMBEDDING_WORKER_MEM_LIMIT` with it.
+- **The semantic layer, in the Mapper** (`knowledge/semantic`): once an ingestion settles, the
+  Detector reads the tables and records and proposes what they mean - entity types, the field that
+  identifies each record (never empty, never repeated, the one other data refers to), where each type
+  lives (a table's rows, an object or a list inside JSON / YAML / XML records), and the links between
+  types (a field whose values are all keys of another type). Nothing about field names is assumed;
+  where the data leaves a choice open, the workspace's model picks among the candidates. Types and
+  links go where meaning already lives - the type registry (a type's key is its `identify_by`, a link
+  a reference rule) and the Mapper (a mapping's `knowledge` section, status `auto`, or `draft` when
+  unsure). In the Mapper: Detect from data, a Knowledge panel per mapping (types, identifiers, sources,
+  relationships, materialize), Validate (missing sources and columns, empty or repeated identifiers,
+  references to nothing, ambiguous joins), Preview, and versions with restore. Settings
+  `knowledge_detect` (on) and `knowledge_publish` (off: publish detected entities to the graph).
+- **One logical table per type**: fifty licence files are one table; a customer in the CRM file and
+  in billing is one record with the fields of both. Questions read types; `POST /schema-mappings/publish`
+  makes a type's entities graph nodes (one per identifier) with their links, on request.
+- **The plan route** (`retrieval/l2_data/semantic.py`): a question about data becomes a small plan the
+  model chooses from options the data offers (which table, what to compute, grouped by what, which
+  date, rounding) - it never writes SQL; a compiler does. What the data can settle it settles: a
+  record named by its key is that record with the records it links to; a category value in the
+  question is a filter; a file named is that file. The rule planner remains as the fallback.
+- **The relationship a question asks about** is chosen by the model among the graph's own edge types
+  (`retrieval/l0_understanding/tools.py`), added to the rules' plan.
+- **Extractors read data where it lives**: `source.data` - an asset, a column, a JSON path, a
+  document's chunks or an entity type's records - without copying it into the graph first.
 - **The data store** (`stores/data`): delta-rs writes, DuckDB reads, both behind one module.
   `DATA_ROOT/<workspace>/unstructured` (every document's chunks, one table),
   `structured/<asset>` (a table's rows, typed once at ingest, keyed by `_row_key`) and
@@ -77,6 +115,59 @@ own lake tables are read in place, never copied.
 - A gold set (`apps/api/tests/goldset`): a licensing business over CSV, JSON, a live database, a lake
   table and documents, 200 questions of eleven types, and a runner reporting the resolution and
   unsupported-answer rates.
+
+### Changed
+- **A simpler product by default.** The sidebar is Assistant, Add data, Connections, Customize,
+  Assets, Graph and Review. Customize holds mappings, pipelines, extractors and scheduled syncs;
+  Settings holds models, users, quality checks, runs and system health; Types, hand edits and what could not be read are tabs of Review; agent
+  conversations are linked from the Assistant; scheduled syncs from Connections. Settings shows four
+  controls (workspace name, how strictly answers are checked, AI summaries of files, local folders);
+  the engine's tuning knobs keep their defaults and can be set in `.env` as
+  `OPENCORTYX_SETTING_<KEY>` (e.g. `OPENCORTYX_SETTING_ABSTAIN_THRESHOLD=0.3`), which wins over the
+  database. Types shows the types in this workspace's data (the built-in catalogue on request);
+  Pipelines lists the pipelines people built. Nothing is removed: every page keeps its address, each
+  of these is one entry in `apps/web/lib/simple.ts`, and `NEXT_PUBLIC_FULL_UI=1` shows everything.
+- **Add data is drop, choose, Add.** Two choices for every kind of file: "Extract entities and
+  relationships" and "Add the whole data to the graph". A folded Custom section holds a pipeline, a
+  mapping that shapes the graph (tables and JSON), extractors (documents) and tags. The per-file
+  reading preview and "Use this reading and add it" are gone; the Mapper does that job when wanted.
+- **The graph always gets the shape of the data**: a table's columns and a JSON file's keys with their
+  types (as before), the links detection finds between them as `JOINS_TO` between those fields, and a
+  document's outline - its headings, tables and figures as nodes, the text staying in Delta.
+- **"Add the whole data to the graph"** puts the data itself in as nodes too, per upload: every row,
+  every JSON key and value, every layout element - the data still in Delta.
+- **Entities and relationships read from text without an LLM** (`ingest/extraction/text_reader.py`):
+  a new Models role, Entities, runs a spaCy pipeline in-process (by default `spacy/en_core_web_sm`,
+  MIT, downloaded from Hugging Face on first use). Types are the model's labels and relationships the
+  sentence's verb ("Alice Smith joined Acme" gives Alice Smith -JOIN-> Acme) - nothing listed by
+  hand. Documents and free-text fields are read when an upload asks; each entity and relationship
+  cites its passage or row and sentence, and is matched by name to the published record it names,
+  also when that record is published later.
+- Version detection compares a document with documents of the same name only: compared with every
+  document, chat sessions that share their headers were proposed as versions of each other by the
+  hundred, and each upload read the whole workspace.
+- Detection: a key is unique within each file (the same customer in two files is one customer, not a
+  repeated key); a link rests on at least three distinct values; the field that names a record is a
+  phrase rather than a token (a name over an email), the model deciding only a tie.
+
+### Fixed
+- **An upload is "completed" only when it is usable**: stored, embedded and resolved. A run now stays
+  running at a last step, "Embedding & resolution", until the asset's resolution finishes; before, it
+  said completed while its passages were still being embedded, and a question asked then found
+  nothing. Resolution waits for a document's passages in the data store, not only its graph nodes. A
+  run waiting more than 6 hours is closed with a note; the stale-run reaper no longer re-ingests one.
+- **A document with no extractor and no pipeline is read in one pass**: it was still queued for a
+  deferred extraction that found nothing to run, then repeated the post-ingest steps and resolution
+  (~2.6 s of CPU per document through a chat import).
+- **Detection is no longer booked by document uploads**: it reads tables and JSON only, and re-read
+  every table in the workspace every two minutes during a document import.
+- **Retrieval no longer discards what it found below its similarity floor**: `/context` returns the
+  context marked `low_relevance`, and the answer step's relevance judge decides (fast mode, which runs
+  no judge, still refuses). A question whose evidence covered every source came back empty with a best
+  similarity of 0.253 against a floor of 0.28.
+- An upload whose reading never reported a start (a table read as its schema) stayed `queued` at its
+  last step and was never closed; a JSON upload was closed before its embeddings and resolution.
+- `/dashboard` was a 404; Assets showed zeros while loading.
 
 ## 0.1.0-beta.7 - 2026-10-23
 

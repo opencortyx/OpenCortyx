@@ -9,6 +9,9 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # NEXT_PUBLIC_* values are inlined into the client bundle at build time.
 ARG NEXT_PUBLIC_API_URL=http://localhost:8000
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+# 1 = every page and setting in the sidebar and Settings (apps/web/lib/simple.ts); empty = the short product.
+ARG NEXT_PUBLIC_FULL_UI=
+ENV NEXT_PUBLIC_FULL_UI=$NEXT_PUBLIC_FULL_UI
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build

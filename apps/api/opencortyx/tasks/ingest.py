@@ -44,9 +44,10 @@ def v2_ingest_document(self, workspace_id: str, content_b64: str, filename: str,
         try:
             from opencortyx.core.config import runtime as _rc
             _defer = _rc.defer_extraction() if defer_extraction is None else bool(defer_extraction)
+            plan = _doc_plan_from_features(features) or {}
             res = await walker_for("unstructured").ingest_file(
                 uuid.UUID(workspace_id), content, filename, collection_id=coll, mime_type=mime_type,
-                plan=_doc_plan_from_features(features), reporter=rep, defer_extraction=_defer,
+                plan=plan or None, reporter=rep, defer_extraction=_defer,
                 replace=bool(replace))
             await _apply_anchors(workspace_id, res, anchors, asset_path or filename, coll)
             if res.get("extraction") == "deferred":
@@ -71,6 +72,11 @@ def v2_ingest_document(self, workspace_id: str, content_b64: str, filename: str,
             except Exception as re_:
                 log.warning("extraction.relationships_failed", error=str(re_))
             _queue_embed_pass(workspace_id, res)
+            if plan.get("read_entities") and res.get("source_id") and res.get("status") == "ok":
+                # Add data's "extract entities and relationships": read on the extraction queue; the
+                # run completes when the reading has.
+                job = v2_read_text.delay(workspace_id, str(res["source_id"]), collection_id, run_id)
+                res["extraction"], res["extraction_task_id"] = "deferred", job.id
             if rep:
                 await rep.finish("completed", result=res)
             return res
@@ -130,8 +136,12 @@ def v2_extract_document(self, workspace_id: str, source_id: str, features: str =
         async with V2Session() as db:
             await seed_builtin_templates(db, oid)
         await mark_deferred_extraction(run_id, "running")
-        res = await extract_over_source(oid, sid, plan=_doc_plan_from_features(features),
-                                        collection_id=coll)
+        plan = _doc_plan_from_features(features) or {}
+        res = await extract_over_source(oid, sid, plan=plan, collection_id=coll)
+        if plan.get("read_entities"):
+            # Add data's "extract entities and relationships" beside the extractors chosen under
+            # Custom: read in this same deferred half, so the run completes when both have.
+            res["read"] = await _read_passages(oid, sid, coll)
         await _post_ingest(workspace_id, {**res, "source_id": source_id}, "document")
         try:
             rel = await run_relationship_templates_for_source(oid, sid, coll)
@@ -148,6 +158,54 @@ def v2_extract_document(self, workspace_id: str, source_id: str, features: str =
     except Exception as exc:
         if self.request.retries >= 2:                  # out of retries: the run says so, not "pending"
             async_to_sync(mark_deferred_extraction)(run_id, "failed", error=f"{type(exc).__name__}: {exc}")
+            raise
+        _max, _delay = retry_policy(self, exc, 2)
+        raise self.retry(exc=exc, countdown=_delay, max_retries=_max)
+
+
+#: The step a document's text reading reports on its run.
+READ_STEP = "Entities & relationships"
+
+
+async def _read_passages(workspace_id: uuid.UUID, source_id: uuid.UUID, collection_id=None) -> dict:
+    """Entities and relationships read from a document's passages by the text reader, without an
+    LLM. The document MENTIONS each entity; each one cites its passage and sentence."""
+    from opencortyx.ingest.extraction.text_reader import Input, read_inputs
+    from opencortyx.ingest.structured.dataplane import uses_delta
+    if await uses_delta(workspace_id):
+        from opencortyx.ingest.unstructured import dataplane as _udata
+        passages = list((await _udata.load_records(workspace_id, source_id, collection_id=collection_id)).values())
+    else:
+        passages = [n for n in await NodeRepo().find(workspace_id, source_refs=[source_id]) if n.id != source_id]
+    # A table's cells are data, not sentences: read as prose, "Router" in a price list became an
+    # organisation. A passage with a grid is a table.
+    return await read_inputs(workspace_id, [
+        Input(text=str((n.properties or {}).get("text") or ""), asset_id=str(source_id), unit_kind="chunk",
+              unit_key=str(n.id), holder=source_id) for n in passages
+        if not ((n.properties or {}).get("grid") or (n.properties or {}).get("table"))])
+
+
+@celery_app.task(bind=True, queue="extraction", name="opencortyx.read_text", acks_late=True, max_retries=2)
+def v2_read_text(self, workspace_id: str, source_id: str, collection_id: str = None, run_id: str = None):
+    """Entities and relationships read from a document's passages, without an LLM
+    (ingest/extraction/text_reader.py): Add data's "extract entities and relationships". The document
+    MENTIONS each entity; each entity and relationship cites the passage and sentence it came from."""
+    from opencortyx.ingest.runs.progress import mark_deferred_extraction
+
+    async def _run():
+        oid, sid = uuid.UUID(workspace_id), uuid.UUID(source_id)
+        coll = uuid.UUID(collection_id) if collection_id else None
+        await mark_deferred_extraction(run_id, "running", step=READ_STEP)
+        res = await _read_passages(oid, sid, coll)
+        await mark_deferred_extraction(run_id, "done", counts=res, step=READ_STEP)
+        return {"status": "ok", "source_id": source_id, **res}
+
+    try:
+        return async_to_sync(_run)()
+    except Exception as exc:
+        if self.request.retries >= 2:                  # out of retries: the run says so
+            async_to_sync(mark_deferred_extraction)(run_id, "failed", error=f"{type(exc).__name__}: {exc}",
+                                                   step=READ_STEP)
             raise
         _max, _delay = retry_policy(self, exc, 2)
         raise self.retry(exc=exc, countdown=_delay, max_retries=_max)
@@ -257,6 +315,9 @@ def v2_ingest_json(self, workspace_id: str, content_b64: str, filename: str,
             _queue_embed_pass(workspace_id, res)
             _queue_extract_pass(workspace_id, res)
             await _post_ingest(workspace_id, res, "semistructured")
+            # Built before the post-ingest step, the summary did not say resolution was queued, and the
+            # run was closed before the file was embedded and resolved.
+            summary["resolution_queued"] = bool(res.get("resolution_queued"))
             if rep:
                 if stages is None:
                     await rep.step(1, "Walk JSON → graph", "completed", count=res.get("nodes"))

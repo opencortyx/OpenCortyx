@@ -22,12 +22,12 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 
 async def main(ws: uuid.UUID, exp: dict) -> int:
-    from sqlalchemy import func, select, text
+    from sqlalchemy import select, text
 
     from opencortyx.core.dataplane import mode
     from opencortyx.core.db import V2Session
     from opencortyx.core.substrate import NodeRepo
-    from opencortyx.domain.data import DataAsset, Evidence, SourceKey
+    from opencortyx.domain.data import DataAsset
     from opencortyx.stores.data import SEMISTRUCTURED, STRUCTURED, UNSTRUCTURED, DataStore
     from opencortyx.stores.vector import VectorFilter, get_vector_store
 
@@ -36,9 +36,6 @@ async def main(ws: uuid.UUID, exp: dict) -> int:
 
     async with V2Session() as db:
         assets = (await db.execute(select(DataAsset).where(DataAsset.workspace_id == ws))).scalars().all()
-        ev = dict((await db.execute(select(Evidence.unit_kind, func.count()).where(Evidence.workspace_id == ws)
-                                    .group_by(Evidence.unit_kind))).all())
-        sk = (await db.execute(select(func.count()).select_from(SourceKey).where(SourceKey.workspace_id == ws))).scalar()
         failed_runs = (await db.execute(text(
             "SELECT asset, coalesce(error, '') FROM opencortyx_v2.ingest_run WHERE workspace_id = :w "
             "AND status = 'failed'"), {"w": ws})).all()
@@ -87,17 +84,24 @@ async def main(ws: uuid.UUID, exp: dict) -> int:
     check("every document has chunks in Delta", not empty, "; ".join(empty[:5]))
     check("no chunk nodes in the graph", in_graph == 0, f"{in_graph} chunk node(s)")
 
-    # evidence, source keys, FROM_ASSET
-    check("row evidence recorded", ev.get("row", 0) > 0, f"{ev}")
-    check("record evidence recorded", ev.get("record", 0) > 0, f"{ev}")
-    check("source keys recorded (row mode ids)", (sk or 0) > 0, f"{sk}")
-    from_asset = await repo.edges(ws, types=["FROM_ASSET"], limit=100000)
-    check("FROM_ASSET edges drawn", len(from_asset) > 0, f"{len(from_asset)}")
-    sample = (await repo.find(ws, types=["KeyNode"], limit=2000))[:200]
-    from opencortyx.core.dataplane import evidence
-    has = await evidence.for_targets(ws, [n.id for n in sample])
-    check("KeyNodes carry evidence", bool(sample) and len(has) >= 0.9 * len(sample),
-          f"{len(has)}/{len(sample)} sampled")
+    # the graph holds knowledge, not records: no node per row, record or nested field by default
+    data_ids = [a.id for a in by_kind.get(STRUCTURED, []) + by_kind.get(SEMISTRUCTURED, [])]
+    record_nodes = [n for n in await repo.descendants(ws, data_ids, max_depth=3)
+                    if n.type not in ("Attribute", "Table", "Source", "Asset", "Date")]
+    check("no node per record or field in the graph", not record_nodes,
+          f"{len(record_nodes)} record node(s), e.g. {sorted({n.type for n in record_nodes})[:5]}")
+
+    # the semantic layer: types, keys and links detected from the data (knowledge/semantic)
+    from opencortyx.knowledge.semantic import store as semantic
+    layer = await semantic.load(ws)
+    entities = [t for t in layer.types if t.kind == "entity" and t.keys]
+    check("entity types detected with identifiers", len(entities) >= 5,
+          ", ".join(f"{t.name}({'+'.join(t.keys)})" for t in layer.types))
+    check("links detected between types", len(layer.links) >= 4,
+          ", ".join(f"{lk.source}.{lk.source_prop}->{lk.target}" for lk in layer.links))
+    merged = [t for t in entities if len({(b.kind, b.path) for b in t.bindings}) > 1]
+    check("the same entity from two sources is one type", bool(merged),
+          ", ".join(f"{t.name}: {sorted({b.path or 'rows' for b in t.bindings})}" for t in merged))
 
     # data layer: Attributes with value sets, no sample values
     attrs = await repo.find(ws, types=["Attribute"], limit=20000)
@@ -106,10 +110,21 @@ async def main(ws: uuid.UUID, exp: dict) -> int:
     check("Attribute nodes profiled with value sets", len(vs) > 0, f"{len(vs)} of {len(attrs)}")
     check("no sample values on Attribute nodes", not samples, f"{len(samples)} with samples")
 
-    # resolution engine: duplicate customers, document links
-    same = await repo.edges(ws, types=["SAME_AS"], limit=100000)
-    check("resolution found the duplicate customers", len(same) >= exp["facts"]["duplicate_customers"] * 0.9,
-          f"{len(same)} SAME_AS for {exp['facts']['duplicate_customers']} duplicated customers")
+    # the duplicate customers (one in the CRM file, one in billing) read as ONE record each
+    from opencortyx.retrieval.l2_data.schema import load as load_schema
+    from opencortyx.stores.data import Views
+    schema = await load_schema(ws, fresh=True)
+    two = {t.name for t in merged if t.kind == "entity"}
+    cust = next((t for t in schema.objects() if t.name in two and any(
+        b.kind == SEMISTRUCTURED for b in layer.type(t.name).bindings)), None)
+    n_cust = 0
+    if cust is not None:
+        with Views(ws, schema.refs, lock=True, logical=schema.logical) as v:
+            n_cust = v.query(f'SELECT count(*) AS n FROM "{cust.view}"').to_pylist()[0]["n"]
+    check("duplicate customers resolve to one record each", n_cust == exp["facts"]["customers"],
+          f"{cust.name if cust else 'no customer type'}: {n_cust} records for {exp['facts']['customers']} customers")
+
+    # resolution engine: document links
     links = {t: len(await repo.edges(ws, types=[t], limit=100000))
              for t in ("OBSOLETES", "REPLACES", "REQUIRES", "SUPERSEDED_BY", "UPDATES")}
     check("documents linked by their headers", sum(links.values()) > 0, json.dumps(links))

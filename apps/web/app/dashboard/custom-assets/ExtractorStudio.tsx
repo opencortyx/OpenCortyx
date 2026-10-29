@@ -413,17 +413,37 @@ export default function ExtractorStudio({ d }: { d: ExtractorDraft }) {
 
           {/* What it reads */}
           <Section id="s-input" lane="input" title="What it reads">
-            <div className="grid sm:grid-cols-2 gap-2">
+            <div className="grid sm:grid-cols-3 gap-2">
               <Choice on={sourceMode === "dependent"} title="Nodes already in the graph" desc="Runs over existing nodes" tech="bound · source: select"
                 onClick={() => { d.setSourceMode("dependent"); d.setMechRef(DEPENDENT_MECHANISMS[0]); }} />
+              <Choice on={sourceMode === "data"} title="Data where it lives" desc="A table, column, JSON path, document or entity type" tech="source: data"
+                onClick={() => { d.setSourceMode("data"); d.setMechRef(DEPENDENT_MECHANISMS[0]); }} />
               <Choice on={sourceMode === "independent"} title="Nothing — it creates its own records" desc="Self-seeded, runs once" tech="independent · source: null"
                 onClick={() => { d.setSourceMode("independent"); d.setMechRef(INDEPENDENT_MECHANISMS[0]); }} />
             </div>
             <p className="text-[12.5px] text-stone-500 mt-3 leading-relaxed max-w-[70ch]">
               {sourceMode === "dependent"
                 ? <>You pick <b>which</b> nodes and fields it reads when you add it as a step in a <Link href="/dashboard/pipelines" className="underline font-semibold text-teal-700">pipeline</Link> — so one extractor works across every pipeline&rsquo;s vocabulary. No node types to name here.</>
+                : sourceMode === "data"
+                ? <>Reads its input from the data store; nothing is copied into the graph first. What it extracts is attached to the asset and cites the exact row or chunk.</>
                 : <>Source is <code>null</code>. The mechanism pulls from an external connector, a fixed list, or a generative prompt and produces standalone nodes.</>}
             </p>
+            {sourceMode === "data" && (
+              <div className="grid sm:grid-cols-3 gap-2 mt-3">
+                <Field label="Asset (name or id)">
+                  <input className={inputCls} value={d.dataInput.asset} disabled={!!d.dataInput.type.trim()}
+                    onChange={e => d.setDataInput({ ...d.dataInput, asset: e.target.value })} placeholder="e.g. licences-00 or policy.md" />
+                </Field>
+                <Field label="Column or JSON path (optional)">
+                  <input className={inputCls} value={d.dataInput.field} disabled={!!d.dataInput.type.trim()}
+                    onChange={e => d.setDataInput({ ...d.dataInput, field: e.target.value })} placeholder="notes, or $.contact.email" />
+                </Field>
+                <Field label="…or an entity type's records">
+                  <input className={inputCls} value={d.dataInput.type}
+                    onChange={e => d.setDataInput({ ...d.dataInput, type: e.target.value })} placeholder="e.g. Customer" />
+                </Field>
+              </div>
+            )}
           </Section>
 
           {/* How it works */}

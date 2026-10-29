@@ -39,6 +39,7 @@ import {
   type ExistingType,
 } from "@/components/mapper/panels";
 import ConformancePanel from "@/components/mapper/conformance";
+import KnowledgePanel from "@/components/mapper/knowledge";
 import { SqlConnectBar, SqlSchemaSource, type SqlOrigin } from "@/components/mapper/sqlsource";
 import DeclaredCanvas from "@/components/mapper/canvas";
 
@@ -546,6 +547,12 @@ export default function MapperBuilderPage() {
             <p className="px-3.5 py-6 text-sm text-stone-500">Select a rule, or add one.</p>
           )}
         </section>
+      </div>
+
+      <div className="mt-4">
+        <Panel title="Knowledge" count="entity types, identifiers, relationships">
+          <KnowledgePanel mappingId={String(id)} payload={rec?.payload} onSaved={setRec} />
+        </Panel>
       </div>
 
       <div className="mt-4">

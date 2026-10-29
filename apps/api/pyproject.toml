@@ -41,6 +41,7 @@ nest-asyncio = "^1.6.0"
 openai = "^1.30.0"
 fastembed = ">=0.4.0"                  # In-process CPU ONNX embeddings (~25ms, zero network hop)
 onnxruntime = ">=1.18.0"               # ONNX runtime engine for fastembed
+spacy = ">=3.8,<3.9"                   # the Entities role: entities and sentence grammar, in-process (MIT)
 einops = ">=0.8.0"                    # Tensor ops for nomic-bert attention architecture
 
 # ── Document reading: one reader per format (ingest/formats/unstructured/layout/readers/) ──

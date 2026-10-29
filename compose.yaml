@@ -382,10 +382,11 @@ services:
     # threads side by side, but Celery cannot cancel a thread, so a stopped worker could not hand its
     # job back (soft shutdown) and the job sat unacknowledged for 40 minutes. The child is recycled
     # (between jobs, never during one) once a large batch has grown it past 1.5 GB; the next job
-    # reloads the model from the cache in seconds.
+    # reloads the model from the cache in seconds. More processes embed more assets at once - each
+    # holds its own model, so raise the concurrency only with the memory limit (~1.5 GB a process).
     mem_limit: ${EMBEDDING_WORKER_MEM_LIMIT:-2304m}
     memswap_limit: ${EMBEDDING_WORKER_MEM_LIMIT:-2304m}
-    command: sh -c 'exec celery -A opencortyx.core.worker.celery_app worker --loglevel=info --pool=prefork --concurrency=1 --queues=embedding,resolution --max-memory-per-child=${EMBEDDING_WORKER_MAX_MEMORY_KB:-1500000}'
+    command: sh -c 'exec celery -A opencortyx.core.worker.celery_app worker --loglevel=info --pool=prefork --concurrency=${EMBEDDING_WORKER_CONCURRENCY:-1} --queues=embedding,resolution --max-memory-per-child=${EMBEDDING_WORKER_MAX_MEMORY_KB:-1500000}'
     healthcheck:
       test: ["CMD-SHELL", "python -c 'import sys, os; sys.exit(0 if os.path.exists(\"/proc/1\") else 1)'"]
       interval: 60s
@@ -408,6 +409,7 @@ services:
       context: ./apps/web
       args:
         NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_FULL_UI: ${FULL_UI:-}
     image: ${OPENCORTYX_IMAGE_PREFIX:-ghcr.io/opencortyx/opencortyx}-web:${OPENCORTYX_VERSION:-dev}
     restart: unless-stopped
     logging: *logging

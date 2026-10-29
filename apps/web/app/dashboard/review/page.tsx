@@ -6,6 +6,7 @@ import { contextV2Api, type ResolutionDecision } from "@/lib/api/contextV2";
 import {
   Inbox, Check, X, RefreshCw, ArrowUpRight, Network, Lightbulb, History, ArrowRight, GitCompare, Sparkles,
 } from "lucide-react";
+import ReviewTabs from "@/components/layout/ReviewTabs";
 import PageHeader from "@/components/layout/PageHeader";
 import Button from "@/components/ui/Button";
 
@@ -135,6 +136,7 @@ export default function ReviewInboxPage() {
         description="What resolution applied automatically and why, and what needs your decision: conflicting values and statements, possible duplicates, new versions of documents, and newly discovered types."
         actions={<Button variant="secondary" icon={RefreshCw} busy={loading} onClick={load}>Refresh</Button>}
       />
+      <ReviewTabs />
 
       <div className="inline-flex bg-stone-100 rounded-lg p-1 text-sm">
         <button onClick={() => setTab("auto")}
@@ -166,7 +168,7 @@ export default function ReviewInboxPage() {
       ) : tab === "auto" ? (
         applied.length === 0 ? (
           <Empty icon={<Sparkles size={40} className="text-stone-300" />} title="Nothing resolved automatically yet"
-            body={<>After each asset is ingested, its nodes are matched with the rest of your data using the identity each node type declares (set in the Extractor). What was linked, confirmed or added shows here, with the reason and the score.</>} />
+            body={<>After each asset is ingested, its nodes are matched with the rest of your data using the identity each type has - found by detection, or corrected in the Mapper. What was linked, confirmed or added shows here, with the reason and the score.</>} />
         ) : (
           <ul className="space-y-2">
             {applied.map((d) => (

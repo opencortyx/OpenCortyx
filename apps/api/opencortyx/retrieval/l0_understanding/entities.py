@@ -33,9 +33,10 @@ _IDENTIFIER = re.compile(r"\b([A-Z]{2,}[-_]?\d{2,}[-\w]*|\b\d{6,}\b)")
 #: Explicitly quoted spans are always mentions.
 _QUOTED = re.compile(r"[\"“”'‘’]([^\"“”'‘’]{2,60})[\"“”'‘’]")
 
-#: A run of capitalised words, allowing internal lowercase title/origin connectors ("Bank of England", "Ludwig van Beethoven").
+#: A run of capitalised words, allowing internal lowercase title/origin connectors ("Bank of England", "Ludwig van Beethoven")
+#: and numbers that are part of the name ("RFC 9562", "PEP 8", "Windows 11").
 _CAP_RUN = re.compile(r"\b([A-Z][\w.\-]*(?:\s+(?:of|de|van|der|von)\s+[A-Z][\w.\-]*|"
-                      r"\s+[A-Z][\w.\-]*)*)\b")
+                      r"\s+[A-Z][\w.\-]*|\s+\d[\w.\-]*)*)\b")
 
 #: "<X>'s <attribute>" — X is a mention and the attribute names the field being asked for.
 _POSSESSIVE = re.compile(r"\b([A-Z][\w\-]+)(?:'s|’s)\s+(\w+)")
@@ -87,8 +88,8 @@ def detect_mentions(query: str) -> list[EntityMention]:
         if not parts:
             continue
         span = " ".join(parts)
-        if len(span) < 2:
-            continue
+        if len(span) < 2 or not any(c.isalpha() for c in span):
+            continue                    # "In 2024": a year after a stop-word is not a name
         if claim(m.start(), m.end()):
             found.append(EntityMention(text=span, start=m.start(), end=m.end()))
     found.sort(key=lambda e: e.start)

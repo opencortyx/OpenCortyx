@@ -58,7 +58,11 @@ async def list_ontology(user: CurrentUser = Depends(require_auth)):
     from opencortyx.ontology import PERSON_DOMAINS
     async with V2Session() as db:
         rows = await visible_types(db, user.workspace_id)
+    from opencortyx.core.substrate import NodeRepo
     from opencortyx.resolution.spec import KEY as RESOLUTION, ResolutionSpec
+    # What this workspace's data has: a node type with nodes, or a type detection or a person added.
+    # The rest is the built-in catalogue (Person / Company templates) - offered, not in use.
+    counts = await NodeRepo().count_by_type(user.workspace_id)
     types = []
     for r in rows:
         ps = r.properties_schema or {}
@@ -70,7 +74,9 @@ async def list_ontology(user: CurrentUser = Depends(require_auth)):
                       "attributes": ps.get("fields") or [],             # data points / attributes
                       "allowed_source_types": r.allowed_source_types,   # edges: from
                       "allowed_target_types": r.allowed_target_types,   # edges: to
-                      "resolved": bool(spec and spec.active)})          # same-thing matching is set
+                      "resolved": bool(spec and spec.active),           # same-thing matching is set
+                      "count": counts.get(r.name, 0) if r.kind != "edge" else None,
+                      "in_data": r.source in ("discovered", "user") or bool(counts.get(r.name))})
     from opencortyx.knowledge.workspace import get_profile
     return {"types": types, "mode": (await get_profile(user.workspace_id)).mode,
             "person_domains": PERSON_DOMAINS, "org_domains": ORG_DOMAINS}

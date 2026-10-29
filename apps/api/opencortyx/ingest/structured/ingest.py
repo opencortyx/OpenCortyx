@@ -733,6 +733,10 @@ async def _ingest_one_table(workspace_id: uuid.UUID, path: str, filename: str, t
     # the way row mode keys its evidence, whatever the mode - a catalog-only table is still fully
     # answerable through SQL. The graph below is written exactly as before.
     delta_mode = await _dataplane.uses_delta(workspace_id)
+    if delta_mode and not step1_cfg.get("mode"):
+        # The rows are in Delta, answerable through SQL; a node per row only when a pipeline asks for
+        # row mode or a mapping declares the entities (the graph holds knowledge, not records).
+        effective_mode = "catalog"
     stored: dict = {}
     if delta_mode:
         _key = next((c["name"] for c in tbl["columns"]

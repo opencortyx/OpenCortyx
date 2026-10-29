@@ -11,6 +11,7 @@ from opencortyx.core.security.auth import CurrentUser, require_auth, require_wri
 from opencortyx.core.db import V2Session
 from opencortyx.core import uploads
 from opencortyx.ingest.runs.progress import batch_status, create_run, dispatch, record_device_upload
+from opencortyx.tasks._shared import EXTRACTOR_FEATURE, KNOWLEDGE_FEATURE, WHOLE_DATA_FEATURE
 from opencortyx.tasks.ingest import v2_ingest_document_flow, v2_ingest_json
 
 router = APIRouter()
@@ -38,6 +39,10 @@ async def upload_source(
     asset_path: Optional[str] = Form(None),    # folder-relative path the rules match on
     replace: bool = Form(False),               # read it again even if this exact file is already in
     tags: Optional[str] = Form(None),          # JSON list or comma-separated: the asset's tags
+    extract_knowledge: bool = Form(False),     # entities and relationships into the graph (all kinds)
+    whole_data: bool = Form(False),            # the data itself into the graph too: rows, keys/values, passages
+    mapping_ids: Optional[str] = Form(None),   # Custom: JSON list of mappings that shape tables / JSON
+    extractors: Optional[str] = Form(None),    # Custom: JSON list of extractors that read documents
     user: CurrentUser = Depends(require_write)
 ):
     """NATIVE ingestion: upload a file and it is sent to the pipeline that SUITS IT.
@@ -64,6 +69,17 @@ async def upload_source(
     decision = guard_readable(content, fname, route)
     ref = uploads.put(content)
     chosen = decision["route"]
+    def _names(raw, what):
+        try:
+            return [str(x) for x in (json.loads(raw) if raw else []) if str(x).strip()]
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"{what} must be a JSON list")
+    shape_with = _names(mapping_ids, "mapping_ids")
+    # A document carries the graph options, and the extractors chosen under Custom, as plan features.
+    features = ",".join([*(x for x in str(features or "").split(",") if x.strip()),
+                         *([KNOWLEDGE_FEATURE] if extract_knowledge else []),
+                         *([WHOLE_DATA_FEATURE] if whole_data else []),
+                         *(f"{EXTRACTOR_FEATURE}{n}" for n in _names(extractors, "extractors"))]) or None
     if pipeline_ids:
         from opencortyx.ingest.sources import sync
         try:
@@ -84,6 +100,10 @@ async def upload_source(
         opts.update(_anchor_extras)
         if replace:
             opts["replace"] = True
+        if whole_data:
+            opts["whole_data"] = True                  # every key and value walked into the graph too
+        if shape_with:
+            opts["mapping_ids"] = shape_with           # read through these mappings' structure cards
         task = await dispatch(run_id, v2_ingest_json, str(user.workspace_id), ref, fname,
                               json.dumps(opts) if opts else None, str(run_id) if run_id else None)
     elif chosen == formats.STRUCTURED:
@@ -96,6 +116,11 @@ async def upload_source(
         _ovd = dict(_anchor_extras)
         if max_rows is not None:
             _ovd["max_rows"] = max_rows
+        if whole_data:
+            _ovd["mode"] = "row"                       # each row a node too (the rows stay in Delta)
+            _ovd.setdefault("max_rows", "all")         # the whole data: every row, not a sample
+        if shape_with:
+            _ovd["mapping_ids"] = shape_with           # read through these mappings' table cards
         _ov = json.dumps(_ovd) if _ovd else None
         task = await dispatch(run_id, v2_ingest_tabular, str(user.workspace_id), ref, fname,
                               pipeline_id or None, _ov, collection_id, str(run_id) if run_id else None)
@@ -126,6 +151,10 @@ async def upload_source(
                 _anchor_extras.get("asset_path") or fname, replace=bool(replace))
 
     await _remember_tags(user.workspace_id, run_id, tags)
+    if extract_knowledge and run_id and chosen in (formats.SEMISTRUCTURED, formats.STRUCTURED):
+        # Its types are known only after the detection pass its ingest books: the choice waits there.
+        from opencortyx.tasks.maintenance import want_in_graph
+        want_in_graph(run_id)
 
     # `routing` is returned so an unexpected route is visible at the call site rather than being
     # discovered later by wondering why a CSV produced Chunk nodes.

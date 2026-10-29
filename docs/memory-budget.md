@@ -64,6 +64,7 @@ Every ceiling above is a default. Override any of them in `.env`, then run `dock
 | `SETUP_MEM_LIMIT` | 768m | the one-shot setup |
 | `CELERY_WORKER_MAX_MEMORY_KB` | 1500000 | worker, per child |
 | `EXTRACTION_WORKER_MAX_MEMORY_KB` | 2500000 | extraction-worker, per child (above the generation model, or every task would reload it) |
+| `EMBEDDING_WORKER_CONCURRENCY` | 1 | embedding-worker processes; each holds the embedding model, so raise `EMBEDDING_WORKER_MEM_LIMIT` by ~1.5 GB per extra process |
 | `EMBEDDING_WORKER_MAX_MEMORY_KB` | 1500000 | embedding-worker, per child |
 | `MAINTENANCE_WORKER_MAX_MEMORY_KB` | 300000 | maintenance-worker, per child |
 

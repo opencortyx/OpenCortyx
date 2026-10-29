@@ -38,12 +38,108 @@ async def reconcile_orphans(stale_minutes: int = 30) -> int:
         async with V2Session() as db:
             res = await db.execute(
                 update(IngestRun)
-                .where(IngestRun.status == "running", IngestRun.updated_at < cutoff)
+                .where(IngestRun.status == "running", IngestRun.updated_at < cutoff,
+                       ~IngestRun.result.has_key(FINALIZING))       # ingested; waits on its embeddings
                 .values(status="failed", error="interrupted (service restart)", finished_at=_now()))
             await db.commit()
             return res.rowcount or 0
     except Exception:
         return 0
+
+
+#: The last step of a run: its asset's embeddings and resolution. The run is `completed` only after
+#: it - an asset reported complete is searchable and resolved, not merely stored.
+FINALIZE_STEP = "Embedding & resolution"
+#: Marks a run that is ingested and waits on that step: result[FINALIZING] = the asset (source) id.
+FINALIZING = "finalizing"
+#: A run waiting this long on its resolution is closed anyway, saying so: the asset is stored, and a
+#: lost resolution task must not keep its upload "running" for good.
+FINALIZE_GIVE_UP_HOURS = 6
+
+
+def _schedule_detection(workspace_id, kind: str | None, run_id=None, source_id=None) -> None:
+    """Book a detection pass after a run that changed the records detection reads - tables and JSON.
+    A document is not one: booked for every upload, a chat import re-read every table in the
+    workspace each two minutes (65-95 s at 2.5 CPUs) and found the same types each time. An asset
+    whose upload asked for knowledge waits for that pass, which binds it to its types."""
+    if kind == "document":
+        return
+    from opencortyx.tasks.maintenance import book_after_detection, schedule_detection
+    if source_id:
+        book_after_detection(workspace_id, source_id, run_id)
+    schedule_detection(workspace_id)
+
+
+async def _resolved_since_run(run_id, source_id) -> bool:
+    """Whether the asset was resolved after this run began (its resolution stamp is newer)."""
+    try:
+        from opencortyx.core.substrate import NodeRepo
+        async with V2Session() as db:
+            run = await db.get(IngestRun, uuid.UUID(str(run_id)))
+        if run is None:
+            return False
+        node = await NodeRepo().get(run.workspace_id, uuid.UUID(str(source_id)))
+        at = (node.properties or {}).get("__resolved_at") if node else None
+        return bool(at and run.created_at and datetime.fromisoformat(at) >= run.created_at)
+    except Exception:                                         # noqa: BLE001 - undecidable: keep waiting
+        return False
+
+
+async def finalize_source(workspace_id, source_id, *, run_ids=None, note: str | None = None) -> int:
+    """Close the runs waiting on this asset's embeddings and resolution: `completed`, their last step
+    done - with `note` when they are closed without it (resolution gave up, or never came). Called by
+    the resolution task when it finishes. Returns how many runs were closed. Best-effort."""
+    closed = []
+    try:
+        async with V2Session() as db:
+            q = select(IngestRun).where(IngestRun.status.in_(("queued", "running")),
+                                        IngestRun.result[FINALIZING].astext == str(source_id))
+            if workspace_id is not None:
+                q = q.where(IngestRun.workspace_id == uuid.UUID(str(workspace_id)))
+            if run_ids:
+                q = q.where(IngestRun.id.in_([uuid.UUID(str(r)) for r in run_ids]))
+            for r in (await db.execute(q.with_for_update())).scalars().all():
+                if not note and (r.result or {}).get("extraction") in ("deferred", "running"):
+                    continue        # extraction still going: its own resolution closes the run
+                result = {k: v for k, v in (r.result or {}).items() if k != FINALIZING}
+                if note:
+                    result["finalize_note"] = note
+                r.result = result
+                r.steps = [{**s, "status": "failed" if note else "completed"} if s.get("name") == FINALIZE_STEP
+                           else s for s in (r.steps or [])]
+                r.current_step = sum(1 for s in r.steps if s.get("status") in ("completed", "failed", "skipped"))
+                r.status, r.percent, r.finished_at = "completed", 100, _now()
+                closed.append((r.id, r.workspace_id, r.kind))
+            await db.commit()
+    except Exception as e:                                    # noqa: BLE001
+        log.warning("progress.finalize_failed source=%s error=%s", source_id, e)
+        return 0
+    for rid, ws, kind in closed:
+        await settle_upload_ingestion(rid)
+        try:
+            _schedule_detection(ws, kind, rid, source_id)
+        except Exception:                                     # noqa: BLE001
+            pass
+    return len(closed)
+
+
+async def reconcile_finalizing() -> int:
+    """Periodic: close the waiting runs whose asset was resolved without closing them (the stamp and
+    the run raced), and give up on those waiting past FINALIZE_GIVE_UP_HOURS."""
+    try:
+        async with V2Session() as db:
+            rows = (await db.execute(select(IngestRun.id, IngestRun.workspace_id, IngestRun.updated_at,
+                                            IngestRun.result[FINALIZING].astext).where(
+                IngestRun.status.in_(("queued", "running")), IngestRun.result.has_key(FINALIZING)))).all()
+    except Exception:                                         # noqa: BLE001
+        return 0
+    n, cutoff = 0, _now() - timedelta(hours=FINALIZE_GIVE_UP_HOURS)
+    for rid, ws, updated, sid in rows:
+        if await _resolved_since_run(rid, sid):
+            n += await finalize_source(ws, sid, run_ids=[rid])
+        elif updated and updated < cutoff:
+            n += await finalize_source(ws, sid, run_ids=[rid], note="embedding or resolution did not finish")
+    return n
 
 
 def _self_dispatch() -> dict | None:
@@ -181,6 +277,23 @@ class ProgressReporter:
                 # and was killed (an OOM'd worker child) before it could report, and the broker
                 # re-delivered the task. A completed ingest, not a duplicate of something already there.
                 status = "completed"
+        sid = res.get("source_id")
+        if status == "completed" and sid and (res.get("resolution_queued") or res.get("extraction") == "deferred"):
+            # Completed means usable: stored, embedded and resolved. The asset's resolution - queued
+            # by the post-ingest step (or by its deferred extraction), run once its embeddings exist -
+            # closes the run (`finalize_source`). Until then it is running, at its last step.
+            await self._index_new_attributes(res)
+            steps = [s for s in self._steps if s.get("name") != FINALIZE_STEP]
+            steps.append({"i": max([s.get("i", 0) for s in steps] or [0]) + 1, "name": FINALIZE_STEP,
+                          "status": "running", "count": None})
+            self._steps = steps
+            # `running` said outright: a path that never reported a start (a table read as its schema)
+            # left the run `queued`, which the closer did not look for - and the reaper may re-send.
+            await self._patch(status="running", result={**(result or {}), FINALIZING: str(sid)}, steps=steps,
+                              total_steps=max(self._total, len(steps)), percent=95)
+            if await _resolved_since_run(self.run_id, sid):      # resolution finished first
+                await finalize_source(None, sid, run_ids=[self.run_id])
+            return
         fields = {"status": status, "result": (result or {}), "finished_at": _now()}
         if status in ("completed", "duplicate"):
             fields["percent"] = 100
@@ -190,6 +303,19 @@ class ProgressReporter:
         await settle_upload_ingestion(self.run_id)
         if status == "completed":
             await self._index_new_attributes(res)
+            await self._book_detection(res.get("source_id"))
+
+    async def _book_detection(self, source_id=None) -> None:
+        """A finished ingest changes what the data holds: book a (debounced) detection pass."""
+        if not self.run_id:
+            return
+        try:
+            async with V2Session() as db:
+                r = await db.get(IngestRun, uuid.UUID(str(self.run_id)))
+            if r is not None:
+                _schedule_detection(r.workspace_id, r.kind, self.run_id, source_id)
+        except Exception:                                     # noqa: BLE001 - never fail a finished run
+            pass
 
     async def _written_by_this_run(self, source_id) -> bool:
         """Whether the asset `source_id` names was first written after this run was created."""
@@ -313,12 +439,14 @@ async def mark_deferred_extraction(run_id, state: str, *, counts: dict | None = 
                                    step: str | None = EXTRACTION_STEP) -> None:
     """Record the deferred half of a document ingest on the run that queued it.
 
-    `state` is "running" | "done" | "failed". The run itself stays `completed` — the document is
-    searchable the moment its chunks land, which is the point of deferring — but `result.extraction`
-    and a step say what is still happening, so the outcome can say "still extracting" instead of
-    telling the user their file produced nothing. Best-effort, like every write here."""
+    `state` is "running" | "done" | "failed". `result.extraction` and a step say what is still
+    happening, so the outcome can say "still extracting" instead of telling the user their file
+    produced nothing. The run completes when the asset's resolution - queued once extraction is done -
+    finishes (`finalize_source`); an extraction that failed for good closes it here instead, saying so.
+    Best-effort, like every write here."""
     if not run_id:
         return
+    waiting_on = None
     try:
         async with V2Session() as db:
             r = await db.get(IngestRun, uuid.UUID(str(run_id)), with_for_update=True)  # see _patch
@@ -340,9 +468,14 @@ async def mark_deferred_extraction(run_id, state: str, *, counts: dict | None = 
             r.result, r.steps = result, steps
             r.total_steps = max(int(r.total_steps or 0), len(steps))
             r.current_step = sum(1 for st in steps if st.get("status") in ("completed", "failed", "skipped"))
+            waiting_on = result.get(FINALIZING)
             await db.commit()
     except Exception as e:                          # noqa: BLE001
         log.warning("progress.mark_extraction_failed run=%s error=%s", run_id, e)
+    if state == "failed" and waiting_on:
+        await finalize_source(None, waiting_on, run_ids=[run_id], note="extraction failed")
+    elif state == "done" and waiting_on and await _resolved_since_run(run_id, waiting_on):
+        await finalize_source(None, waiting_on, run_ids=[run_id])      # resolution finished first
 
 
 ONE_TIME = "one_time"          # ingestion mode for a device upload — ran once, cannot be re-run

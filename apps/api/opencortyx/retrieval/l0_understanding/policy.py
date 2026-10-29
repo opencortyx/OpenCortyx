@@ -72,8 +72,6 @@ for _surfaces in _EXECUTE.values():
 #: Every surface the orchestrator can run. A surface absent from an intent's set is skipped.
 ALL_SURFACES = frozenset().union(*_EXECUTE.values())
 
-_GRAPH_OVERRIDABLE = frozenset({Intent.SEMANTIC, Intent.KEYWORD, Intent.TEMPORAL})
-
 #: Why each surface is skipped, phrased as the reason the QUESTION does not need it. These are
 #: read back in the trace, where "skipped" without a reason is indistinguishable from "crashed".
 _REASONS = {
@@ -104,7 +102,9 @@ def plan_execution(plan: QueryPlan, *, widen_below: int = DEFAULT_WIDEN_BELOW,
         # question SHAPE; these read its CONTENT, and content wins when the two disagree.
         if plan.intent is Intent.SEMANTIC and not _is_relational_plan(plan):
             run.discard("graph")
-        if plan.edge_types and plan.intent in _GRAPH_OVERRIDABLE:
+        if plan.edge_types:
+            # A relationship this graph has, named in the question ("the RFC that RFC 9562
+            # obsoletes" - OBSOLETES): the answer is across that edge, whatever the shape.
             run.add("graph")
         if plan.temporal or plan.attributes:
             # An explicit constraint is filterable whatever the question's shape. "Tell me about

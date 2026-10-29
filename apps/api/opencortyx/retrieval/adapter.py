@@ -139,7 +139,7 @@ def _citations(blocks, prov: dict | None = None) -> list:
                         "origin": "data", "sql": (b.attributes or {}).get("sql"),
                         "sources": [{"asset_id": a["asset_id"], "label": a["name"], "type": a.get("storage"),
                                      "version_ref": a.get("version_ref")} for a in assets],
-                        "source_count": len(assets), "source_count_capped": False})
+                        "source_count": len(assets), "source_count_capped": False, "retrieved_by": ["sql"]})
             continue
         p = prov.get(str(b.node_id)) or {}
         out.append({"node_id": str(b.node_id),
@@ -152,7 +152,9 @@ def _citations(blocks, prov: dict | None = None) -> list:
                     "origin": p.get("origin") or "unknown",
                     "sources": p.get("sources") or [],
                     "source_count": p.get("source_count") or 0,
-                    "source_count_capped": bool(p.get("source_count_capped"))})
+                    "source_count_capped": bool(p.get("source_count_capped")),
+                    # which retrieval paths found it: embedding, bm25, entity, graph, identifier, ...
+                    "retrieved_by": sorted({s.split("(")[0] for s in (b.retrieved_by or [])})})
     return out
 
 
@@ -260,7 +262,12 @@ async def build_context_v2(query: str, ctx: RetrieveContext, k: int = 0) -> dict
                 "confidence": round(best, 3), "retrievers": surfaces, "stage_trace": trace,
                 "engine": "retrieval", "route": res.route,
                 "unsupported": unsupported or None}
-    if res.abstained or not res.blocks:
+    # Retrieval does not refuse what it found. Below the similarity floor (`res.abstained`) the
+    # context still goes back, marked `low_relevance`: the answer step's relevance judge reads it and
+    # refuses if it must. Discarded here, a question whose evidence was retrieved (every source
+    # covered) came back empty because its best cosine was 0.253 against a floor of 0.28.
+    low_relevance = bool(res.abstained)
+    if not res.blocks:
         return {"abstained": True,
                 "reason": "no candidate resembles the question",
                 "context": "", "citations": [], "confidence": round(best, 3),
@@ -273,7 +280,9 @@ async def build_context_v2(query: str, ctx: RetrieveContext, k: int = 0) -> dict
     return {"abstained": False,
             "context": context_str,
             "citations": cites,
-            "caveats": [],
+            "caveats": ["Nothing retrieved closely resembles the question; the context may not answer it."]
+            if low_relevance else [],
+            **({"low_relevance": True} if low_relevance else {}),
             "tokens_used": res.tokens or used,
             "confidence": round(best, 3),
             "retrievers": surfaces,

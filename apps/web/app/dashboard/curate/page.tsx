@@ -8,6 +8,7 @@ import {
   ChevronRight, ChevronDown, Compass, Network,
 } from "lucide-react";
 import { GlossaryInput, SynonymInput, RuleInput } from "@/lib/api/contextV2";
+import ReviewTabs from "@/components/layout/ReviewTabs";
 import PageHeader from "@/components/layout/PageHeader";
 import SchemaTab from "./SchemaTab";
 import DefinitionsTab from "./DefinitionsTab";
@@ -37,6 +38,7 @@ export default function CuratePage() {
         icon={PenSquare}
         description="Hand-curate the catalog with no LLM — manage schema, resources, and link assets."
       />
+      <ReviewTabs />
 
       <div className="inline-flex bg-stone-100 rounded-lg p-1 text-sm">
         {TABS.map((t) => (

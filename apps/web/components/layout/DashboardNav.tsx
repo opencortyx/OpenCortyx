@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Logo } from "@/components/brand/Logo";
 import { contextV2Api } from "@/lib/api/contextV2";
+import { FULL_UI, HIDDEN_NAV, NAV_LABELS, NAV_SECTION_ORDER } from "@/lib/simple";
 import {
   MessageSquare, 
   UploadCloud, 
@@ -26,7 +27,7 @@ import {
   Network,
   LayoutGrid,
   Workflow,
-  Fingerprint, Sparkles, X } from "lucide-react";
+  Fingerprint, Sparkles, Wand2, X } from "lucide-react";
 
 const SECTIONS = [
   {
@@ -55,6 +56,8 @@ const SECTIONS = [
       // result rather than the step everyone assumes they must complete first.
       { href: "/dashboard/add", label: "Add data", icon: Sparkles },
       { href: "/dashboard/connectors", label: "Connections", icon: Cable },
+      // The simple product's one door to shaping how data is read (lib/simple.ts hides it otherwise)
+      { href: "/dashboard/customize", label: "Customize", icon: Wand2 },
       { href: "/dashboard/mapper", label: "Mapper", icon: Workflow },
       { href: "/dashboard/custom-assets", label: "Custom Extractors", icon: SlidersHorizontal },
       { href: "/dashboard/pipelines", label: "Pipelines", icon: GitBranch },
@@ -104,7 +107,8 @@ export function DashboardNav({ open = false, onClose, onNavigate }: { open?: boo
   const closeRef = useRef<HTMLButtonElement>(null);
   useEffect(() => { if (open) closeRef.current?.focus(); }, [open]);
 
-  const renderLink = ({ href, label, icon: Icon }: any) => {
+  const renderLink = ({ href, label: own, icon: Icon }: any) => {
+    const label = NAV_LABELS[href] || own;
     const isActive = path?.startsWith(href) || false;
     return (
       <li key={href}>
@@ -151,8 +155,18 @@ export function DashboardNav({ open = false, onClose, onNavigate }: { open?: boo
         </button>
       </div>
       <div className="flex-1 overflow-y-auto py-4">
-        {SECTIONS.map((section) => {
-          const items = section.items.filter((it: any) => !it.adminOnly || isAdmin);
+        {/* The simple product (lib/simple.ts): one short list in the order a person needs it, no
+            section headings; everything hidden here is reached from Settings, Review or Add data. */}
+        {!FULL_UI ? (
+          <ul className="px-3 space-y-1">
+            {[...SECTIONS]
+              .sort((a, b) => NAV_SECTION_ORDER.indexOf(a.title) - NAV_SECTION_ORDER.indexOf(b.title))
+              .flatMap((section) => section.items)
+              .filter((it: any) => (!it.adminOnly || isAdmin) && !HIDDEN_NAV.has(it.href))
+              .map(renderLink)}
+          </ul>
+        ) : SECTIONS.map((section) => {
+          const items = section.items.filter((it: any) => (!it.adminOnly || isAdmin) && !HIDDEN_NAV.has(it.href));
           if (items.length === 0) return null;
           return (
             <div key={section.title} className="mb-6">
@@ -174,11 +188,13 @@ export function DashboardNav({ open = false, onClose, onNavigate }: { open?: boo
               </Link>
             </li>
           )}
+          {FULL_UI && (                                 /* goes nowhere yet ("#") */
           <li>
             <Link href="#" onClick={onNavigate} className="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors">
               <HelpCircle size={18} className="text-muted-foreground/70" /> Support
             </Link>
           </li>
+          )}
         </ul>
       </div>
     </nav>

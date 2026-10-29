@@ -66,7 +66,13 @@ async def create_schema_mapping(spec: SchemaMappingSpec, user: CurrentUser = Dep
     if not spec.name.strip():
         raise HTTPException(status_code=400, detail="name required")
     paradigm = spec.paradigm if spec.paradigm in MAPPING_PARADIGMS else "semistructured"
-    payload = prepare_mapping_payload(paradigm, spec.name.strip(), spec.payload or {})
+    raw = dict(spec.payload or {})
+    if raw.get("knowledge"):
+        # A person's declaration (Mode B): its assets named by id, version 1, never overwritten.
+        from opencortyx.knowledge.semantic.store import resolve_assets
+        raw["knowledge"] = await resolve_assets(user.workspace_id, raw["knowledge"])
+        raw = _with_knowledge({}, raw)
+    payload = prepare_mapping_payload(paradigm, spec.name.strip(), raw)
     summary = mapping_summary(paradigm, payload, spec.summary)
     async with V2Session() as db:
         m = SchemaMapping(workspace_id=user.workspace_id, name=spec.name.strip(), paradigm=paradigm,
@@ -85,6 +91,117 @@ async def create_schema_mapping(spec: SchemaMappingSpec, user: CurrentUser = Dep
         await db.refresh(m)
     link_existing_later(user.workspace_id, linked)
     return mapping_view(m)
+
+
+def _with_knowledge(old: dict | None, new: dict) -> dict:
+    """`new` keeps the stored knowledge and its history when it does not carry them (an editor that
+    only edits rules); a changed knowledge section becomes a new version, marked as curated so the
+    Detector never overwrites it."""
+    from opencortyx.knowledge.semantic.store import with_version
+    old, new = dict(old or {}), dict(new or {})
+    new.setdefault("history", old.get("history") or [])
+    if "knowledge" not in new:
+        if old.get("knowledge"):
+            new["knowledge"] = old["knowledge"]
+        return new
+    k = dict(new.pop("knowledge") or {})
+    prior = old.get("knowledge") or {}
+    if {**k, "version": 0, "curated": True} == {**prior, "version": 0, "curated": True}:
+        new["knowledge"] = prior
+        return new
+    base = {**new, "knowledge": prior} if prior else new
+    return with_version(base, {**k, "curated": True})
+
+
+async def _mapping(user, mapping_id: str) -> SchemaMapping:
+    try:
+        mid = uuid.UUID(mapping_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="mapping not found") from None
+    async with V2Session() as db:
+        m = await db.get(SchemaMapping, mid)
+    if not m or m.workspace_id != user.workspace_id:
+        raise HTTPException(status_code=404, detail="mapping not found")
+    return m
+
+
+@router.post("/schema-mappings/detect")
+async def detect_mappings(user: CurrentUser = Depends(require_write)):
+    """Read the workspace's tables and records and propose what they mean: entity types with their
+    keys, where each lives, and the links between them - as `auto` mappings when confident, `draft`
+    when not. Curated mappings are left as they are."""
+    from opencortyx.knowledge.semantic import detector, store
+    layer = await detector.detect(user.workspace_id, apply=True)
+    await audit(user.workspace_id, user.user_id, "schema_mapping/detect",
+                meta={"types": len(layer.types), "links": len(layer.links)})
+    return detector.summary(await store.load(user.workspace_id))
+
+
+@router.post("/schema-mappings/{mapping_id}/detect")
+async def redetect_mapping(mapping_id: str, user: CurrentUser = Depends(require_write)):
+    """Re-detect ONE mapping: the Detector reads the workspace again (links reach other files) and
+    this mapping takes what it now proposes for its own assets - a new version, the previous one kept
+    in its history, the person's "publish to graph" kept. Hands the mapping back to the Detector:
+    later passes update it too."""
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from opencortyx.knowledge.semantic import detector, store
+    layer = await detector.detect(user.workspace_id, apply=False)
+    async with V2Session() as db:
+        m = await db.get(SchemaMapping, uuid.UUID(mapping_id))
+        if not m or m.workspace_id != user.workspace_id:
+            raise HTTPException(status_code=404, detail="mapping not found")
+        knowledge = store.redetected(m, layer)
+        if knowledge is None:
+            raise HTTPException(status_code=409, detail="The data no longer shows an entity type for this mapping.")
+        m.payload = store.with_version(m.payload or {}, knowledge)
+        flag_modified(m, "payload")
+        await db.commit()
+        await db.refresh(m)
+    store.invalidate_views(user.workspace_id)
+    await audit(user.workspace_id, user.user_id, "schema_mapping/redetect",
+                meta={"mapping": mapping_id, "types": [e["type"] for e in knowledge["entities"]]})
+    return mapping_view(m)
+
+
+@router.post("/schema-mappings/publish")
+async def publish_knowledge(everything: bool = False, user: CurrentUser = Depends(require_write)):
+    """Publish the chosen entity types to the graph: one node per entity (by its identifier), one
+    edge per link. `everything`: every accepted entity type, not only those marked `materialize`."""
+    from opencortyx.knowledge.semantic import publish
+    res = await publish.publish(user.workspace_id, everything=everything)
+    await audit(user.workspace_id, user.user_id, "schema_mapping/publish", meta=res)
+    return res
+
+
+@router.get("/schema-mappings/knowledge")
+async def knowledge_layer(user: CurrentUser = Depends(require_auth)):
+    """Every entity type and relationship the workspace's mappings declare, merged across them."""
+    from opencortyx.knowledge.semantic import detector, store
+    return detector.summary(await store.load(user.workspace_id))
+
+
+@router.post("/schema-mappings/{mapping_id}/validate")
+async def validate_mapping(mapping_id: str, user: CurrentUser = Depends(require_auth)):
+    from opencortyx.knowledge.semantic import check
+    return await check.validate(user.workspace_id, await _mapping(user, mapping_id))
+
+
+@router.get("/schema-mappings/{mapping_id}/preview")
+async def preview_mapping(mapping_id: str, limit: int = 10, user: CurrentUser = Depends(require_auth)):
+    from opencortyx.knowledge.semantic import check
+    return await check.preview(user.workspace_id, await _mapping(user, mapping_id), limit=max(1, min(limit, 50)))
+
+
+@router.get("/schema-mappings/{mapping_id}/history")
+async def mapping_history(mapping_id: str, user: CurrentUser = Depends(require_auth)):
+    m = await _mapping(user, mapping_id)
+    p = m.payload or {}
+    cur = p.get("knowledge") or {}
+    now = [{"version": cur.get("version"), "at": m.updated_at.isoformat() if m.updated_at else None,
+            "current": True, "knowledge": cur}] if cur else []
+    return {"current": cur.get("version"),
+            "versions": now + [{**h, "current": False} for h in p.get("history") or []]}
 
 
 @router.get("/schema-mappings/{mapping_id}")
@@ -112,8 +229,13 @@ async def update_schema_mapping(mapping_id: str, patch: SchemaMappingPatch,
         if patch.status is not None:
             m.status = patch.status
         linked: list[str] = []
+        before = dict((m.payload or {}).get("knowledge") or {})
         if patch.payload is not None:
-            m.payload = prepare_mapping_payload(m.paradigm, m.name, patch.payload)
+            new = dict(patch.payload)
+            if new.get("knowledge"):
+                from opencortyx.knowledge.semantic.store import resolve_assets
+                new["knowledge"] = await resolve_assets(m.workspace_id, new["knowledge"])
+            m.payload = prepare_mapping_payload(m.paradigm, m.name, _with_knowledge(m.payload, new))
             linked = await save_mapping_references(db, m.workspace_id, m.id, m.payload)
             m.summary = mapping_summary(m.paradigm, m.payload, patch.summary or m.summary)
             if m.paradigm == "semistructured":
@@ -125,6 +247,12 @@ async def update_schema_mapping(mapping_id: str, patch: SchemaMappingPatch,
         await db.commit()
         await db.refresh(m)
     link_existing_later(user.workspace_id, linked)
+    if patch.payload is not None and (m.payload or {}).get("knowledge"):
+        from opencortyx.knowledge.semantic.store import invalidate_views, publish_changed
+        invalidate_views(user.workspace_id)                  # questions read the edited types from now on
+        if publish_changed(before, (m.payload or {}).get("knowledge") or {}):
+            from opencortyx.tasks.maintenance import v2_apply_knowledge_choices
+            v2_apply_knowledge_choices.delay(str(user.workspace_id), publish_first=True)
     return mapping_view(m)
 
 

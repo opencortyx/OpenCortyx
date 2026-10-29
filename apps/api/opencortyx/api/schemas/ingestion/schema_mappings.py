@@ -5,7 +5,8 @@ from pydantic import BaseModel, Field, field_validator
 
 #: Kept in step with api.services.schema_mappings.MAPPING_PARADIGMS (asserted by a test).
 MAPPING_PARADIGMS = ("structured", "semistructured", "unstructured")
-MAPPING_STATUSES = ("active", "draft", "disabled")
+#: `auto`: written by the Detector and in use; `draft`: proposed, waiting for a person.
+MAPPING_STATUSES = ("active", "auto", "draft", "paused", "disabled")
 
 
 def _paradigm(v):

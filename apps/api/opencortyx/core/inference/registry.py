@@ -17,7 +17,7 @@ import uuid
 
 from opencortyx.core.config import (
     BUILTIN_EMBED_MODEL, BUILTIN_EMBED_PROVIDER, BUILTIN_GENERATION_MODEL, BUILTIN_GENERATION_PROVIDER,
-    BUILTIN_RERANK_MODEL, BUILTIN_RERANK_PROVIDER,
+    BUILTIN_ENTITIES_MODEL, BUILTIN_RERANK_MODEL, BUILTIN_RERANK_PROVIDER,
     LOCAL_LLM_PROVIDERS,
     OPENAI_COMPATIBLE_PROVIDERS,
 )
@@ -41,7 +41,7 @@ class NoModelConfigured(RuntimeError):
 
 #: The roles something actually resolves a model for. A role outside this list would be a setting
 #: nothing reads — registering a "vision" or "ocr" model changed nothing — so it is refused.
-MODEL_ROLES = ("generation", "embedding", "rerank", "extraction", "utility")
+MODEL_ROLES = ("generation", "embedding", "rerank", "extraction", "utility", "entities")
 
 #: Roles served by the workspace's generation model when they have no row of their own.
 _SHARES_GENERATION = ("extraction", "utility")
@@ -58,6 +58,7 @@ def _row_to_spec(m) -> dict:
 #: base_url on such a row makes the Models page claim a server that is not there.
 IN_PROCESS_PROVIDERS = frozenset({
     "fastembed", "onnx", "sentence-transformers", "sentence_transformers", "local", "st",
+    "spacy",                       # the entities role: a spaCy pipeline read in-process (text_reader)
 }) | LOCAL_LLM_PROVIDERS
 #: Every provider something here can call. A registered model with any other provider could never run.
 KNOWN_PROVIDERS = OPENAI_COMPATIBLE_PROVIDERS | IN_PROCESS_PROVIDERS | {"anthropic", "huggingface", "hf"}
@@ -77,6 +78,8 @@ def _builtin_rows() -> list[dict]:
         {"role": "rerank", "name": BUILTIN_RERANK_MODEL.split("/")[-1],
          "provider": BUILTIN_RERANK_PROVIDER, "model_id": BUILTIN_RERANK_MODEL,
          "base_url": None, "params": {}},
+        {"role": "entities", "name": BUILTIN_ENTITIES_MODEL.split("/")[-1],
+         "provider": "spacy", "model_id": BUILTIN_ENTITIES_MODEL, "base_url": None, "params": {}},
     ]
 
 
@@ -106,6 +109,24 @@ async def ensure_default_models(workspace_id) -> int:
     if created:
         _cache.clear()
     return created
+
+
+async def ensure_role(workspace_id, role: str) -> bool:
+    """Register the built-in model for ONE role the workspace has no row for - a role added after the
+    workspace was made. Returns whether a row was added."""
+    from sqlalchemy import select
+    row = next((r for r in _builtin_rows() if r["role"] == role), None)
+    if row is None:
+        return False
+    async with V2Session() as db:
+        if (await db.execute(select(Model.id).where(Model.workspace_id == workspace_id,
+                                                    Model.role == role))).first():
+            return False
+        db.add(Model(workspace_id=workspace_id, name=row["name"], role=role, provider=row["provider"],
+                     model_id=row["model_id"], base_url=row["base_url"], params=row["params"], is_default=True))
+        await db.commit()
+    _cache.clear()
+    return True
 
 
 async def resolve_model(workspace_id, role: str = "generation", ref: str | None = None) -> dict | None:

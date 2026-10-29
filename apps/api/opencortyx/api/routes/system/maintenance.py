@@ -78,18 +78,29 @@ async def reset_database(user: CurrentUser = Depends(require_admin)):
             IngestRun.workspace_id == user.workspace_id, IngestRun.status.in_(["queued", "running"])))).scalars().all()
     queue_res = await asyncio.to_thread(revoke_tasks, task_ids)
     await NodeRepo().clear_org(user.workspace_id)
+    # The data plane: the workspace's Delta tables and the rows that index them. Kept, a reset
+    # workspace still answered data questions from tables whose assets were gone.
+    from opencortyx.core.dataplane import assets as _assets
+    data_assets = await _assets.clear(user.workspace_id)
     async with V2Session() as db:
         # This organization's auto-discovered ontology candidates (Review Inbox → Ontology) described
         # the data being wiped. Built-in and user-registered types stay, and so does every other
         # organization's ontology.
+        # So did the types the Detector wrote (knowledge/semantic), accepted or not.
+        from opencortyx.knowledge.semantic.store import DETECTED
         await db.execute(delete(TypeRegistry).where(
-            TypeRegistry.workspace_id == user.workspace_id, TypeRegistry.status == "candidate",
-            TypeRegistry.source == "discovered"))
+            TypeRegistry.workspace_id == user.workspace_id, TypeRegistry.source == "discovered",
+            (TypeRegistry.status == "candidate") | TypeRegistry.properties_schema.has_key(DETECTED)))
         # The resolution index and ledger name nodes that no longer exist; kept, the next ingest of
         # the same records would be "resolved" as SAME_AS nodes the reset deleted.
         from opencortyx.domain.resolution import ResolutionDecision, ResolutionKey
         await db.execute(delete(ResolutionKey).where(ResolutionKey.workspace_id == user.workspace_id))
         await db.execute(delete(ResolutionDecision).where(ResolutionDecision.workspace_id == user.workspace_id))
+        # Mappings the Detector wrote described the data being wiped; a person's mappings stay.
+        from opencortyx.domain.control import SchemaMapping
+        from opencortyx.knowledge.semantic.store import DETECTED
+        await db.execute(delete(SchemaMapping).where(SchemaMapping.workspace_id == user.workspace_id,
+                                                     SchemaMapping.source_type == DETECTED))
         # Also clear the Ingestion Progress runs (Progress tab) — they live in ingest_run, not node/edge.
         run_ids = (await db.execute(select(IngestRun.id).where(
             IngestRun.workspace_id == user.workspace_id))).scalars().all()
@@ -100,7 +111,7 @@ async def reset_database(user: CurrentUser = Depends(require_admin)):
             workspace_id=user.workspace_id,
             actor=str(user.user_id),
             action="database/reset",
-            meta={"note": "All graph nodes and edges deleted", "queue": queue_res}
+            meta={"note": "All graph nodes and edges deleted", "queue": queue_res, "data_assets": data_assets}
         ))
 
         await db.commit()
@@ -112,5 +123,7 @@ async def reset_database(user: CurrentUser = Depends(require_admin)):
     await forget_upload_runs(user.workspace_id, run_ids)
     held = await quarantine.clear(user.workspace_id)
     await accounting.rebaseline(user.workspace_id, reason="database reset")
+    from opencortyx.knowledge.semantic.store import invalidate_views
+    invalidate_views(user.workspace_id)
     return {"status": "ok", "message": "All data deleted.", "queue": queue_res,
-            "quarantine_cleared": held}
+            "quarantine_cleared": held, "data_assets": data_assets}

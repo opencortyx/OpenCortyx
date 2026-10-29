@@ -1,5 +1,6 @@
 "use client";
 
+import { SHOW_DEFAULT_PIPELINES } from "@/lib/simple";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { contextV2Api, Pipeline, SYSTEM_DEFAULT_PIPELINES_LIST } from "@/lib/api/contextV2";
@@ -28,12 +29,12 @@ export default function PipelinesDashboard() {
       // constant is only a fallback for a server that has not seeded its defaults yet.
       const byId = new Map(loaded.map((p: any) => [p.id, p]));
       const combined = [
-        ...SYSTEM_DEFAULT_PIPELINES.map((d) => byId.get(d.id) || d),
+        ...(SHOW_DEFAULT_PIPELINES ? SYSTEM_DEFAULT_PIPELINES.map((d) => byId.get(d.id) || d) : []),
         ...loaded.filter((p: any) => !SYSTEM_DEFAULT_PIPELINES.some((d) => d.id === p.id)),
       ];
       setItems(combined);
     } catch (e) {
-      setItems(SYSTEM_DEFAULT_PIPELINES);
+      setItems(SHOW_DEFAULT_PIPELINES ? SYSTEM_DEFAULT_PIPELINES : []);
     } finally {
       setLoading(false);
     }

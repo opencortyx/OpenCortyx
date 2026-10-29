@@ -176,13 +176,16 @@ def parse(plan: QueryPlan, vocab: Optional[TypeVocabulary]) -> Optional[Aggregat
 
 
 async def execute(workspace_id: uuid.UUID, spec: AggregationSpec, *,
-                  limit: int = MAX_GROUPS, scope: str | None = None) -> AggregationResult:
+                  limit: int = MAX_GROUPS, scope: str | None = None,
+                  collection_ids=None) -> AggregationResult:
     """Run the computation over every node of the types, not over a retrieved sample.
 
     `scope` is the question's corpus, as retrieval's own scope filter reads it. Counting ignored it,
     so "how many sessions were there?" asked of the knowledge base counted the app's own captured
     chats, and any type name the app writes as memory competed with the corpus's for a count. A node
-    outside the scope is not counted, as a group or as a member."""
+    outside the scope is not counted, as a group or as a member. So with `collection_ids`: only the
+    collections asked about are counted, and a count of none there is no answer (the type is simply
+    not in them) - retrieval reads the collections instead."""
     import time
     t0 = time.perf_counter()
     res = AggregationResult(spec=spec)
@@ -194,20 +197,28 @@ async def execute(workspace_id: uuid.UUID, spec: AggregationSpec, *,
     if scope == "knowledge":
         live[CONVERSATION_FLAG] = "true"            # excluded when EITHER key matches
 
+    cols = {str(c) for c in collection_ids} if collection_ids else None
+
+    def in_cols(node) -> bool:
+        return cols is None or str(node.collection_id or "") in cols
+
     def counted(node) -> bool:
         return (str((node.properties or {}).get("superseded", "")).lower() != "true"
-                and in_scope(node, scope))
+                and in_scope(node, scope) and in_cols(node))
 
     if not spec.group_type:
-        if scope == "conversations":                # "flag is true" cannot be a props_not
+        if scope == "conversations" or cols:        # "flag is true" cannot be a props_not
             nodes = await repo.find(workspace_id, exact_types=[spec.target_type])
             res.scalar = float(sum(1 for n in nodes if counted(n)))
+            if cols and not res.scalar:
+                res.inconclusive = True
+                res.note = f"no {spec.target_type} in these collections; this is not a count of zero"
         else:
             res.scalar = float(await repo.count(workspace_id, exact_types=[spec.target_type], props_not=live))
         res.ms = round((time.perf_counter() - t0) * 1000, 1)
         return res
     groups = [g for g in await repo.find(workspace_id, exact_types=[spec.group_type], props_not=live)
-              if in_scope(g, scope)]
+              if in_scope(g, scope) and in_cols(g)]
     members: dict[str, set] = {str(g.id): set() for g in groups}
     for start in range(0, len(groups), 200):
         batch = [g.id for g in groups[start:start + 200]]

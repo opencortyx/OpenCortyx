@@ -1,7 +1,9 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { type ChatThread } from "@/lib/api/contextV2";
-import { Plus, Search, Pencil, Trash2, Check, X, MessageSquare, Loader2 } from "lucide-react";
+import Link from "next/link";
+import { Plus, Search, Pencil, Trash2, Check, X, MessageSquare, Loader2, Bot } from "lucide-react";
+import { HIDDEN_NAV } from "@/lib/simple";
 
 // The Assistant's conversations, grouped the way people remember them: by when they last talked.
 const GROUPS: { label: string; days: number }[] = [
@@ -56,6 +58,11 @@ export default function ChatHistory({
           <input value={query} onChange={(e) => onQuery(e.target.value)} placeholder="Search chats"
             className="w-full pl-8 pr-2 py-1.5 text-xs border border-stone-200 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary" />
         </label>
+        {HIDDEN_NAV.has("/dashboard/sessions") && (
+          <Link href="/dashboard/sessions" className="flex items-center gap-1.5 px-1 text-xs text-stone-500 hover:text-primary">
+            <Bot size={13} aria-hidden="true" /> Agent conversations
+          </Link>
+        )}
       </div>
 
       <nav aria-label="Chat history" className="flex-1 min-h-0 overflow-y-auto p-2 custom-scrollbar">

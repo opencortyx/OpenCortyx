@@ -165,6 +165,34 @@ class RetrievalWorkflow:
                node_types=plan.node_types, edge_types=plan.edge_types)
         return plan
 
+    async def choose_relationship(self, workspace_id: uuid.UUID, plan: QueryPlan, vocab, t: _Timer) -> None:
+        """L0, after the rules: the model picks the relationship the question asks about among the
+        graph's own (l0_understanding/tools.py). Adds to the plan; never takes from it."""
+        from opencortyx.retrieval import l2_data
+        from opencortyx.retrieval.l0_understanding import tools
+        if l2_data.planner_mode() != "plan" or self._complete is not _default_complete:
+            return
+        try:
+            edge = await tools.relationship(workspace_id, plan, vocab, self._embed)
+        except Exception as exc:                              # noqa: BLE001 - the rules' plan stands
+            t.mark("L0", "relationship", detail=f"FAILED {type(exc).__name__}: {exc}")
+            return
+        t.mark("L0", "relationship", detail=edge or "none chosen")
+
+    async def record_route(self, workspace_id: uuid.UUID, plan: QueryPlan, query: str, t: _Timer) -> None:
+        """A question naming a record by its key (found in the data, not by its shape) also tries
+        the data route: the record and what it links to are rows, not nodes."""
+        from opencortyx.retrieval import l2_data
+        from opencortyx.retrieval.l2_data import semantic
+        if plan.routes.get("DATA_SQL") or l2_data.planner_mode() != "plan" or self.cfg.scope == "conversations":
+            return
+        try:
+            if await semantic.names_record(workspace_id, query):
+                plan.routes["DATA_SQL"] = 0.6
+                t.mark("L0", "record_route", detail="the question names a record by its key")
+        except Exception as exc:                              # noqa: BLE001
+            t.mark("L0", "record_route", detail=f"FAILED {type(exc).__name__}: {exc}")
+
     def _bound_complete(self, workspace_id: uuid.UUID):
         """The rewriting callable for ONE workspace: the default resolves that workspace's own model;
         an injected one (tests) is used as given."""
@@ -740,7 +768,7 @@ class RetrievalWorkflow:
     # ── run ──────────────────────────────────────────────────────────────────────────────────
     # ── aggregation ──────────────────────────────────────────────────────────────────────────
     async def aggregate(self, workspace_id: uuid.UUID, plan: QueryPlan,
-                        vocab, t: _Timer):
+                        vocab, t: _Timer, collection_ids=None):
         """Compute a counting question instead of retrieving a sample of it.
 
         Returns the result, or None when this is not an aggregation or the corpus cannot ground
@@ -755,7 +783,8 @@ class RetrievalWorkflow:
             t.mark("L2", "aggregate", detail=f"not grounded: {spec.why} — falling back to retrieval")
             return None
         try:
-            result = await aggregate_mod.execute(workspace_id, spec, scope=self.cfg.scope)
+            result = await aggregate_mod.execute(workspace_id, spec, scope=self.cfg.scope,
+                                                 collection_ids=collection_ids)
         except Exception as exc:
             t.mark("L2", "aggregate", detail=f"FAILED {type(exc).__name__}: {exc}")
             return None
@@ -768,11 +797,12 @@ class RetrievalWorkflow:
                       f" in {result.ms}ms")
         return result
 
-    async def data_route(self, workspace_id: uuid.UUID, query: str, t: _Timer):
+    async def data_route(self, workspace_id: uuid.UUID, query: str, t: _Timer, collection_ids=None):
         """L2b: SQL over the workspace's data (retrieval/l2_data). None when it has nothing to say."""
         from opencortyx.retrieval import l2_data
         try:
-            res = await l2_data.answer(workspace_id, query, self._bound_complete(workspace_id))
+            res = await l2_data.answer(workspace_id, query, self._bound_complete(workspace_id),
+                                       embed=self._embed, collection_ids=collection_ids)
         except Exception as exc:                              # noqa: BLE001 - a layer degrades
             t.mark("L2b", "data", detail=f"FAILED {type(exc).__name__}: {exc}")
             return None
@@ -780,7 +810,8 @@ class RetrievalWorkflow:
             t.mark("L2b", "data", detail="no table answers this")
             return None
         t.mark("L2b", "data", n_out=len(res.rows), detail=f"{res.method}: {res.sql[:200]}"
-               + (f" -> {res.unknown_reason}" if res.unknown_reason else ""),
+               + (f" -> {res.unknown_reason}" if res.unknown_reason else "")
+               + (f" [{res.notes}]" if res.notes else ""),
                sql=res.sql, assets=[a["name"] for a in res.assets], attempts=len(res.attempts))
         return res
 
@@ -796,6 +827,41 @@ class RetrievalWorkflow:
         return block
 
     _MEMORY_FLAG = "__memory"          # core.substrate.CONVERSATION_FLAG - stamped by session capture
+
+    async def _apply_collections(self, workspace_id, graph: CandidateGraph, collection_ids, t) -> CandidateGraph:
+        """Keep only what belongs to the collections asked for, after expansion - the same reason as
+        `_apply_scope`: the seed search is scoped, but a link (two documents resolved as the same, a
+        shared entity) walks into another collection. A node with no collection of its own (a passage
+        read back from the data store) belongs to its document's. What comes from no asset at all (a
+        date, a glossary term, a curated rule) belongs to the workspace and stays; a document or a
+        part of one outside every collection is outside the scope asked for, and goes."""
+        if not graph.candidates:
+            return graph
+        want = {str(c) for c in collection_ids}
+        nodes = {str(n.id): n for n in await self.repo.get_many(workspace_id, list(graph.candidates))}
+        parents = {str(n.source_ref) for n in nodes.values() if not n.collection_id and n.source_ref}
+        parent_col = {str(n.id): n.collection_id for n in await self.repo.get_many(workspace_id, list(parents))}             if parents else {}
+
+        from opencortyx.domain.ontology import is_asset_node
+
+        def in_scope(nid: str) -> bool:
+            n = nodes.get(nid)
+            if n is None:
+                return True
+            col = n.collection_id or (parent_col.get(str(n.source_ref)) if n.source_ref else None)
+            if col is not None:
+                return str(col) in want
+            return not (n.source_ref or is_asset_node(n))       # workspace knowledge, not a document's
+        keep = {nid: c for nid, c in graph.candidates.items() if in_scope(str(nid))}
+        dropped = len(graph.candidates) - len(keep)
+        if not dropped:
+            return graph
+        graph.candidates = keep
+        graph.seeds = [s for s in graph.seeds if s in keep]
+        graph.edges = [e for e in graph.edges if e.from_id in keep and e.to_id in keep]
+        t.mark("L2", "collections", n_in=len(keep) + dropped, n_out=len(keep),
+               detail=f"dropped {dropped} node(s) of other collections")
+        return graph
 
     def _apply_scope(self, graph: CandidateGraph, t) -> CandidateGraph:
         """Keep only the corpus `cfg.scope` names.
@@ -872,22 +938,27 @@ class RetrievalWorkflow:
         Distinct from `entity_scope`, which INFERRED the conversation from resolved entities and
         regressed 6 points: names recur across conversations and duplicate Entity nodes made the
         inference bind to the wrong one, excluding the right conversation entirely."""
+        # One scope for every step: the call's collections, else the workflow's own.
+        collection_ids = collection_ids if collection_ids is not None else self.cfg.collection_ids
         t = _Timer()
         vocab = await self.vocabulary(workspace_id, t)
         plan = self.understand(query, t, vocab)
+        await self.choose_relationship(workspace_id, plan, vocab, t)
         plan.routes = routes_mod.routes(plan, query)
+        if not collection_ids:          # the key index spans every collection; a scoped question has its own data
+            await self.record_route(workspace_id, plan, query, t)
 
         # L2b - rows answer a question about rows. Before graph aggregation: when both can count,
         # SQL sees every row and the graph only what was made into nodes.
         data = None
         if plan.routes.get("DATA_SQL") and self.cfg.scope != "conversations":
-            data = await self.data_route(workspace_id, query, t)
+            data = await self.data_route(workspace_id, query, t, collection_ids=collection_ids)
             if data is not None and data.ok and data.rows and plan.intent == Intent.AGGREGATION:
                 block = self._data_block(data)
                 return RetrievalResult(plan=plan, graph=CandidateGraph(), blocks=[block], trace=t.trace,
                                        tokens=block.tokens, route="data_sql", data=data)
 
-        agg = await self.aggregate(workspace_id, plan, vocab, t)
+        agg = await self.aggregate(workspace_id, plan, vocab, t, collection_ids=collection_ids)
         if agg is not None:
             # The answer is a computation over everything, not a ranking of a few things. Adding
             # a retrieved sample alongside it would invite the model to count the sample.
@@ -908,6 +979,8 @@ class RetrievalWorkflow:
                                       collection_ids=collection_ids,
                                       scope_dialogues=scope_dialogues)
         graph = self._apply_scope(graph, t)
+        if collection_ids:
+            graph = await self._apply_collections(workspace_id, graph, collection_ids, t)
         graph = self._apply_validity(graph, plan, t)
         ranked = await self.rank(plan, graph, t, workspace_id=workspace_id)
 

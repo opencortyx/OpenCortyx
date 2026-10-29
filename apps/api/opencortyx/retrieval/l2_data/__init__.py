@@ -14,6 +14,7 @@ than a guess.
 """
 from __future__ import annotations
 
+import math
 import re
 import time
 from dataclasses import dataclass, field
@@ -45,6 +46,7 @@ class DataResult:
     unknown_reason: Optional[str] = None
     attempts: list = field(default_factory=list)
     ms: int = 0
+    notes: str = ""                                   # how a plan was chosen (semantic.py)
 
     def render(self) -> str:
         head = f"DATA RESULT ({', '.join(a['name'] for a in self.assets)})"
@@ -62,6 +64,11 @@ class DataResult:
         return "\n".join(lines)
 
 
+def _clean(v):
+    """A float as it was meant: 89615.04999999999 is 89615.05 (twelve significant digits)."""
+    return float(f"{v:.12g}") if isinstance(v, float) and math.isfinite(v) else v
+
+
 def is_data_question(question: str) -> bool:
     return bool(_DATA_QUESTION.search(question or ""))
 
@@ -72,15 +79,21 @@ async def _definitions(workspace_id, question: str) -> tuple[list, list]:
     from opencortyx.retrieval.l2_data.schema import words
     repo = NodeRepo()
     q = set(words(question))
-    metrics, examples = [], []
+    metrics: list[dict] = []
+    examples: list[dict] = []
     try:
         for m in await repo.find(workspace_id, types=["Metric"], limit=500):
             p = m.properties or {}
-            names = set(words(m.label or p.get("name"))) | {w for s in (p.get("synonyms") or []) for w in words(s)}
-            if names and (names & q):
-                metrics.append({"name": m.label or p.get("name"), "expression": p.get("expression"),
-                                "description": p.get("description") or "", "table": p.get("table"),
-                                "filters": p.get("filters") or "", "score": len(names & q) / len(names)})
+            # A metric is named in full - by its name or one synonym, every word of it - never by
+            # one shared word: "licence fees" is not what "when does licence X expire" asks for.
+            stems = q | {w.rstrip("s") for w in q}
+            for name in [m.label or p.get("name")] + list(p.get("synonyms") or []):
+                ws = {w.rstrip("s") for w in words(str(name or ""))}
+                if ws and ws <= stems:
+                    metrics.append({"name": m.label or p.get("name"), "expression": p.get("expression"),
+                                    "description": p.get("description") or "", "table": p.get("table"),
+                                    "filters": p.get("filters") or "", "score": len(ws) / max(1, len(stems))})
+                    break
         for v in await repo.find(workspace_id, types=["VerifiedQuery"], limit=2000):
             p = v.properties or {}
             ws = set(words(p.get("question") or v.label))
@@ -115,10 +128,34 @@ async def _with_terms(workspace_id, question: str) -> str:
     return question + (" (" + ", ".join(e for e in extra if e) + ")" if extra else "")
 
 
+async def _records(workspace_id, question: str, schema: Schema) -> list:
+    """(id, table) for each record id the question names, found through the identity map
+    (source_key - the ids ingestion saw, per asset)."""
+    from opencortyx.core.dataplane import source_keys
+    out: list = []
+    for tok in planner.identifiers(question):
+        try:
+            hits = await source_keys.nodes_for(workspace_id, tok)
+        except Exception:                                     # noqa: BLE001 - no identity map, no lookup
+            hits = []
+        seen: set = set()
+        for h in hits:
+            t = schema.table_of(h["asset_id"])
+            if t is not None and t.view not in seen:
+                seen.add(t.view)
+                out.append((tok, t))
+    return out
+
+
 def _metric_plan(question: str, schema: Schema, metric: dict) -> Optional[planner.Plan]:
     """A defined Metric, used exactly as written: its expression over its table, with the filters
     the question names."""
+    from opencortyx.retrieval.l2_data.schema import named_table
     t = schema.tables.get(metric.get("table") or "") or schema.table_of(metric.get("table") or "")
+    # The metric's expression over the table the question names, when it names one ("the total fee
+    # of licences-17"): same meaning, the rows asked about. A column it lacks fails and the rule
+    # planner takes over.
+    t = named_table(schema, question) or t
     if t is None:
         return None
     where, _ = planner._filters(question, [t])
@@ -126,19 +163,33 @@ def _metric_plan(question: str, schema: Schema, metric: dict) -> Optional[planne
     if metric.get("filters"):
         where.insert(0, f"({metric['filters']})")
     cond = f" WHERE {' AND '.join(where)}" if where else ""
-    sql = f'SELECT {metric["expression"]} AS {planner._q(metric["name"])} FROM {planner._q(t.view)}{cond}'
+    expr = metric["expression"]
+    digits = planner.decimals(question)
+    if digits is not None:
+        expr = planner.rounded(expr, digits)
+    sql = f'SELECT {expr} AS {planner._q(metric["name"])} FROM {planner._q(t.view)}{cond}'
     return planner.Plan(sql=sql, tables=[t.view], method="metric", confidence=0.9,
                         notes=[f"metric {metric['name']}"])
 
 
-def _execute(workspace_id, schema: Schema, sql: str, timeout: float):
+def _execute(workspace_id, schema: Schema, sql: str, timeout: float, tables=None):
+    """Run `sql`; with `tables` (the views it reads, from the guard) only those assets are opened."""
     from opencortyx.stores.data import Views
-    with Views(workspace_id, schema.refs, lock=True) as v:
+    opened = schema.needs(tables) if tables else {"assets": schema.refs, "logical": schema.logical}
+    with Views(workspace_id, lock=True, **opened) as v:
         t = v.query(sql, timeout=timeout)
-        return t.column_names, [list(r.values()) for r in t.to_pylist()]
+        return t.column_names, [[_clean(x) for x in r.values()] for r in t.to_pylist()]
 
 
-async def answer(workspace_id, question: str, complete=None, *, timeout: float = 30.0) -> Optional[DataResult]:
+def planner_mode() -> str:
+    """`plan` (default): the plan planner over the semantic layer first (semantic.py), the rules
+    after it; `rules`: the rules alone - kept to measure one against the other."""
+    import os
+    return (os.environ.get("OPENCORTYX_DATA_PLANNER") or "plan").strip().lower()
+
+
+async def answer(workspace_id, question: str, complete=None, *, timeout: float = 30.0,
+                 embed=None, collection_ids=None) -> Optional[DataResult]:
     """The data route for `question`, or None when the data has nothing to say about it."""
     import anyio
     t0 = time.perf_counter()
@@ -147,11 +198,34 @@ async def answer(workspace_id, question: str, complete=None, *, timeout: float =
     except Exception as e:                                    # noqa: BLE001 - no data plane, no route
         log.info("data_route.schema_unavailable", error=str(e)[:200])
         return None
+    if collection_ids:
+        from opencortyx.core.dataplane import assets
+        want = {str(c) for c in collection_ids}
+        schema = schema.scoped([str(a.id) for a in await assets.list_assets(workspace_id)
+                                if str((a.metadata_ or {}).get("collection_id") or "") in want])
     if schema.empty():
         return None
     question = await _with_terms(workspace_id, question)
     metrics, examples = await _definitions(workspace_id, question)
     plans: list = []
+    plan_notes = ""
+    if planner_mode() == "plan":
+        from opencortyx.retrieval.l2_data import semantic
+        try:
+            sp, trace = await semantic.plans(workspace_id, question, schema, embed=embed)
+            plans += sp
+            plan_notes = trace.text()
+            if not sp and schema.objects():
+                # The semantic layer found no table for this question: refuse rather than have the
+                # model write SQL for it. The deterministic rules below still get their turn.
+                complete = None
+        except Exception as e:                                # noqa: BLE001 - the rules still answer
+            log.warning("data_route.plan_failed", error=str(e)[:300])
+    if not planner.is_aggregate(question):
+        # "What is the annual fee of licence LIC-1057?": the record itself, read by its key. A
+        # lookup that finds nothing hands over to the next plan; it is not an answer of its own.
+        plans += planner.lookup_plans(await _records(workspace_id, question, schema))
+        metrics = []
     if metrics:
         p = _metric_plan(question, schema, metrics[0])
         if p:
@@ -181,7 +255,8 @@ async def answer(workspace_id, question: str, complete=None, *, timeout: float =
             error, previous = str(e), plan.sql
             continue
         try:
-            cols, rows = await anyio.to_thread.run_sync(lambda: _execute(workspace_id, schema, checked.sql, timeout))
+            cols, rows = await anyio.to_thread.run_sync(
+                lambda: _execute(workspace_id, schema, checked.sql, timeout, checked.tables))
         except Exception as e:                                # noqa: BLE001 - classified below
             msg = str(e)
             res.attempts.append({"sql": checked.sql, "method": plan.method, "error": msg[:300]})
@@ -190,8 +265,11 @@ async def answer(workspace_id, question: str, complete=None, *, timeout: float =
                 break
             error, previous = msg[:300], checked.sql
             continue
+        if not rows and plan.method in ("lookup", "plan"):
+            res.attempts.append({"sql": checked.sql, "method": plan.method, "error": "no such record"})
+            continue
         res = DataResult(ok=True, sql=checked.sql, columns=cols, rows=rows, tables=checked.tables,
-                         method=plan.method, attempts=res.attempts)
+                         method=plan.method, attempts=res.attempts, notes=plan_notes if plan.method == "plan" else "")
         if not rows:
             # "No rows" is not "no": the answer says nothing matched, it does not deny anything.
             res.unknown_reason = "no matching rows"

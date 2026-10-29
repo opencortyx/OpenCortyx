@@ -43,42 +43,16 @@ class SemiStructuredWalker(BaseWalker):
         # node at a time cost four store round trips each, and a 5,000-record file took over 10 minutes.
         self._nodes_out: List[Dict[str, Any]] = []
         self._edges_out: List[Dict[str, Any]] = []
-        #: `record_unit(index, item)` -> an evidence unit context for one top-level record, or None.
-        #: When set, every node and edge a record produces is written inside its unit
-        #: (core/dataplane/evidence.py); the record is the data store's row for it.
-        self.record_unit = None
-        self._record: Optional[tuple] = None          # (index, item) of the record being walked
 
     FLUSH_AT = 500
 
     async def _flush(self) -> None:
-        nodes, self._nodes_out = self._nodes_out, []
-        edges, self._edges_out = self._edges_out, []
-        if self.record_unit is None:
-            if nodes:
-                await self.repo.upsert_many(self.workspace_id, nodes)
-            if edges:
-                await self.repo.add_edges(workspace_id=self.workspace_id, edges=edges)
-            return
-        # Grouped by the record each write came from, so its evidence names that record. Nodes of
-        # every group first, then edges, so each edge's ends exist when it is written.
-        import contextlib
-        for kind, items in (("nodes", nodes), ("edges", edges)):
-            groups: Dict[Any, List[Dict[str, Any]]] = {}
-            items_of: Dict[Any, Any] = {}
-            for it in items:
-                rec = it.pop("__record", None)
-                key = rec[0] if rec is not None else None
-                items_of.setdefault(key, rec)
-                groups.setdefault(key, []).append(it)
-            for key, group in groups.items():
-                rec = items_of[key]
-                unit = self.record_unit(*rec) if rec is not None else None
-                with unit or contextlib.nullcontext():
-                    if kind == "nodes":
-                        await self.repo.upsert_many(self.workspace_id, group)
-                    else:
-                        await self.repo.add_edges(workspace_id=self.workspace_id, edges=group)
+        if self._nodes_out:
+            nodes, self._nodes_out = self._nodes_out, []
+            await self.repo.upsert_many(self.workspace_id, nodes)
+        if self._edges_out:
+            edges, self._edges_out = self._edges_out, []
+            await self.repo.add_edges(workspace_id=self.workspace_id, edges=edges)
 
 
     async def ingest_file(self, workspace_id: uuid.UUID, content: bytes, filename: str, *,
@@ -115,7 +89,7 @@ class SemiStructuredWalker(BaseWalker):
             root_type=opts.get("root_type"), max_depth=int(opts.get("max_depth", 6)),
             max_array=int(opts.get("max_array", 500)), max_records=int(opts.get("max_records", 100000)),
             embed_nodes=bool(opts.get("embed_nodes", False)), mapping=opts.get("mapping") or None,
-            replace=bool(opts.get("replace")))
+            replace=bool(opts.get("replace")), whole_data=bool(opts.get("whole_data")))
 
     async def walk(
         self,
@@ -161,14 +135,12 @@ class SemiStructuredWalker(BaseWalker):
         elif isinstance(data, list):
             prev_id = None
             for idx, item in enumerate(data):
-                self._record = (idx, item) if self.record_unit is not None else None
                 suffix = f"{path_suffix}:{idx}" if path_suffix else str(idx)
                 cid = await self._walk_element(item, "record", parent_id=root_id, depth=1,
                                                 collection_id=collection_id, path_suffix=suffix)
                 if prev_id and cid:
                     await self._create_edge(prev_id, cid, "NEXT")
                 prev_id = cid
-            self._record = None
 
         await self._flush()
         return {
@@ -220,8 +192,7 @@ class SemiStructuredWalker(BaseWalker):
         if self.persist:
             self._nodes_out.append({"node_id": node_id, "type": target_type, "label": label[:200],
                                     "properties": props, "source_ref": self._root_id,
-                                    "collection_id": collection_id,
-                                    **({"__record": self._record} if self._record else {})})
+                                    "collection_id": collection_id})
             if len(self._nodes_out) >= self.FLUSH_AT:
                 await self._flush()
 
@@ -240,8 +211,7 @@ class SemiStructuredWalker(BaseWalker):
     async def _create_edge(self, src: uuid.UUID, dst: uuid.UUID, edge_type: str, props: Optional[dict] = None) -> None:
         if self.persist and src and dst:
             self._edges_out.append({"source_id": src, "target_id": dst, "type": edge_type,
-                                    "properties": props or {},
-                                    **({"__record": self._record} if self._record else {})})
+                                    "properties": props or {}})
         self.counts["edges"] += 1
         self.emitted_edges.append({"source": str(src), "target": str(dst), "type": edge_type})
 

@@ -5,6 +5,7 @@ import { contextV2Api } from "@/lib/api/contextV2";
 import { Shield, Clock, Server, AlertCircle, Save, SlidersHorizontal, Lock, Download, Upload, HardDriveDownload, Layers, Calculator, Network, Workflow, Settings2, Boxes, ExternalLink, RefreshCw, Cpu, MemoryStick, Scissors } from "lucide-react";
 import Link from "next/link";
 import PageHeader from "@/components/layout/PageHeader";
+import { FULL_UI, GENERAL_SETTINGS, HIDDEN_SETTINGS_TABS, SETTING_COPY, SHOW_OPERATOR_PANELS } from "@/lib/simple";
 import Button from "@/components/ui/Button";
 
 export default function SettingsPage() {
@@ -229,15 +230,35 @@ export default function SettingsPage() {
     { id: "backup", label: "Backup & Export", icon: HardDriveDownload },
     { id: "audit", label: "Audit Log", icon: Server },
     { id: "danger", label: "Danger Zone", icon: AlertCircle },
-  ];
+  ].filter((tb) => !HIDDEN_SETTINGS_TABS.has(tb.id));
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
       <PageHeader
         title="Settings"
         icon={Settings2}
-        description="Performance, backup, agents and audit — your control hub."
+        description={FULL_UI ? "Performance, backup, agents and audit — your control hub."
+                             : "Your workspace, its models and people, and how answers are checked."}
       />
+
+      {/* What left the sidebar in the simple product (lib/simple.ts), one click from here. */}
+      {!FULL_UI && (
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+          {[
+            { href: "/dashboard/models", title: "Models", text: "The models answers and reading use" },
+            { href: "/dashboard/users", title: "Users & access", text: "Who can see and change what" },
+            { href: "/dashboard/eval", title: "Quality checks", text: "Questions with known answers, run on demand" },
+            { href: "/dashboard/progress", title: "Runs", text: "Every ingest, step by step" },
+            { href: "/dashboard/health", title: "System health", text: "Is every part up" },
+          ].map((c) => (
+            <Link key={c.href} href={c.href as any}
+                  className="rounded-lg border border-stone-200 bg-white px-3 py-2.5 hover:border-stone-300 hover:bg-stone-50 transition-colors">
+              <div className="text-sm font-semibold text-stone-800">{c.title}</div>
+              <div className="text-xs text-stone-500">{c.text}</div>
+            </Link>
+          ))}
+        </div>
+      )}
 
       {/* sub-tabs */}
       <div className="flex flex-wrap gap-1 border-b border-stone-200">
@@ -257,7 +278,8 @@ export default function SettingsPage() {
             <SlidersHorizontal size={18} className="text-emerald-500" />
             <div>
               <h2 className="font-semibold text-stone-800">General</h2>
-              <p className="text-xs text-stone-500">Your workspace name, the built-in ontologies, and live-tunable retrieval, caching and quality knobs.</p>
+              <p className="text-xs text-stone-500">{FULL_UI ? "Your workspace name, the built-in ontologies, and live-tunable retrieval, caching and quality knobs."
+                : "Your workspace, and how answers and files are handled."}</p>
             </div>
           </div>
           <button
@@ -279,6 +301,7 @@ export default function SettingsPage() {
               hierarchy itself gone — and there was no way to get it back without creating a new
               workspace. Idempotent: re-running adopts what is already there instead of duplicating,
               so it is safe to press at any time. */}
+          {SHOW_OPERATOR_PANELS && (
           <div>
             <h3 className="text-xs font-bold uppercase tracking-wider text-stone-400 mb-3">Built-in ontologies</h3>
             <div className="border border-stone-200 rounded-xl p-4 bg-stone-50/60 space-y-3">
@@ -308,10 +331,12 @@ export default function SettingsPage() {
               </div>
             </div>
           </div>
+          )}
           {["Workspace", "Memory Accuracy", "Latency", "Retrieval", "Ingestion", "Local files", "Caching", "Quality"].map((group) => {
             /* "Parallelism" is deliberately absent: every concurrency knob now lives in its own
                tab, so the one place you tune throughput is not scattered across three sections. */
-            const items = cfgSchema.filter((s: any) => s.group === group);
+            // The simple product shows the few a person can judge; the rest keep their defaults or `.env`.
+            const items = cfgSchema.filter((s: any) => s.group === group && (!GENERAL_SETTINGS || GENERAL_SETTINGS.has(s.key)));
             if (items.length === 0) return null;
             return (
               <div key={group}>
@@ -319,11 +344,18 @@ export default function SettingsPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
                   {items.map((s: any) => (
                     <div key={s.key} className="flex items-center justify-between gap-4">
-                      <div className="min-w-0">
-                        <div className="text-sm font-medium text-stone-800">{s.label}</div>
-                        <div className="text-xs text-stone-400">{s.help}</div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium text-stone-800">{SETTING_COPY[s.key]?.label || s.label}</div>
+                        <div className="text-xs text-stone-400">{SETTING_COPY[s.key]?.help || s.help}</div>
                       </div>
-                      {s.kind === "bool" ? (
+                      {s.key === "grounding_mode" && SETTING_COPY[s.key] ? (
+                        <button aria-label="Check answers strictly"
+                          onClick={() => setCfgValues({ ...cfgValues, grounding_mode: cfgValues.grounding_mode === "entailment" ? "cosine" : "entailment" })}
+                          className={`shrink-0 w-11 h-6 rounded-full transition-colors relative ${cfgValues.grounding_mode === "entailment" ? "bg-emerald-500" : "bg-stone-300"}`}
+                        >
+                          <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform ${cfgValues.grounding_mode === "entailment" ? "translate-x-5" : ""}`} />
+                        </button>
+                      ) : s.kind === "bool" ? (
                         <button
                           onClick={() => setCfgValues({ ...cfgValues, [s.key]: !cfgValues[s.key] })}
                           className={`shrink-0 w-11 h-6 rounded-full transition-colors relative ${cfgValues[s.key] ? "bg-emerald-500" : "bg-stone-300"}`}
@@ -343,7 +375,7 @@ export default function SettingsPage() {
                           type="text"
                           value={cfgValues[s.key] ?? ""}
                           onChange={(e) => setCfgValues({ ...cfgValues, [s.key]: e.target.value })}
-                          className="shrink-0 w-64 border border-stone-200 rounded-md px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                          className="shrink-0 w-40 sm:w-56 border border-stone-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                         />
                       ) : (
                         <input
@@ -376,6 +408,7 @@ export default function SettingsPage() {
               on the Models page; the memory ceiling is a container limit fixed before the process
               starts. Shown because this is the screen you are on when generation is failing or a
               worker is being killed. */}
+          {SHOW_OPERATOR_PANELS && (<>
           <div className="pt-4 border-t border-stone-100">
             <h3 className="text-xs font-bold uppercase tracking-wider text-stone-400 mb-3 flex items-center gap-1.5">
               <Cpu size={12} /> Compute &amp; memory
@@ -434,6 +467,7 @@ export default function SettingsPage() {
               ))}
             </div>
           </div>
+          </>)}
         </div>
       </div>
       )}

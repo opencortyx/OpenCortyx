@@ -62,7 +62,9 @@ opencortyx logs <service>     # api, worker, extraction-worker, web, mcp, postgr
 | Dashboard unreachable after sleep or `wsl --shutdown` (Windows) | `opencortyx restart web` |
 | Login loops back to the login page behind a proxy | `PUBLIC_WEB_URL` must be the exact public URL, including `https://` |
 | MCP client gets `421 Invalid Host header` | Add the hostname the client uses to `MCP_ALLOWED_HOSTS` |
-| MCP client gets `401` | Create an API key under **Users & Access** and send it as `X-API-Key` |
+| MCP client gets `401` | Create an API key under **Users & Access** (Settings) and send it as `X-API-Key` |
+| A page or setting you used is not in the sidebar or on Settings | The dashboard shows a short product by default; every page still has its address. **Customize** (sidebar) has mappings, pipelines, extractors and scheduled syncs; **Settings** has models, users, quality checks, runs and system health. Set `FULL_UI=1` in `.env` and rebuild the web image (`docker compose build web`) to show every page and setting as before |
+| You need to change an engine setting that Settings does not show (retrieval sizes, thresholds, caching) | Set it in `.env` as `OPENCORTYX_SETTING_<KEY>`, e.g. `OPENCORTYX_SETTING_ABSTAIN_THRESHOLD=0.3`, then `opencortyx restart`. A value there wins over the database. The keys are the `key` entries of `apps/api/opencortyx/core/config/runtime.py` |
 
 ## Getting help
 

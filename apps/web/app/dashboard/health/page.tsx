@@ -1,5 +1,6 @@
 "use client";
 
+import { SHOW_HEALTH_RESTARTS } from "@/lib/simple";
 import { useCallback, useEffect, useState } from "react";
 import { contextV2Api, HealthResult, HealthCheck } from "@/lib/api/contextV2";
 import {
@@ -96,6 +97,7 @@ export default function HealthPage() {
         description="A live check of every moving part — API, worker, database, and models — with plain-English fixes."
         actions={
         <div className="flex items-center gap-2 shrink-0">
+          {SHOW_HEALTH_RESTARTS && (<>
           <button
             onClick={() => resetWorker(false)}
             disabled={resetting || loading}
@@ -113,6 +115,7 @@ export default function HealthPage() {
           >
             Hard restart
           </button>
+          </>)}
           <Button variant="secondary" icon={RefreshCw} busy={loading} onClick={load}>{loading ? "Checking…" : "Re-check"}</Button>
         </div>
         }
