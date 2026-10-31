@@ -59,6 +59,18 @@ async def test_a_node_inside_an_asset_resolves_to_it_at_any_depth():
     assert p[str(n["report.pdf"].id)]["asset_id"] == str(n["report.pdf"].id)   # an asset is its own
 
 
+async def test_a_published_record_resolves_to_the_file_it_was_read_from():
+    """A record published from a file's rows is in no file's tree: it points at the file instead
+    (record -FROM_ASSET-> asset). A cited turn says which file it is from, not "Source unknown"."""
+    g = MemoryGraphStore()
+    file = _n("Source", "lme_e2e.json")
+    turn = _n("Turn", "Only 120 pages are left.")
+    await g.upsert_nodes([file, turn])
+    await g.upsert_edges([Edge(workspace_id=ORG, source_id=turn.id, target_id=file.id, type="FROM_ASSET")])
+    p = await provenance(ORG, [turn.id], store=g)
+    assert (p[str(turn.id)]["asset_id"], p[str(turn.id)]["asset_label"]) == (str(file.id), "lme_e2e.json")
+
+
 async def test_shared_entity_ranks_its_assets_by_the_question():
     g, n = await _graph()
     acme = str(n["Acme"].id)

@@ -92,7 +92,7 @@ async def reset_database(user: CurrentUser = Depends(require_admin)):
             TypeRegistry.workspace_id == user.workspace_id, TypeRegistry.source == "discovered",
             (TypeRegistry.status == "candidate") | TypeRegistry.properties_schema.has_key(DETECTED)))
         # The resolution index and ledger name nodes that no longer exist; kept, the next ingest of
-        # the same records would be "resolved" as SAME_AS nodes the reset deleted.
+        # the same records would be "resolved" into clusters whose nodes the reset deleted.
         from opencortyx.domain.resolution import ResolutionDecision, ResolutionKey
         await db.execute(delete(ResolutionKey).where(ResolutionKey.workspace_id == user.workspace_id))
         await db.execute(delete(ResolutionDecision).where(ResolutionDecision.workspace_id == user.workspace_id))

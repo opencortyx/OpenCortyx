@@ -52,8 +52,25 @@ function kindOf(file: File): FileKind {
 }
 
 /** Custom: what a person who knows they want it can set. Empty = the defaults. */
-type CustomOptions = { pipelines: PipelineChoice; mappings: string[]; extractors: string[]; tags: string[] };
-const NO_CUSTOM: CustomOptions = { pipelines: { ...NO_CHOICE }, mappings: [], extractors: [], tags: [] };
+/** `inputs`: per extractor, the columns or keys (tables, JSON) or sections (documents) it reads; empty = all */
+type CustomOptions = { pipelines: PipelineChoice; mappings: string[]; extractors: string[]; inputs: Record<string, string>;
+                       tags: string[] };
+const NO_CUSTOM: CustomOptions = { pipelines: { ...NO_CHOICE }, mappings: [], extractors: [], inputs: {}, tags: [] };
+
+/** The columns (CSV header) or top-level keys (first JSON record) of the dropped files, as suggestions. */
+async function fieldsOf(files: File[]): Promise<string[]> {
+  const out = new Set<string>();
+  for (const f of files.slice(0, 5)) {
+    const head = await f.slice(0, 200_000).text().catch(() => "");
+    if (/\.(csv|tsv)$/i.test(f.name)) {
+      head.split(/\r?\n/)[0].split(f.name.endsWith(".tsv") ? "\t" : ",").forEach((c) => c.trim() && out.add(c.trim().replace(/^"|"$/g, "")));
+    } else if (/\.(json|jsonl|ndjson)$/i.test(f.name)) {
+      const m = head.match(/\{[^{}]*/);                  // the first record's opening: its top-level keys
+      for (const k of (m?.[0] || "").matchAll(/"([^"]+)"\s*:/g)) out.add(k[1]);
+    }
+  }
+  return Array.from(out);
+}
 
 export default function AddDataPage() {
   const [files, setFiles] = useState<File[]>([]);
@@ -153,7 +170,7 @@ export default function AddDataPage() {
             ))}
           </ul>
           <GraphOptionsChoice kinds={kinds} value={graph} onChange={setGraph} />
-          <CustomSection kinds={kinds} value={custom} onChange={setCustom} />
+          <CustomSection kinds={kinds} files={files} value={custom} onChange={setCustom} />
           <Button variant="primary" icon={FileUp} busy={busy} disabled={busy}
                   onClick={() => (files.length === 1 ? addOne() : setPhase("batch"))}>
             {files.length === 1 ? "Add" : `Add ${files.length} files`}
@@ -174,6 +191,8 @@ export default function AddDataPage() {
 function uploadOptions(graph: GraphOptions, custom: CustomOptions) {
   return {
     pipelineIds: custom.pipelines, tags: custom.tags, mappingIds: custom.mappings, extractors: custom.extractors,
+    extractorInputs: Object.fromEntries(custom.extractors.map((n) => [n, (custom.inputs[n] || "").split(",")
+      .map((x) => x.trim()).filter(Boolean)])),
     extractKnowledge: graph.knowledge, wholeData: graph.wholeData,
   };
 }
@@ -211,18 +230,19 @@ function DropZone({ dragging, setDragging, onPick }: {
   );
 }
 
-/** Add data's two graph options - the same for every kind of file, in Auto and in Custom. */
+/** Add data's graph option, one of three - the same for every kind of file, in Auto and in Custom. */
 export type GraphOptions = { knowledge: boolean; wholeData: boolean };
 
 /**
  * What goes into the knowledge graph besides what always does. The data itself is always kept in the
  * data store (rows and records read with SQL, documents searchable), and the graph always gets its
- * shape: a table's columns and their types, a JSON file's keys and their types, the links found
- * between them, a document's outline.
- *   knowledge   entities and relationships. Tables and JSON: the records of the entity types found,
- *               linked to each other; free-text fields and documents: what a small in-process model
- *               reads in the text (no LLM), matched by name to the records it mentions.
+ * shape: a table's columns and their types (described, when a model is on), a JSON file's keys and
+ * their types, the links found between them; a document's summary, when AI summaries are on.
+ *   knowledge   tables and JSON: one record, one node of its kind, carrying its knowledge columns
+ *               (identifier, name, text, dates), linked to the records it refers to.
  *   wholeData   the data itself as graph nodes too: every row, every key and value, every passage.
+ *               It already holds every record, so it never combines with knowledge.
+ * Entities and relationships read out of text come from extractors (Custom, or the Mapper).
  */
 function GraphOptionsChoice({ kinds, value, onChange }: {
   kinds: FileKind[]; value: GraphOptions; onChange: (v: GraphOptions) => void;
@@ -230,38 +250,28 @@ function GraphOptionsChoice({ kinds, value, onChange }: {
   if (!kinds.length) return null;
   const records = kinds.some((k) => k === "structured" || k === "semistructured");
   const documents = kinds.includes("unstructured");
-  const what = [records && "tables and JSON", documents && "documents"].filter(Boolean).join(" and ");
+  // one choice: the whole data already holds every record, so it and Extract knowledge never combine
+  const mode = value.wholeData ? "whole" : value.knowledge && records ? "knowledge" : "shape";
+  const set = (m: string) => onChange({ knowledge: m === "knowledge", wholeData: m === "whole" });
+  const option = (m: string, title: string, text: string) => (
+    <label key={m} className="flex items-start gap-2 cursor-pointer">
+      <input type="radio" name="graph-option" className="mt-0.5" checked={mode === m} onChange={() => set(m)} />
+      <span>
+        <span className="font-medium text-stone-800 dark:text-stone-200">{title}</span>
+        <span className="block text-xs text-stone-500 dark:text-stone-400 mt-0.5">{text}</span>
+      </span>
+    </label>
+  );
+  const shape = [records && "columns and keys, their types and links", documents && "a summary when AI summaries are on"]
+    .filter(Boolean).join("; documents: ");
   return (
     <fieldset className="rounded-lg border border-stone-200 dark:border-stone-800 p-3 text-sm space-y-2">
       <legend className="px-1 text-xs text-stone-500 dark:text-stone-400">Knowledge graph</legend>
-      <p className="text-xs text-stone-500 dark:text-stone-400">
-        Always: the data is kept and searchable, and the graph gets its shape - {records ? "columns and keys with their types, the links between them" : ""}
-        {records && documents ? "; " : ""}{documents ? "the document's outline (headings, tables, figures)" : ""}.
-      </p>
-      <label className="flex items-start gap-2 cursor-pointer">
-        <input type="checkbox" className="mt-0.5" checked={value.knowledge}
-               onChange={(e) => onChange({ ...value, knowledge: e.target.checked })} />
-        <span>
-          <span className="font-medium text-stone-800 dark:text-stone-200">Extract entities and relationships</span>
-          <span className="block text-xs text-stone-500 dark:text-stone-400 mt-0.5">
-            {records && <>Tables and JSON: each record of the entity types found becomes a node, linked to the records it refers to. </>}
-            {documents && <>Documents: </>}{records && <>Free-text fields{documents ? " and documents" : ""}: </>}
-            the people, organisations, places and things named in the text, and how the sentences connect them - read by a small
-            model on this server, no LLM - matched by name to the records they mention.
-          </span>
-        </span>
-      </label>
-      <label className="flex items-start gap-2 cursor-pointer">
-        <input type="checkbox" className="mt-0.5" checked={value.wholeData}
-               onChange={(e) => onChange({ ...value, wholeData: e.target.checked })} />
-        <span>
-          <span className="font-medium text-stone-800 dark:text-stone-200">Add the whole data to the graph</span>
-          <span className="block text-xs text-stone-500 dark:text-stone-400 mt-0.5">
-            The {what} themselves as nodes too: {[records && "every row, every key and value", documents && "every heading, paragraph and table"]
-              .filter(Boolean).join("; ")}. Large files make large graphs; the data stays in the data store either way.
-          </span>
-        </span>
-      </label>
+      {option("shape", records ? "Structure only" : "Summary only", `The data is kept and searchable; the graph gets ${shape}.`)}
+      {records && option("knowledge", "Extract knowledge",
+        "Each record becomes a node of its kind (Customer, Account…) with its identifier, name, text and dates. Change the fields in Customize → Mappings.")}
+      {option("whole", "Add the whole data", [records && "Every row, key and value", documents && "every heading, paragraph and table"]
+        .filter(Boolean).join("; ") + " as nodes. Large files make large graphs.")}
     </fieldset>
   );
 }
@@ -271,9 +281,11 @@ function GraphOptionsChoice({ kinds, value, onChange }: {
  * that shape the graph for tables and JSON, extractors that read documents, tags. Everything here is
  * optional; empty means the defaults.
  */
-function CustomSection({ kinds, value, onChange }: {
-  kinds: FileKind[]; value: CustomOptions; onChange: (v: CustomOptions) => void;
+function CustomSection({ kinds, files, value, onChange }: {
+  kinds: FileKind[]; files: File[]; value: CustomOptions; onChange: (v: CustomOptions) => void;
 }) {
+  const [fields, setFields] = useState<string[]>([]);
+  useEffect(() => { fieldsOf(files).then(setFields); }, [files]);
   const [open, setOpen] = useState(false);
   const [mappings, setMappings] = useState<SchemaMappingRecord[] | null>(null);
   const [extractors, setExtractors] = useState<{ name: string; label: string }[] | null>(null);
@@ -286,10 +298,16 @@ function CustomSection({ kinds, value, onChange }: {
         .then((r) => setMappings((r.items || []).filter((m) => (records as string[]).includes(String(m.paradigm)))))
         .catch(() => setMappings([]));
     }
-    if (documents && extractors === null) {
+    if (kinds.length && extractors === null) {
+      // every kind of file: an extractor reads the columns, keys or sections chosen for it
       contextV2Api.getExtractionTemplates().then((ts: any[]) => {
-        const { builtin, custom } = contextV2Api.stageableTemplates(ts, "unstructured");
-        setExtractors([...custom, ...builtin].map((t: any) => ({ name: t.name, label: t.label })));
+        // a person's own extractors fit any file (they read what they are given); built-ins their kind
+        const seen = new Map<string, { name: string; label: string }>();
+        for (const k of ["unstructured", "structured", "semistructured"]) {
+          const { builtin, custom } = contextV2Api.stageableTemplates(ts, k);
+          for (const t of [...custom, ...((kinds as string[]).includes(k) ? builtin : [])]) seen.set(t.name, { name: t.name, label: t.label });
+        }
+        setExtractors(Array.from(seen.values()));
       }).catch(() => setExtractors([]));
     }
   }, [open, records.length, documents, mappings, extractors]);  // eslint-disable-line react-hooks/exhaustive-deps
@@ -353,11 +371,11 @@ function CustomSection({ kinds, value, onChange }: {
             </div>
           )}
 
-          {documents && (
+          {kinds.length > 0 && (
             <div>
-              <p className="text-sm font-medium text-stone-800 dark:text-stone-200">Extractors for documents</p>
+              <p className="text-sm font-medium text-stone-800 dark:text-stone-200">Extractors</p>
               <p className="text-xs text-stone-500 dark:text-stone-400 mb-1">
-                Read the documents with your own extractors as well.{" "}
+                Read the files with extractors as well.{" "}
                 <Link href="/dashboard/custom-assets" className="text-primary hover:underline">Create extractors</Link>
               </p>
               {extractors === null && <Loader2 className="animate-spin text-stone-400" size={14} />}
@@ -372,6 +390,17 @@ function CustomSection({ kinds, value, onChange }: {
                   </label>
                 ))}
               </div>
+              {value.extractors.map((n) => (
+                <label key={n} className="mt-1.5 flex items-center gap-2 text-xs text-stone-500">
+                  <span className="shrink-0 font-medium text-stone-700 dark:text-stone-300">{extractors?.find((x) => x.name === n)?.label || n}</span>
+                  reads
+                  <input className="flex-1 rounded border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-900 px-1.5 py-0.5"
+                    list="add-fields" value={value.inputs[n] || ""}
+                    placeholder={records.length ? "all columns / keys, or e.g. notes, summary" : "all sections, or e.g. Pricing, Terms"}
+                    onChange={(e) => onChange({ ...value, inputs: { ...value.inputs, [n]: e.target.value } })} />
+                </label>
+              ))}
+              <datalist id="add-fields">{fields.map((f) => <option key={f} value={f} />)}</datalist>
             </div>
           )}
 

@@ -64,6 +64,80 @@ def _rows_of(path: str) -> list[dict]:
     return [dict(zip(cols, r)) for r in cur.fetchall()]
 
 
+_PROGRAMMES = [{"programme": {"programme_id": "PRG-7", "name": "Atlas", "sponsor": {"name": "Ingrid"},
+                              "projects": [
+                                  {"project_id": "PRJ-11", "name": "Payments", "lead": {"name": "Ana"},
+                                   "risks": [{"risk_id": "R-1", "severity": "high"}, {"risk_id": "R-2", "severity": "low"}]},
+                                  {"project_id": "PRJ-12", "name": "Ledger", "lead": {"name": "Bo"},
+                                   "risks": [{"risk_id": "R-3", "severity": "medium"}]}]}}]
+
+
+def _read(records: list, path: str) -> list[dict]:
+    raws = [json.dumps(r) for r in records]
+    src = next(s for s in detector._semi_sources("a", "f.json", "f", raws) if s.path == path)
+    t = ObjectType(name="T", properties=[Property(p) for p in src.fields])
+    con = duckdb.connect()
+    con.execute("CREATE TABLE f AS SELECT unnest(?) AS raw", [raws])
+    cur = con.execute(f"SELECT * FROM ({views.binding_sql(t, Binding('a', 'f.json', 'semistructured', path, src.fields), 'f')})")
+    return [dict(zip([d[0] for d in cur.description], r)) for r in cur.fetchall()]
+
+
+def test_records_below_a_wrapper_object_and_inside_each_element_are_found():
+    """{"programme": {"projects": [{..., "risks": [...]}]}}: the projects below the wrapper are records
+    (with their lead's fields), and so is each project's risk, carrying the project it belongs to."""
+    paths = {s.path for s in detector._semi_sources("a", "f.json", "f", [json.dumps(r) for r in _PROGRAMMES])}
+    assert {"$.programme", "$.programme.projects[*]", "$.programme.projects[*].risks[*]"} <= paths
+    projects = sorted(_read(_PROGRAMMES, "$.programme.projects[*]"), key=lambda r: r["project_id"])
+    assert [(r["project_id"], r["name"], r["lead_name"]) for r in projects] == [
+        ("PRJ-11", "Payments", "Ana"), ("PRJ-12", "Ledger", "Bo")]
+    risks = sorted(_read(_PROGRAMMES, "$.programme.projects[*].risks[*]"), key=lambda r: r["risk_id"])
+    assert [(r["risk_id"], r["severity"], r["project_id"], r["position"]) for r in risks] == [
+        ("R-1", "high", "PRJ-11", "0"), ("R-2", "low", "PRJ-11", "1"), ("R-3", "medium", "PRJ-12", "0")]
+
+
+def test_a_position_or_the_parent_s_value_never_identifies_or_names_a_record():
+    """A project's place in its list (0, 1, 2) is unique and filled, and so is the project name a
+    risk reads from its project: neither is the record's own identity. The risk type is named from
+    where its records are (risks), not from the lists above them."""
+    from opencortyx.knowledge.semantic.detector import FieldStats, Group, Source
+    fields = {"risk_id": "risk_id", "position": "#j", "name": "^.name", "project_id": "^.project_id"}
+    src = Source("a", "f.json", "semistructured", "f", "$.programme.projects[*].risks[*]", fields)
+    stats = {f: FieldStats(rows=3, filled=3, distinct=3, values={f"{f}{i}" for i in range(3)}) for f in fields}
+    g = Group("list", src.path, [src], fields, rows=3, stats=stats)
+    assert detector.borrowed([fields]) == {"position", "name", "project_id"}
+    assert not detector.lent("^.haystack_session_ids[i]"), "a list beside it at its position is its own"
+    assert detector._unique(g) == ["risk_id"]
+    g.key = "risk_id"
+    assert detector._name_words([g])[:2] == ["risk", "risks"]
+
+
+def test_an_element_that_reads_its_record_s_identifier_links_to_it_however_few_values():
+    """Two risks name two projects: too few values to infer a link, but each risk sits inside its
+    project and reads its id, so the nesting states the link."""
+    from opencortyx.knowledge.semantic.store import Layer
+    project = ObjectType(name="Project", keys=["project_id"], bindings=[
+        Binding("a", "f.json", "semistructured", "$.programme.projects[*]", {"project_id": "project_id"})])
+    risk = ObjectType(name="Risk", keys=["risk_id"], bindings=[
+        Binding("a", "f.json", "semistructured", "$.programme.projects[*].risks[*]",
+                {"risk_id": "risk_id", "project_id": "^.project_id", "name": "^.name"})])
+    other = ObjectType(name="Project", keys=["project_id"], bindings=[
+        Binding("b", "g.json", "semistructured", "$.programme.projects[*]", {"project_id": "project_id"})])
+    links = detector.contained_links(Layer(types=[project, risk]))
+    assert [(lk.source, lk.source_prop, lk.target, lk.target_prop, lk.status) for lk in links] == [
+        ("Risk", "project_id", "Project", "project_id", "accepted")]
+    assert detector.contained_links(Layer(types=[other, risk])) == [], "only the record it sits in, in its file"
+    assert [detector.enclosing(p) for p in ("$.a[*].c[*]", "$.a[*][*]", "$.a.b[*]", "$.k[*]", "$.a", "")] == [
+        "$.a[*]", "$.a[*]", "$.a", "", None, None]
+
+
+def test_a_record_path_reads_its_levels():
+    assert views.parse_path("") == views.Path([])
+    assert views.parse_path("$.a.b") == views.Path(["a", "b"])
+    assert views.parse_path("$.a.b[*]") == views.Path([], ["a", "b"])
+    assert views.parse_path("$.a[*][*]") == views.Path([], ["a"], [])
+    assert views.parse_path("$.a[*].c[*]") == views.Path([], ["a"], ["c"])
+
+
 def test_each_inner_list_of_a_list_of_lists_is_a_record_placed_by_the_lists_beside_it():
     rows = sorted(_rows_of("$.sessions[*]"), key=lambda r: r["ids"])
     assert [(r["ids"], r["dates"], r["qid"], r["position"]) for r in rows] == [

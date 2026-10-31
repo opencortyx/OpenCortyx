@@ -113,10 +113,19 @@ Work through the four tabs:
 
 ### Good to know
 
+- Records that are the same thing are grouped, never merged: a **master** node carries the
+  agreed values and each record joins it with a `MEMBER_OF` relationship, so every source keeps its
+  own node and its own values.
 - The Resolution Engine only links records of a type once you have said which fields identify that
   type. See [Match the same record across files](#match-the-same-record-across-files-resolution).
-  Until then it never guesses.
-- When two records disagree, both values are kept and flagged here. Nothing is overwritten.
+  Until then it never guesses. Named things an extractor finds (people, places, works) are the
+  exception: they are matched by name, applied automatically at 85% similarity or more and sent
+  here for review a little below that. The threshold is the `name_match_threshold` setting.
+- When two records disagree, both values are kept and flagged here. Nothing is overwritten. This
+  includes two files mapped to the same type that give one record different values (a customer's
+  region in the CRM export and in billing): the conflict shows each value and the file it came from.
+- Adding a new version of the same file is not a conflict: its values replace the old ones, and the
+  earlier version stays in the data store's history.
 - Press **Refresh** to load decisions made since you opened the page.
 
 ## Evaluations

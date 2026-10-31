@@ -150,7 +150,6 @@ def _semi_sources(asset_id, name, view, raws: list) -> list[Source]:
             recs.append(v)
     if not recs:
         return []
-    half = max(1, len(recs) // 2)
     out = []
     top: dict = {}
     for r in recs:
@@ -158,31 +157,66 @@ def _semi_sources(asset_id, name, view, raws: list) -> list[Source]:
             top[k] = v
     if top:
         out.append(Source(asset_id, name, "semistructured", view, "", top))
-    keys = {k for r in recs for k in r}
-    record = _record_fields(recs, top)
-    lists = lambda v, test: isinstance(v, list) and bool(v) and all(test(e) for e in v)   # noqa: E731
-    used: set = set()
-    for k in sorted(keys):
+    used = _walk(out, (asset_id, name, view), recs, [], 0)
+    # a list of plain values nothing else is beside: each value one record of the record it is in
+    half, keys, record = max(1, len(recs) // 2), {k for r in recs for k in r}, _record_fields(recs, top)
+    for k in sorted(keys - used):
         vals = [r.get(k) for r in recs if k in r]
-        beside = {s: f"^.{s}[i]" for s in _beside(recs, k, keys)}
+        if sum(_list_of(v, _scalar) for v in vals) >= half:
+            out.append(Source(asset_id, name, "semistructured", view, f"$.{k}[*]",
+                              _with({k: "#v"}, record)))
+    return out
+
+
+#: How deep detection follows objects inside objects to the lists of records they hold
+#: ({"data": {"programme": {"projects": [...]}}}).
+MAX_WRAPPERS = 3
+
+
+def _list_of(v, test) -> bool:
+    return isinstance(v, list) and bool(v) and all(test(e) for e in v)
+
+
+def _path(keys: list) -> str:
+    return "$." + ".".join(keys)
+
+
+def _walk(out: list, at: tuple, objs: list, keys: list, depth: int) -> set:
+    """Record sources among `objs` (the records, or the objects at `keys` inside them): an object in
+    each (named at the top level only - deeper ones are followed, and their fields read as "k.f"),
+    each element of a list of objects, of each list in a list, and of a list inside each element.
+    An element reads the object its list sits in as "^.F". Returns the keys whose lists were placed
+    by lists beside them."""
+    half = max(1, len(objs) // 2)
+    own = {k: k for o in objs for k, v in o.items() if _scalar(v)}
+    record = _record_fields(objs, own)
+    names = {k for o in objs for k in o}
+    used: set = set()
+    for k in sorted(names):
+        vals = [o.get(k) for o in objs if k in o]
+        here = keys + [k]
+        beside = {s: f"^.{s}[i]" for s in _beside(objs, k, names)}
         if sum(isinstance(v, dict) for v in vals) >= half:
-            f: dict = {}
-            for v in vals:
-                if isinstance(v, dict):
+            inside = [v for v in vals if isinstance(v, dict)]
+            if depth == 0:
+                f: dict = {}
+                for v in inside:
                     f.update(_fields_of(v))
-            if f:
-                out.append(Source(asset_id, name, "semistructured", view, f"$.{k}", f))
-        elif sum(lists(v, lambda e: isinstance(e, dict)) for v in vals) >= half:
+                if f:
+                    out.append(Source(at[0], at[1], "semistructured", at[2], _path(here), f))
+            if depth < MAX_WRAPPERS:
+                _walk(out, at, inside, here, depth + 1)
+        elif sum(_list_of(v, lambda e: isinstance(e, dict)) for v in vals) >= half:
+            elems = [e for v in vals for e in (v if isinstance(v, list) else []) if isinstance(e, dict)]
             f = {}
-            for v in vals:
-                for e in (v if isinstance(v, list) else []):
-                    if isinstance(e, dict):
-                        f.update(_fields_of(e))
+            for e in elems:
+                f.update(_fields_of(e))
             if f:
-                out.append(Source(asset_id, name, "semistructured", view, f"$.{k}[*]",
+                out.append(Source(at[0], at[1], "semistructured", at[2], f"{_path(here)}[*]",
                                   _with(f, {**beside, **record, "position": "#i"})))
                 used |= set(beside)
-        elif sum(lists(v, lambda e: lists(e, lambda x: isinstance(x, dict))) for v in vals) >= half:
+            _inside(out, at, elems, here)
+        elif sum(_list_of(v, lambda e: _list_of(e, lambda x: isinstance(x, dict))) for v in vals) >= half:
             # a list of lists of records (a conversation's sessions, each a list of turns): each
             # inner list is one record placed by the lists beside it, each element of it another
             f = {}
@@ -192,19 +226,33 @@ def _semi_sources(asset_id, name, view, raws: list) -> list[Source]:
                         if isinstance(e, dict):
                             f.update(_fields_of(e))
             if beside:
-                out.append(Source(asset_id, name, "semistructured", view, f"$.{k}[*]",
+                out.append(Source(at[0], at[1], "semistructured", at[2], f"{_path(here)}[*]",
                                   _with(beside, {**record, "position": "#i"})))
             if f:
-                out.append(Source(asset_id, name, "semistructured", view, f"$.{k}[*][*]",
+                out.append(Source(at[0], at[1], "semistructured", at[2], f"{_path(here)}[*][*]",
                                   _with(f, {**beside, **record, "position": "#j"})))
             used |= set(beside)
-    # a list of plain values nothing else is beside: each value one record of the record it is in
-    for k in sorted(keys - used):
-        vals = [r.get(k) for r in recs if k in r]
-        if sum(lists(v, _scalar) for v in vals) >= half:
-            out.append(Source(asset_id, name, "semistructured", view, f"$.{k}[*]",
-                              _with({k: "#v"}, record)))
-    return out
+    return used
+
+
+def _inside(out: list, at: tuple, elems: list, keys: list) -> None:
+    """A list of objects inside each element of the list at `keys` (a project's risks): each of its
+    elements a record, reading the element it is in as "^.F" (the project's id)."""
+    half = max(1, len(elems) // 2)
+    own = {k: k for e in elems for k, v in e.items() if _scalar(v)}
+    record = _record_fields(elems, own)
+    for c in sorted({k for e in elems for k in e}):
+        vals = [e.get(c) for e in elems if c in e]
+        if sum(_list_of(v, lambda x: isinstance(x, dict)) for v in vals) < half:
+            continue
+        f: dict = {}
+        for v in vals:
+            for x in (v if isinstance(v, list) else []):
+                if isinstance(x, dict):
+                    f.update(_fields_of(x))
+        if f:
+            out.append(Source(at[0], at[1], "semistructured", at[2], f"{_path(keys)}[*].{c}[*]",
+                              _with(f, {**record, "position": "#j"})))
 
 
 def _sources(views, refs) -> tuple[list[Source], dict]:
@@ -309,11 +357,26 @@ def _contained(small: set, big: set) -> float:
     return len(small & big) / len(small) if small else 0.0
 
 
+def lent(src) -> bool:
+    """A field that is not the record's own: its position in a list ("#i") or one value read from
+    the object the list sits in ("^.name", the project a risk belongs to). A value from a list beside
+    it at its position ("^.ids[i]", a session's own id) is its own."""
+    src = str(src)
+    return src.startswith("#") or (src.startswith("^") and not src.endswith("[i]"))
+
+
+def borrowed(fields_by_source: list) -> set:
+    """Fields that are `lent` in every source: neither identifies nor names the record."""
+    names = {f for fields in fields_by_source for f in fields}
+    return {f for f in names if all(lent(fields[f]) for fields in fields_by_source if f in fields)}
+
+
 def _unique(g: Group) -> list[str]:
-    """Fields never empty and never repeated within a file. A date is a moment and free text a
-    statement, not an identity."""
+    """Fields never empty and never repeated within a file, and the record's own (`borrowed`). A
+    date is a moment and free text a statement, not an identity."""
+    lent = borrowed([s.fields for s in g.sources])
     return [p for p, s in g.stats.items() if g.rows >= 2 and s.filled == g.rows and s.repeats == 0
-            and s.data_type != "date" and s.words < PROSE_WORDS]
+            and s.data_type != "date" and s.words < PROSE_WORDS and p not in lent]
 
 
 _SHAPE = (re.compile(r"[A-Za-z]"), re.compile(r"\d"))
@@ -401,7 +464,9 @@ def _name_words(members: list[Group]) -> list[str]:
                 seen.add(lw)
                 out.append(lw)
         return out
-    own = clean(w for g in members for w in _WORD.findall(g.key or "") + _WORD.findall(g.path or ""))
+    # the path's last key is what the records are ("$.programme.projects[*].risks[*]": risks)
+    last = lambda path: ([k for k in re.split(r"[.\[\]*$]+", path or "") if k] or [""])[-1]   # noqa: E731
+    own = clean(w for g in members for w in _WORD.findall(g.key or "") + _WORD.findall(last(g.path)))
     return own or clean(w for g in members for s in g.sources[:5] for w in _WORD.findall(s.asset_name))[:12]
 
 
@@ -428,8 +493,10 @@ async def _label(t: ObjectType, stats: dict, choose) -> str:
     the most filled one is taken."""
     if t.kind != "entity":
         return ""
+    lent = borrowed([b.fields for b in t.bindings])
     cands = [p.name for p in t.properties
-             if (p.role == "text" or (p.role == "key" and stats[p.name].data_type == "text"))
+             if p.name not in lent
+             and (p.role == "text" or (p.role == "key" and stats[p.name].data_type == "text"))
              and stats[p.name].filled
              # nearly unique - within each file: one customer named in thirty billing files is one name
              and (stats[p.name].repeats == 0 or stats[p.name].distinct >= LABEL_UNIQUE * stats[p.name].filled)
@@ -536,6 +603,11 @@ async def detect(workspace_id, *, apply: bool = True) -> Layer:
                                                 target=t.name, target_prop=t.key, coverage=round(cov, 3),
                                                 status="accepted" if cov >= AUTO_ACCEPT else "suggested"))
                     refs_of[s.name].add(p)
+    for lk in contained_links(layer):
+        if not any(x.source == lk.source and x.source_prop == lk.source_prop and x.target == lk.target
+                   for x in layer.links):
+            layer.links.append(lk)
+            refs_of[lk.source].add(lk.source_prop)
     for t in layer.types:
         sp = members_of[id(t)]
         for prop in t.properties:
@@ -548,6 +620,41 @@ async def detect(workspace_id, *, apply: bool = True) -> Layer:
     if apply:
         await save_detected(workspace_id, layer)
     return layer
+
+
+def enclosing(path: str) -> Optional[str]:
+    """The path of the record a list element sits in: "$.a[*].c[*]" and "$.a[*][*]" -> "$.a[*]",
+    "$.a.b[*]" -> "$.a", "$.k[*]" -> "" (the record itself); None for a record or an object."""
+    from opencortyx.knowledge.semantic.views import parse_path
+    at = parse_path(path)
+    if at.outer is None:
+        return None
+    if at.inner is not None:
+        return "$." + ".".join(at.outer) + "[*]"
+    return ("$." + ".".join(at.outer[:-1])) if at.outer[:-1] else ""
+
+
+def contained_links(layer: Layer) -> list:
+    """Links the file's shape states: an element that reads the identifier of the record it sits in
+    ("^.project_id", a risk inside its project) refers to that record - whatever how few values
+    there are to compare, since the nesting already says so."""
+    out = []
+    for s in layer.types:
+        for b in s.bindings:
+            up = enclosing(b.path)
+            if up is None:
+                continue
+            for t in layer.types:
+                if t is s or not t.key:
+                    continue
+                if not any(c.asset_id == b.asset_id and c.path == up for c in t.bindings):
+                    continue
+                for prop, src in b.fields.items():
+                    if str(src) == f"^.{t.key}" and prop != s.key:
+                        out.append(LinkType(name=_relation(t.name), source=s.name, source_prop=prop,
+                                            target=t.name, target_prop=t.key, coverage=1.0,
+                                            status="accepted", origin="declared"))
+    return list({lk.id: lk for lk in out}.values())
 
 
 def _relation(target: str) -> str:
@@ -616,8 +723,10 @@ async def shape(workspace_id, asset_ids) -> list[dict]:
                     "fields": [{"name": p, "source": s.fields[p], "data_type": st.data_type, "filled": st.filled,
                                 "distinct": st.distinct, "repeats": st.repeats, "words": round(st.words, 1),
                                 "identifier": g.rows >= 2 and st.filled == g.rows and st.repeats == 0
-                                              and st.data_type != "date" and st.words < PROSE_WORDS,
+                                              and st.data_type != "date" and st.words < PROSE_WORDS
+                                              and not lent(s.fields[p]),
                                 "nameable": st.data_type == "text" and 0 < st.words < PROSE_WORDS
+                                        and not lent(s.fields[p])
                                         and (st.repeats == 0 or st.distinct >= LABEL_UNIQUE * max(1, st.filled))}
                                for p, st in g.stats.items()],
                     "rows": [{k: (v if isinstance(v, (str, int, float, bool)) or v is None else str(v))

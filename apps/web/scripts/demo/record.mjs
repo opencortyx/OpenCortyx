@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Records the README demo by driving the real UI of a running stack, from an empty workspace to a
-// cited answer. Nothing is staged: the file is uploaded through "Add data", read by the Mapper,
-// ingested, explored in the graph and questioned in the AI Assistant — every step a real click.
+// cited answer. Nothing is staged: the file is uploaded through "Add data" with "Extract knowledge",
+// its detected mapping opened, explored in the graph and questioned in the Assistant — every step a
+// real click.
 //
 //   node scripts/demo/record.mjs            reset the workspace's data, record, encode
 //   node scripts/demo/record.mjs --no-reset keep the current data (a rehearsal after a take)
@@ -52,10 +53,16 @@ const args = new Set(process.argv.slice(2));
 
 // ── reset: the same empty workspace for every take ─────────────────────────────────────────────
 async function api(method, url, token, body) {
-  const r = await fetch(`${API}${url}`, {
+  const send = () => fetch(`${API}${url}`, {
     method, headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
+  let r = await send();
+  // a workspace with many saved jobs deletes past the rate limit: wait as long as the API says
+  for (let n = 0; r.status === 429 && n < 5; n++) {
+    await new Promise((ok) => setTimeout(ok, (Number(r.headers.get("retry-after")) || 30) * 1000));
+    r = await send();
+  }
   if (!r.ok) throw new Error(`${method} ${url} → ${r.status} ${await r.text()}`);
   return r.status === 204 ? null : r.json();
 }
@@ -255,44 +262,39 @@ async function record() {
     await d.say(1, "Add a JSON file", "Documents, spreadsheets, JSON, CSV, databases — one drop zone");
     await d.hold(700);
     await d.click(nav("Add data"));
-    await page.getByText("Drop a file here, or click to choose one").waitFor();
+    const drop = page.getByText("Drop files here, or click to choose them");
+    await drop.waitFor();
     await d.hold(600);
-    const [chooser] = await Promise.all([
-      page.waitForEvent("filechooser"),
-      d.click(page.getByText("Drop a file here, or click to choose one"), { after: 200 }),
-    ]);
+    const [chooser] = await Promise.all([page.waitForEvent("filechooser"), d.click(drop, { after: 200 })]);
     await chooser.setFiles(FILE);
-    await d.fastForward(page.getByText(/Here is how it would read/), 4, 180_000);
+    await page.getByText("Extract knowledge").waitFor({ timeout: 60_000 });
     await d.ensure();
 
-    // 2 · The Mapper drafts a reading
-    await d.say(2, "The Mapper drafts how to read it", "Every decision carries the measurement behind it");
-    await d.hold(1400);
-    await d.glide(W * 0.52, H * 0.55, 600);
-    await d.scroll(520, 2600);
-    await d.hold(900);
+    // 2 · Choose what the graph gets
+    await d.say(2, "Choose what the graph gets", "Extract knowledge: each record one node, with its identifier, name, text and dates");
+    await d.hold(1200);
+    await d.click(page.getByText("Extract knowledge", { exact: true }));
+    await d.hold(1000);
+    await d.click(page.getByText("Custom", { exact: true }));
     const tags = page.locator("#add-tags");
+    await tags.waitFor();
     await d.click(tags);
     await d.type(TAG, 70);
     await page.keyboard.press("Enter");
     await d.hold(700);
 
     // 3 · Ingest
-    await d.say(3, "Ingest it — every field becomes a node or an edge");
-    await d.click(page.getByRole("button", { name: /Use this reading and add it/ }));
-    await d.fastForward(page.getByText(/Pull something else out of this/), 10, 600_000);
-    await d.hold(800);
-    await d.glide(W * 0.52, H * 0.5, 500);
-    await d.scroll(-2000, 400);
-    await d.hold(1200);
-    await d.scroll(700, 3000);
-    await d.hold(1500);
+    await d.say(3, "Add it — the data is kept, its knowledge goes into the graph");
+    await d.click(page.getByRole("button", { name: /^Add$/ }));
+    await d.fastForward(page.getByText(/^(Found |Read the file|Finished)/), 10, 600_000);
+    await d.hold(1600);
 
-    // 4 · The reading is now a saved mapping
-    await d.say(4, "The reading is saved as a reusable mapping", "Correct it once, every re-run follows it");
-    await d.click(nav("Mapper"));
-    const mapping = page.locator('a[href^="/dashboard/mapper/"]').first();
-    await mapping.waitFor({ timeout: 30_000 });
+    // 4 · What detection found is a mapping, editable
+    await d.say(4, "Detection's reading is a mapping you can correct", "The identifier, the name, the fields each record carries");
+    await d.click(nav("Customize"));
+    await d.click(page.getByText("Open mappings"));
+    const mapping = page.locator('a[href^="/dashboard/mapper/"]').filter({ hasText: /^Project/ }).first();
+    await d.fastForward(mapping, 6, 600_000);          // detection runs once the upload settles
     await d.hold(900);
     await d.click(mapping);
     await page.waitForURL(/\/dashboard\/mapper\/.+/);
@@ -304,7 +306,7 @@ async function record() {
 
     // 5 · Explore the graph
     await d.say(5, "Explore the knowledge graph", "Workspace → source → tag → asset → what it contains");
-    await d.click(nav("Lineage"));
+    await d.click(nav("Graph"));
     const svg = page.locator('svg[aria-label="Knowledge graph"]');
     await d.fastForward(svg, 6, 180_000);
     await d.hold(1200);
@@ -333,14 +335,14 @@ async function record() {
 
     // 7 · Ask
     await d.say(7, "Ask the AI Assistant — every answer cites its source", "", true);
-    await d.click(nav("AI Assistant"));
+    await d.click(nav("Assistant"));
     const ask = page.getByPlaceholder("Ask a question...");
     await ask.waitFor();
     await d.click(ask);
     await d.type(QUESTION, 45);
     await d.hold(400);
     await d.click(page.getByRole("button", { name: /^Ask$/ }));
-    await d.fastForward(page.getByText(/^Sources$/i).first(), 3, 240_000);
+    await d.fastForward(page.getByText(/^Sources$/i).first(), 6, 600_000);   // a model on CPU reads the full budget
     await d.hold(1200);
     const firstSource = page.locator('a[href^="/dashboard/catalogue/"]').filter({ hasText: /atlas-programme/ }).first();
     if (await firstSource.count()) { await d.point(firstSource, 900); await d.hold(2600); }

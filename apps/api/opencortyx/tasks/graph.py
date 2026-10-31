@@ -179,8 +179,8 @@ def v2_embed_node(self, workspace_id: str, node_id: str):
 
 @celery_app.task(bind=True, queue="embedding", name="opencortyx.embed_nodes", max_retries=3)
 def v2_embed_nodes(self, workspace_id: str, node_ids: list):
-    """Embed these nodes. For what belongs to no one asset's subtree - an entity an extractor or the
-    text reader names, merged by name across every text it is in - so no asset's embedding job
+    """Embed these nodes. For what belongs to no one asset's subtree - an entity an extractor names,
+    merged by name across every text it is in - so no asset's embedding job
     reaches it. Idempotent."""
     async def _run():
         repo, oid = NodeRepo(), uuid.UUID(workspace_id)

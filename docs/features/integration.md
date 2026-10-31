@@ -1,7 +1,8 @@
 # Integration
 
-Bring data in and decide what it becomes. You find these pages under **Integration** in the
-dashboard menu.
+Bring data in and decide what it becomes. **Add data** and **Connections** are in the sidebar;
+Mappings, Extractors, Saved setups (pipelines) and Scheduled syncs (ingestions) are under
+**Customize**, and **Runs** has the sidebar entry of its own.
 
 If you only want to add a file, start with [Add data](#add-data). The other pages are for data you
 add again and again: saved connections, scheduled ingestions, and the mappings and pipelines that
@@ -9,8 +10,8 @@ read them.
 
 ## Add data
 
-Add data is the quickest way in. Drop one file, see how OpenCortyx would read it, and add it. Or
-drop several files at once and add them together.
+Add data is the quickest way in. Drop a file, choose what the graph gets from it, and press **Add**.
+Or drop several files at once and add them together.
 
 ![Add data](../assets/screenshots/add-data.png)
 
@@ -18,33 +19,39 @@ drop several files at once and add them together.
 
 1. Open **Add data** and drop a file on the page, or click to choose one. Documents, spreadsheets,
    JSON and CSV all work. OpenCortyx works out which kind it is.
-2. Read the draft under **Here is how it would read** *your file*. It shows the entity types it
-   found (for example Programme, Project, Lead) and the fields of each. A **Needs your eyes** badge
-   or a yellow note tells you what to check, such as a sample too small to be sure.
-3. Open **How it read your data** to see the full reading as a tree, or switch to **Raw Rules**.
-4. Add **Tags** if you like. The graph groups assets by tag, and you can change tags later.
-5. Under **Pipeline**, keep **Automatic (by file type)** or choose one of your
-   [pipelines](#pipelines) for this kind of file.
-6. Choose how to add it:
-   - **Use this reading and add it** saves the reading as a [mapping](#mapper) and ingests the
-     file through it. Pick this when you want the types you saw, and the same reading for the next
-     file of this shape.
-   - **Just add it with the defaults** (or **Add it with the chosen pipeline**) ingests the file
-     without saving anything.
-7. Wait for the result card. It lists what was created, for example *Found 3 Projects, 3 Leads,
-   3 Vendors and 6 more kinds*, and offers next steps: **Ask a question about this**, **Pull out
-   something else**, or **See it in the catalogue**.
+2. Under **Knowledge graph**, choose what the graph gets. The data itself is always kept, read
+   with SQL and searchable, whichever you pick:
+   - **Structure only** (tables, JSON): the columns or keys, their types and the links between
+     files, with a description of each column when a model is on. For documents this option is
+     **Summary only**: a summary, when AI summaries are on.
+   - **Extract knowledge** (tables, JSON): OpenCortyx looks at each column's values and picks the
+     ones that carry knowledge: the identifier, the name, text and dates. Each record becomes one
+     node of its kind (Customer, Account, Project, Risk…) with those fields, and records that
+     refer to each other are linked. Records nested inside others are found too: a project's risks
+     inside a programme file become Risks linked to their Project. Change any of it later in the
+     [Mapper](#mapper).
+   - **Add the whole data**: every row, key and value, or every heading, paragraph and table, as
+     nodes. It already holds every record, so it is never combined with Extract knowledge. Large
+     files make large graphs.
+3. Open **Custom** only if you want more. There you can add **Tags** (the graph groups assets by
+   tag), choose a [pipeline](#pipelines) per kind of file, a [mapping](#mapper), and
+   [extractors](#custom-extractors) to run over the file once it is in. Each extractor can be given
+   the columns or keys (tables, JSON) or the sections (documents) it should read; leave it empty and
+   it reads all of it.
+4. Press **Add** and wait for the result card. It lists what was created, for example *Found 1
+   Programme, 3 Projects, 3 Risks*. Detection runs once the file is in, and its reading appears
+   under **Customize > Mappings** a minute or two later.
 
 ### Several files at once
 
-Select or drop more than one file. The page lists them instead of reading one, with a **Pipeline**
-choice for each kind of file in the list (documents, tables, JSON). Press **Add N files**: each file
+Select or drop more than one file. The page lists them, with the same **Knowledge graph** choice
+and, under **Custom**, a pipeline for each kind of file in the list. Press **Add N files**: each file
 is ingested with the pipeline chosen for its kind, or the default one for its file type, and its
 status shows in the list. Every file becomes its own run under [Runs](#runs).
 
 ### Good to know
 
-- Nothing is saved or ingested until you press one of the buttons.
+- Nothing is saved or ingested until you press **Add**.
 - Fields named `id` or ending in `_id` are kept as ordinary attributes. Each record gets its own
   node, so two files that share an id never overwrite each other. To link records that are the same
   thing, set [Resolution](trust.md#match-the-same-record-across-files-resolution) for their type.
@@ -92,7 +99,8 @@ An ingestion is a saved job you can run again: where to read from, what to read,
 
 ### How to use it
 
-1. Press **New Ingestion** and give it a name.
+1. Open **Customize > Scheduled syncs** (or **Connections > Scheduled syncs**), press **New
+   Ingestion** and give it a name.
 2. Choose the **Source**: a saved connection, or **Upload** to pick files (**Pick Files**) or a
    whole folder (**Pick Folder**).
 3. Choose the **Classification**. **Auto-detect** sends each file to the pipeline that suits it.
@@ -138,7 +146,7 @@ fields are kept as attributes. One editor covers JSON, tables and documents.
 
 ### How to use it
 
-1. Open **Mapper**. The list shows every mapping, its kind, the shape of graph it produces and its
+1. Open **Customize > Mappings**. The list shows every mapping, its kind, the shape of graph it produces and its
    status.
 2. Press **Semi-structured**, **Structured** or **Unstructured** to start a new mapping, or click
    an existing one to edit it. A mapping saved from Add data is already here.
@@ -181,7 +189,7 @@ the people and organisations named in a document. You define them here, without 
 
 ### How to use it
 
-1. Open **Custom Extractors**. The three tabs are:
+1. Open **Customize > Extractors**. The three tabs are:
    - **Your extractors**: the ones you created.
    - **Relationships**: rules that connect nodes into typed relationships.
    - **Built-in**: the extractors that ship with OpenCortyx, grouped by what they read (structured
@@ -190,6 +198,12 @@ the people and organisations named in a document. You define them here, without 
    - which node types it reads (for example `Chunk`),
    - how it works (an AI prompt, code, or a rule),
    - what it produces: the node types, relationships and attributes.
+
+   For people, places, organisations and how they connect, choose **Find with: people, places,
+   things and how they connect (the model)**. Your extraction model reads the text and returns each
+   named thing with its type, and each relationship a sentence states between two of them, named by
+   its verb (`WORKS_AT`, `MET`). Each thing becomes a node of the type the model gave it, linked from
+   the text it was found in, and the same name found again is the same node.
 3. Preview it on a few sample nodes, then save.
 4. Press **Run** on any extractor to run it over the workspace now, or add it as a step in a
    [pipeline](#pipelines) so it runs on every new asset.
@@ -212,7 +226,7 @@ of ingestions.
 
 ### How to use it
 
-1. Open **Pipelines**. OpenCortyx ships a default pipeline for each kind: tables (SQL), JSON and
+1. Open **Customize > Saved setups**. OpenCortyx ships a default pipeline for each kind: tables (SQL), JSON and
    documents. Pipelines drafted from Add data appear here too.
 2. Press **New Pipeline**, or the pencil on a card to edit one. The copy icon duplicates a pipeline
    so you can change it safely.

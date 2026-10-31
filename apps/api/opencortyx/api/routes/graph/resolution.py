@@ -171,8 +171,9 @@ async def decide_conflict(decision_id: uuid.UUID, body: ResolutionDecideIn,
                           user: CurrentUser = Depends(require_write)):
     """Settle what resolution left for a person. For an attribute conflict, `keep` the existing
     node's value or `use_new` to take the newer record's (both stay in the ledger). For a possible
-    duplicate (a SAME below the automatic threshold), `use_new` means "the same thing" and links the
-    two nodes `SAME_AS`; `keep` means they are different."""
+    duplicate (a SAME below the automatic threshold), `use_new` means "the same thing": the two join
+    one cluster (a master both are MEMBER_OF, as an automatic match makes); `keep` means they are
+    different."""
     async with V2Session() as db:
         d = await db.get(ResolutionDecision, decision_id)
         if d is None or d.workspace_id != user.workspace_id or not d.needs_review:
@@ -181,9 +182,8 @@ async def decide_conflict(decision_id: uuid.UUID, body: ResolutionDecideIn,
             if d.attribute:
                 await NodeRepo().patch_properties(user.workspace_id, [d.target], {d.attribute: (d.evidence or {}).get("value")})
             elif d.relation == "SAME":
-                await NodeRepo().add_edges(workspace_id=user.workspace_id, edges=[{
-                    "source_id": d.subject, "target_id": d.target, "type": "SAME_AS",
-                    "properties": {"__by": "resolution", "decided_by": str(user.user_id)}}])
+                from opencortyx.resolution.engine import join
+                await join(NodeRepo(), user.workspace_id, [(d.subject, d.target)], by=f"person:{user.user_id}")
         d.needs_review = False
         d.evidence = {**(d.evidence or {}), "decision": body.choice, "decided_by": str(user.user_id)}
         await db.commit()

@@ -4,7 +4,7 @@ For each node of the asset:
   * no complete identity (an identity attribute is missing)  → left alone
   * identity not seen before                                 → it becomes the canonical node
   * identity matches a node                                  → a SAME decision, scored and gated:
-        score ≥ auto     linked `SAME_AS` and its attributes classified
+        score ≥ auto     joined to its cluster (engine.join) and its attributes classified
         score ≥ review   waits for a person (Review → Conflicts); nothing is linked yet
         lower            not a match: the node becomes canonical for its own identity
 
@@ -34,7 +34,7 @@ _NS = uuid.uuid5(uuid.NAMESPACE_URL, "opencortyx/resolution")
 @dataclass
 class Plan:
     keys: list = field(default_factory=list)        # (key, node_id) to add to the identity index
-    same: list = field(default_factory=list)        # (node_id, canonical_id) to link SAME_AS
+    same: list = field(default_factory=list)        # (node_id, canonical_id) to join as one cluster
     extend: dict = field(default_factory=dict)      # canonical_id → {attribute: value} to add
     decisions: list = field(default_factory=list)   # rows for the decision ledger
     unidentified: int = 0
@@ -117,7 +117,10 @@ def decide(workspace_id, source_id, node_type: str, spec: ResolutionSpec, nodes,
         theirs.update(plan.extend.get(target, {}))  # what this plan already added counts as there
         # fields a writer generated (a search rendering, a stamped date) say nothing about the source
         generated = set(props.get("__generated") or []) | set(theirs.get("__generated") or [])
-        for attr in spec.compared(sorted((set(props) | set(theirs)) - generated)):
+        # what identified them was scored by the match: "hostel" joined "Hostels" by its name, and
+        # the name (the label, or the field holding it) is not a second disagreement to review
+        matched = set(spec.identify_by) | ({a for a in props if props[a] == node.label} if "label" in spec.identify_by else set())
+        for attr in spec.compared(sorted((set(props) | set(theirs)) - generated - matched)):
             mine_v, other = norm(props.get(attr)), norm(theirs.get(attr))
             if mine_v is None:
                 continue

@@ -82,7 +82,8 @@ async def list_retrievers(user: CurrentUser = Depends(require_auth)):
         # gone with v1: v2 chooses surfaces per QUESTION from the plan rather than from a preset.
         "engine": "retrieval",
         "surfaces": SURFACES,
-        "defaults": {"k": 12, "abstain_threshold": 0.30, "rerank": ["cross"]},
+        # k 0: no block count, the token budget decides (orchestrator.WorkflowConfig.context_blocks)
+        "defaults": {"k": 0, "abstain_threshold": 0.30, "rerank": ["cross"]},
     }
 
 

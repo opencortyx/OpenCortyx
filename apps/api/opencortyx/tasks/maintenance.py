@@ -307,7 +307,10 @@ def schedule_detection(workspace_id) -> bool:
         return False
 
 
-@celery_app.task(bind=True, queue="maintenance", name="opencortyx.detect_knowledge")
+# On the extraction queue: naming a type and breaking a tie ask the generation model, which runs
+# in-process (~1.2 GiB); the maintenance worker is sized without a model (docs/memory-budget.md) and was
+# OOM-killed mid-detection.
+@celery_app.task(bind=True, queue="extraction", name="opencortyx.detect_knowledge")
 def v2_detect_knowledge(self, workspace_id: str):
     """Propose the workspace's entity types, keys and links from its data; then publish what is
     chosen to the graph - the types a mapping marks `materialize`, and with `knowledge_publish`
@@ -322,21 +325,17 @@ def v2_detect_knowledge(self, workspace_id: str):
 
     async def run():
         layer = await detector.detect(workspace_id, apply=True)
-        asked = _take_after_detection(workspace_id)
+        asked = _after_detection(workspace_id)
         chosen = await store.choose(workspace_id, asset_ids=asked, materialize=True) if asked else []
         published = await publish.publish(workspace_id, everything=_rc.knowledge_publish())
+        _done_after_detection(workspace_id, asked)        # its records are in: no longer pending
         await publish.link_schema(workspace_id, layer)    # the detected links between columns / keys
-        if published.get("nodes"):                        # names read before these records existed
-            from opencortyx.resolution.mentions import relink
-            published["mentions_linked"] = await relink(workspace_id)
-        if asked:              # their free text, now that their types (and published records) are known
-            v2_apply_knowledge_choices.delay(workspace_id, asset_ids=sorted(asked))
         return {"types": len(layer.types), "links": len(layer.links), "published": published,
                 "chosen_for_graph": chosen}
     return async_to_sync(run)()
 
 
-#: Assets whose upload asked for knowledge (Add data's "extract entities and relationships"): they
+#: Assets whose upload asked for knowledge (Add data's "extract knowledge"): they
 #: wait for the detection pass that binds them to their types.
 _AFTER_DETECTION = "v2:detect:knowledge:{}"
 
@@ -368,16 +367,36 @@ def book_after_detection(workspace_id, asset_id, run_id=None) -> None:
         log.warning("semantic_layer.after_detection_skipped", error=str(e))
 
 
-def _take_after_detection(workspace_id) -> set:
+def _after_detection(workspace_id) -> set:
+    try:
+        import redis as _redis
+        members = _redis.Redis.from_url(settings.CELERY_BROKER_URL).smembers(_AFTER_DETECTION.format(workspace_id))
+        return {m.decode() if isinstance(m, bytes) else str(m) for m in members}
+    except Exception:                                         # noqa: BLE001
+        return set()
+
+
+def _done_after_detection(workspace_id, asset_ids) -> None:
+    """Published: the assets leave the booking (others booked meanwhile wait for the next pass)."""
+    if not asset_ids:
+        return
+    try:
+        import redis as _redis
+        _redis.Redis.from_url(settings.CELERY_BROKER_URL).srem(_AFTER_DETECTION.format(workspace_id), *asset_ids)
+    except Exception:                                         # noqa: BLE001
+        pass
+
+
+def knowledge_pending(workspace_id, run_id, asset_id) -> bool:
+    """Whether an upload that asked for knowledge is still waiting for detection to put its records
+    in the graph: its run is not finished, or its asset waits for the next detection pass."""
     try:
         import redis as _redis
         r = _redis.Redis.from_url(settings.CELERY_BROKER_URL)
-        pipe = r.pipeline()
-        pipe.smembers(_AFTER_DETECTION.format(workspace_id))
-        pipe.delete(_AFTER_DETECTION.format(workspace_id))
-        return {m.decode() if isinstance(m, bytes) else str(m) for m in pipe.execute()[0]}
+        return bool(r.exists(_PUBLISH_RUN.format(run_id))) or (
+            bool(asset_id) and bool(r.sismember(_AFTER_DETECTION.format(workspace_id), str(asset_id))))
     except Exception:                                         # noqa: BLE001
-        return set()
+        return False
 
 
 @celery_app.task(bind=True, queue="extraction", name="opencortyx.apply_knowledge_choices", acks_late=True,
@@ -385,17 +404,14 @@ def _take_after_detection(workspace_id) -> set:
 def v2_apply_knowledge_choices(self, workspace_id: str, asset_ids: list | None = None,
                                publish_first: bool = False):
     """Act on what people chose: publish the types marked for the graph (`publish_first`, when that
-    choice changed in the Mapper), and read the free text of the records `asset_ids` hold - assets
-    whose upload asked for knowledge (knowledge/semantic/text_fields.py)."""
+    choice changed in the Mapper). `asset_ids` is accepted for jobs queued before it was retired."""
     from opencortyx.core.config import runtime as _rc
-    from opencortyx.knowledge.semantic import publish, text_fields
+    from opencortyx.knowledge.semantic import publish
 
     async def run():
         out = {}
         if publish_first:
             out["published"] = await publish.publish(workspace_id, everything=_rc.knowledge_publish())
-        if asset_ids:
-            out["text_fields"] = await text_fields.read_assets(workspace_id, asset_ids)
         return out
     try:
         return async_to_sync(run)()

@@ -1,5 +1,7 @@
-/** Every page in the dashboard navigation, in navigation order. */
-export const DASHBOARD_PAGES = [
+import { HIDDEN_NAV, NAV_LABELS } from "../lib/simple";
+
+/** Every dashboard page, in navigation order. */
+const PAGES = [
   { section: "Discover", name: "Assets", path: "/dashboard/catalogue", slug: "assets" },
   { section: "Discover", name: "Lineage", path: "/dashboard/graph", slug: "lineage" },
   { section: "Trust", name: "Curation", path: "/dashboard/curate", slug: "curation" },
@@ -21,3 +23,11 @@ export const DASHBOARD_PAGES = [
   { section: "Administration", name: "System Health", path: "/dashboard/health", slug: "system-health" },
   { section: "Administration", name: "Settings", path: "/dashboard/settings", slug: "settings" },
 ] as const;
+
+/**
+ * Each page with `nav`: the label its sidebar link shows, or null when the sidebar reaches it from
+ * another page (lib/simple.ts decides both, as it does for the sidebar itself).
+ */
+export const DASHBOARD_PAGES = PAGES.map((p) => ({
+  ...p, nav: HIDDEN_NAV.has(p.path) ? null : (NAV_LABELS[p.path] ?? p.name),
+}));

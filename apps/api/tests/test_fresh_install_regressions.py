@@ -532,7 +532,7 @@ def test_the_model_registry_is_the_only_source_of_models():
     # A new workspace starts with the models that run inside OpenCortyx and ship in its image, named
     # plainly: the generation one runs in-process too, so it has no server address to be missing.
     rows = registry._builtin_rows()
-    assert sorted(r["role"] for r in rows) == ["embedding", "entities", "generation", "rerank"]
+    assert sorted(r["role"] for r in rows) == ["embedding", "generation", "rerank"]
     assert not any("built-in" in r["name"] for r in rows)
     assert all(r["provider"] in registry.IN_PROCESS_PROVIDERS and r["base_url"] is None for r in rows)
 

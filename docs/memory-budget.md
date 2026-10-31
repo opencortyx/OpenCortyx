@@ -13,7 +13,7 @@ Check it against your Docker VM:
 |---|---|---|---|
 | api | 1136 MiB | 4096m | embedding model, retrieval working memory, and the built-in generation model (Qwen3-0.6B, ~1.2 GiB) once loaded; 2048m was OOM-killed under load |
 | embedding-worker | 1616 MiB | 2304m | embedding model, in one prefork child (1517 MiB after re-embedding 1042 nodes; recycled past 1.5 GB) |
-| extraction-worker | 1041 MiB | 3200m | entity resolution loads the embedding model, extraction the generation model (~1.2 GiB); 768m was OOM-killed |
+| extraction-worker | 1041 MiB | 3200m | entity resolution loads the embedding model, extraction and knowledge detection the generation model (~1.2 GiB); 768m was OOM-killed |
 | worker | 234 MiB | 3072m | reads uploaded files with the layout readers (LiteParse for PDFs, LibreOffice for legacy office files) |
 | maintenance-worker | 200 MiB | 832m | one child up to 293 MiB, plus the 512 MiB headroom rule below |
 | postgres | 74 MiB | 1024m | control plane + ontology only since ADR-004 |

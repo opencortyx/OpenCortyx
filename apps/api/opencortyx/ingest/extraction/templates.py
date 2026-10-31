@@ -18,6 +18,7 @@ Idempotency: emitted nodes can declare `id: [field, ...]` → a deterministic uu
 upserts instead of duplicating. Attribute merges are inherently idempotent.
 """
 import json
+import time
 import uuid
 import re
 from typing import Optional
@@ -58,7 +59,6 @@ DEPENDENT_MECHANISM_REFS = (
 _PRODUCIBLE = set(_LLM_REFS) | set(_RELATE_REFS) | {"unstructured.regex", "unstructured.dictionary",
                                 "unstructured.keyword", "unstructured.ner", "unstructured.python",
                                 "seed.literal", _ATTR_REF}
-_SPACY = None  # lazy-loaded spaCy pipeline (optional) for NER
 
 
 class _MechView:
@@ -140,46 +140,105 @@ def _dictionary_records(terms, text: str) -> list:
     return out
 
 
-async def _ner_records(text: str, model_spec: dict | None = None, workspace_id=None) -> list:
-    """Named entities and how each sentence connects them, read by the workspace's Entities model
-    (spaCy, no LLM - ingest/extraction/text_reader.py): a record per entity {name, type}, then a
-    record per relationship {name, type, relation, object, object_type} - the subject's name and type,
-    so an edge can run from it to the object found by name. Without that model, spaCy's own package
-    (entities only), then the extraction's registry model."""
-    global _SPACY
-    if workspace_id is not None:
-        try:
-            import anyio
+#: The model's instructions for named things and how each sentence connects them.
+_ENTITIES_PROMPT = (
+    "Read the text. List every named thing in it - people, organisations, places, products, works, "
+    "events - with its type, one singular noun (Person, Place, Book). Numbers, dates and amounts are "
+    "not things. List every relationship a sentence states between two of them, named by its verb "
+    "(MET, JOINED, WORKS_AT, LIVES_IN). Use the names exactly as written. Return ONLY JSON: "
+    '{"entities":[{"name":"...","type":"Person"}],'
+    '"relationships":[{"subject":"...","relation":"...","object":"..."}]}'
+    "\n\nTEXT:\n")
 
-            from opencortyx.ingest.extraction import text_reader
-            spec = await text_reader.model(workspace_id)
-            if spec:
-                nlp = await anyio.to_thread.run_sync(text_reader.load, spec["model_id"])
-                found = (await anyio.to_thread.run_sync(text_reader.read, nlp, [text or ""]))[0]
-                ents = [{"name": t, "type": text_reader._type(label)} for t, label in found.entities]
-                rels = [{**ents[a], "relation": rel, "object": ents[b]["name"], "object_type": ents[b]["type"]}
-                        for a, rel, b, _ in found.relations if a < len(ents) and b < len(ents)]
-                return ents + rels
-        except Exception:                                    # noqa: BLE001 - the fallbacks below
-            pass
-    try:
-        import spacy  # type: ignore
-        if _SPACY is None:
-            _SPACY = spacy.load("en_core_web_sm")
-        doc = _SPACY((text or "")[:5000])
-        return [{"name": e.text, "type": e.label_} for e in doc.ents]
-    except Exception:
+
+#: The node types a workspace has: (read at, {folded spelling: (nodes, type)}). Re-read a minute on.
+_KNOWN_TYPES: dict = {}
+
+
+def _fold(kind: str) -> list:
+    """The spellings one type can take: case and separators dropped, and its singular when the
+    word looks plural ("Time_Period" and "time period"; "Libraries" and "Library")."""
+    k = re.sub(r"[^a-z0-9]", "", kind.lower())
+    forms = [k]
+    if k.endswith("ies") and len(k) > 4:
+        forms.append(k[:-3] + "y")
+    elif k.endswith("es") and len(k) > 4:
+        forms += [k[:-2], k[:-1]]
+    elif k.endswith("s") and not k.endswith("ss") and len(k) > 3:
+        forms.append(k[:-1])
+    return forms
+
+
+async def _known_types(workspace_id) -> dict:
+    """{folded spelling: (nodes, type)} for the types already in the workspace, so the model's
+    "Places" is the workspace's Place: one type, one identity for the same name. Best-effort; cached
+    a minute."""
+    import time
+    if workspace_id is None:
+        return {}
+    at, known = _KNOWN_TYPES.get(str(workspace_id), (0.0, None))
+    if known is None or time.monotonic() - at > 60:
         try:
-            raw = await complete(
-                'Extract named entities. Return ONLY JSON {"records":[{"name":"...","type":"PERSON|ORG|..."}]}'
-                "\n\n" + (text or "")[:4000],
-                system="You extract named entities. JSON only.", max_tokens=600,
-                json_mode=True, temperature=0.0, model_spec=model_spec)
-            return _records(_parse_json(raw))
-        except NoModelConfigured:
-            raise                                    # the run must say what to connect, not find nothing
-        except Exception:
-            return []
+            names = await NodeRepo().count_by_type(workspace_id)
+        except Exception:                                      # noqa: BLE001
+            names = {}
+        known = {}
+        for t, n in names.items():
+            for f in _fold(t):
+                if n > known.get(f, (-1, ""))[0]:
+                    known[f] = (n, t)
+        _KNOWN_TYPES[str(workspace_id)] = (time.monotonic(), known)
+    return known
+
+
+def _type_named(kind: str, known: dict) -> str:
+    """The model's type as the workspace already spells it - the most used type sharing a spelling
+    with it - else as given (first letter capital); a new type is remembered so the rest of the run
+    spells it the same way."""
+    found = [known[f] for f in _fold(kind) if f in known]
+    if found:
+        return max(found)[1]
+    kind = kind[:1].upper() + kind[1:]
+    for f in _fold(kind):
+        known.setdefault(f, (0, kind))
+    return kind
+
+
+async def _ner_records(text: str, model_spec: dict | None = None, workspace_id=None) -> list:
+    """Named things and how each sentence connects them, read by the extraction's model: a record per
+    entity {name, type}, then a record per relationship {name, type, relation, object, object_type} -
+    the subject's name and type, so an edge can run from it to the object found by name. Types and
+    relations are the model's words for this text, a type spelled as the workspace already spells it
+    (`_type_named`); nothing is listed here."""
+    try:
+        raw = await complete(_ENTITIES_PROMPT + (text or "")[:4000],
+                             system="You read text into a knowledge graph. JSON only.", max_tokens=900,
+                             json_mode=True, temperature=0.0, model_spec=model_spec)
+    except NoModelConfigured:
+        raise                                        # the run must say what to connect, not find nothing
+    except Exception:
+        return []
+    parsed = _parse_json(raw)
+    parsed = parsed if isinstance(parsed, dict) else {}
+    ents, seen, known = [], {}, await _known_types(workspace_id)
+    for e in parsed.get("entities") or []:
+        if not isinstance(e, dict):
+            continue
+        name = str(e.get("name") or "").strip()
+        kind = re.sub(r"[^A-Za-z0-9]+", "_", str(e.get("type") or "Entity")).strip("_") or "Entity"
+        if name and normalize_name(name) not in seen:
+            seen[normalize_name(name)] = _type_named(kind, known)
+            ents.append({"name": name, "type": seen[normalize_name(name)]})
+    rels = []
+    for r in parsed.get("relationships") or []:
+        if not isinstance(r, dict):
+            continue
+        sub, obj = str(r.get("subject") or "").strip(), str(r.get("object") or "").strip()
+        rel = re.sub(r"[^A-Za-z0-9]+", "_", str(r.get("relation") or "")).strip("_").upper()
+        if sub and obj and rel and normalize_name(sub) in seen and normalize_name(obj) in seen:
+            rels.append({"name": sub, "type": seen[normalize_name(sub)], "relation": rel,
+                         "object": obj, "object_type": seen[normalize_name(obj)]})
+    return ents + rels
 
 
 def _seed_records(mech: dict) -> list:
@@ -684,12 +743,19 @@ def _emit_edges(emit: dict) -> list:
     return out
 
 
+_NAMED_NS = uuid.uuid5(uuid.NAMESPACE_URL, "opencortyx/text-reader")   # the ids named things already have
+
+
+def entity_id(workspace_id, type_name: str, name: str) -> uuid.UUID:
+    """A named thing's identity: its type and normalised name (case, punctuation, articles and legal
+    suffixes dropped), whichever extractor names it in whichever file."""
+    return uuid.uuid5(_NAMED_NS, f"{workspace_id}:{type_name}:{normalize_name(name)}")
+
+
 def _named_id(workspace_id, node_type: str, name: str, collection_id=None):
     """The id of the one node of `node_type` called `name` (per collection when given)."""
     if not collection_id:
-        # the same id the text reader gives it (ingest/extraction/text_reader.py): a book an extractor
-        # names and the same book the reader finds in a sentence are one node, not two
-        from opencortyx.ingest.extraction.text_reader import entity_id
+        # one id per (type, normalised name): "The Nightingale" from any extractor or file is one node
         return entity_id(workspace_id, str(node_type), str(name))
     key = str(name).strip().lower()
     return _det_id(workspace_id, str(node_type).lower(), f"{collection_id}:{key}")
@@ -1378,8 +1444,8 @@ async def _apply_emit_unit(db, workspace_id, tmpl, *, source_node, parsed, ctx, 
                 await _repo.link_date(workspace_id=workspace_id, node_id=node.id, created=False)
                 counts["attributes"] += len(resolved) + (1 if confidence is not None else 0)
     if emitted:                                            # entities merged by name are in no asset's subtree
-        from opencortyx.resolution.names import link_similar
-        counts["near_names"] = await link_similar(workspace_id, emitted, _repo)
+        from opencortyx.resolution.engine import reconcile  # is each one something already known?
+        counts["reconciled"] = await reconcile(workspace_id, emitted)
         from opencortyx.tasks.graph import embed_later
         embed_later(workspace_id, [n.id for n in emitted])
     return counts
@@ -1387,11 +1453,15 @@ async def _apply_emit_unit(db, workspace_id, tmpl, *, source_node, parsed, ctx, 
 
 async def run_template(workspace_id: uuid.UUID, template, *, collection_id=None, limit: int = _RUN_LIMIT,
                        source_key: str | None = None, node_ids: list | None = None,
-                       attrs=None) -> dict:
+                       attrs=None, deadline: float | None = None, done=()) -> dict:
     """Run ONE executable template. Independent templates (seed.literal / source=null) emit once;
     bound templates iterate the nodes they select — optionally scoped to one `source_key`, or to an
     explicit set of `node_ids` (DAG chaining: run a task over a prior step's exact output). Any
-    mechanism (LLM / regex / dictionary / keyword / NER / seed) is supported. Per-item isolation."""
+    mechanism (LLM / regex / dictionary / keyword / NER / seed) is supported. Per-item isolation.
+
+    A long run continues instead of being killed: past `deadline` (time.monotonic()) it stops between
+    nodes and returns status "partial" with `done`, the ids read so far - each committed as it went -
+    so the caller runs it again with `done` and only the rest is read (tasks/enrich.continue_run)."""
     if not is_executable(template):
         return {"status": "skipped", "reason": "not_executable", "name": template.name}
     mech = template.mechanism or {}
@@ -1428,8 +1498,15 @@ async def run_template(workspace_id: uuid.UUID, template, *, collection_id=None,
         return {"status": "ok", "name": template.name, **totals}
 
     nodes = await _select_nodes(workspace_id, template, node_ids=node_ids, source_key=source_key, limit=limit)
+    done, read, stopped = {str(i) for i in done}, [], False
     async with V2Session() as db:
         for node in nodes:
+            if str(node.id) in done:
+                continue
+            if deadline is not None and time.monotonic() > deadline:
+                stopped = True
+                break
+            read.append(str(node.id))
             totals["nodes_seen"] += 1
             try:
                 ctx = await _node_ctx(node)
@@ -1452,6 +1529,8 @@ async def run_template(workspace_id: uuid.UUID, template, *, collection_id=None,
                 totals["errors"] += 1
                 log.warning("enrich.template_failed", template=str(template.name), node_id=str(node.id), error=str(e))
                 await db.rollback()
+    if stopped:
+        return {"status": "partial", "name": template.name, "done": sorted(done | set(read)), **totals}
     return {"status": "ok", "name": template.name, **totals}
 
 
@@ -2064,12 +2143,14 @@ async def apply_output(workspace_id: uuid.UUID, template, source_id, parsed, col
 
 
 async def run_template_by_id(workspace_id: uuid.UUID, template_id: uuid.UUID, collection_id=None,
-                             source_key: str | None = None) -> dict:
+                             source_key: str | None = None, deadline: float | None = None,
+                             done=()) -> dict:
     async with V2Session() as db:
         t = await db.get(ExtractionTemplate, template_id)
         if not t or t.workspace_id != workspace_id:
             return {"status": "not_found"}
-    return await run_template(workspace_id, t, collection_id=collection_id, source_key=source_key)
+    return await run_template(workspace_id, t, collection_id=collection_id, source_key=source_key,
+                              deadline=deadline, done=done)
 
 
 async def run_template_by_name(workspace_id: uuid.UUID, name: str, collection_id=None,

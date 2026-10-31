@@ -15,7 +15,7 @@ test.describe("viewer", () => {
     copyFileSync(fixture("records.json"), path);
     await page.goto("/dashboard/add");
     await page.locator('input[type="file"]').setInputFiles(path);
-    const add = page.getByRole("button", { name: "Just add it with the defaults" });
+    const add = page.getByRole("button", { name: "Add", exact: true });
     await expect(add).toBeEnabled({ timeout: 120_000 });   // reading drafts first; wait for the choice
     await add.click();
     await expect(page.getByText(/read-only|not allowed|permission|cannot modify|forbidden/i).first()).toBeVisible();

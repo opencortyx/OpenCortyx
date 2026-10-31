@@ -53,12 +53,13 @@ async def run_preflight() -> dict:
     # 2 — Cross-encoder reranker availability (silent → flaky LLM fallback miscalibrates abstain gate)
     try:
         import importlib.util
-        if importlib.util.find_spec("sentence_transformers") is None:
+        # either library runs a cross-encoder: fastembed the built-in one, sentence-transformers a
+        # model added on the Models page
+        if not any(importlib.util.find_spec(m) for m in ("fastembed", "sentence_transformers")):
             issues.append(
-                "RERANKER: `sentence-transformers` (cross-encoder) is NOT installed — reranking falls "
-                "back to a local LLM, which miscalibrates relevance and can abstain on answerable "
-                "questions. Fix: `pip install sentence-transformers` (adds the bge cross-encoder), or "
-                "accept the slower/weaker LLM fallback knowingly.")
+                "RERANKER: no cross-encoder library (fastembed or sentence-transformers) is installed — "
+                "reranking falls back to a local LLM, which miscalibrates relevance and can abstain on "
+                "answerable questions. Fix: rebuild the image, which carries fastembed.")
         else:
             log.info("preflight.reranker_ok", reranker="cross-encoder")
     except Exception as e:

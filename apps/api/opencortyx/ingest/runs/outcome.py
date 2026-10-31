@@ -130,9 +130,15 @@ async def ingest_outcome(workspace_id: uuid.UUID, run_id) -> IngestOutcome | Non
             f"{dup} row(s) repeated an identity value an earlier row already had"
             + (f" ({seen})" if seen else "") + " and were merged into it — if they are different "
             "records, choose another identity column in the Mapper")
-    outcome.pending = (outcome.status == "completed"
-                       and (snapshot["result"] or {}).get("extraction") == "deferred")
-    if outcome.pending:
+    from opencortyx.tasks.maintenance import knowledge_pending
+    deferred = (snapshot["result"] or {}).get("extraction") == "deferred"
+    reading = outcome.status == "completed" and knowledge_pending(workspace_id, snapshot["id"],
+                                                                  snapshot.get("source_ref"))
+    outcome.pending = outcome.status == "completed" and (deferred or reading)
+    if reading:
+        outcome.notes.append("its records go into the graph once detection has read the file, "
+                             "usually within a few minutes — they appear here as they land")
+    elif outcome.pending:
         outcome.notes.append("entities and claims are still being extracted in the background — "
                              "they appear here as they land")
     elif (snapshot["result"] or {}).get("extraction") == "failed":
@@ -198,6 +204,15 @@ async def _counts(workspace_id, snapshot: dict) -> tuple[list[TypeCount], list[T
             # the chunks it was read from with EXTRACTED_FROM instead. Without this a document's
             # outcome listed its claims and never the entities they are about.
             from opencortyx.stores.graph.models import EdgeQuery
+            # And the records published from it (Extract knowledge): each points at the files it
+            # was read from (record -FROM_ASSET-> asset) and sits in no file's tree
+            if len(nodes) < NODE_CAP:
+                published = await store.find_edges(workspace_id, EdgeQuery(
+                    target_ids=[source_ref], types=["FROM_ASSET"], limit=NODE_CAP - len(nodes)))
+                fresh = list(dict.fromkeys(str(e.source_id) for e in published if str(e.source_id) not in seen))
+                for n in (await store.get_nodes(workspace_id, fresh) if fresh else []):
+                    seen.add(str(n.id))
+                    nodes.append(n)
             anchors = [n.id for n in nodes if getattr(n, "id", None)]
             if anchors and len(nodes) < NODE_CAP:
                 lineage = await store.find_edges(workspace_id, EdgeQuery(

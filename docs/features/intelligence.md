@@ -12,7 +12,7 @@ answer rests on.
 
 ### How to use it
 
-1. Open **AI Assistant**, type a question in **Ask a question...** and press **Ask**.
+1. Open **Assistant**, type a question in **Ask a question...** and press **Ask**.
 2. Read the answer. Under it, **Sources** lists the records the answer rests on, grouped by the file
    they came from. Each one quotes the passage or record that says it. Click the file name to open
    the asset.
@@ -80,7 +80,7 @@ transcripts, the decisions made, the facts learned and the preferences expressed
 
 1. Turn on capture first. Go to **Settings → Agents** and enable **Capture agent sessions** for
    the agents you want. Capture is off until you do.
-2. Open **Conversations**. Sessions are listed by day on the left.
+2. Open **Assistant > Agent conversations**. Sessions are listed by day on the left.
 3. Click a session to read its transcript and what the agent learned in it.
 4. Press **Refresh** to load sessions captured since you opened the page.
 

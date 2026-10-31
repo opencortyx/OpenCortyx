@@ -31,7 +31,7 @@ for (const c of CASES) {
 
     await page.goto("/dashboard/add");
     await page.locator('input[type="file"]').setInputFiles(path);
-    const defaults = page.getByRole("button", { name: "Just add it with the defaults" });
+    const defaults = page.getByRole("button", { name: "Add", exact: true });
     if (c.expect === "refused") {
       // An empty file must be refused with a message, and never become a run.
       await expect(page.getByText(/empty|no records|could not|nothing/i).first()).toBeVisible();

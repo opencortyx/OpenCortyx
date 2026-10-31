@@ -11,7 +11,7 @@ from opencortyx.core.security.auth import CurrentUser, require_auth, require_wri
 from opencortyx.core.db import V2Session
 from opencortyx.core import uploads
 from opencortyx.ingest.runs.progress import batch_status, create_run, dispatch, record_device_upload
-from opencortyx.tasks._shared import EXTRACTOR_FEATURE, KNOWLEDGE_FEATURE, WHOLE_DATA_FEATURE
+from opencortyx.tasks._shared import WHOLE_DATA_FEATURE
 from opencortyx.tasks.ingest import v2_ingest_document_flow, v2_ingest_json
 
 router = APIRouter()
@@ -39,10 +39,11 @@ async def upload_source(
     asset_path: Optional[str] = Form(None),    # folder-relative path the rules match on
     replace: bool = Form(False),               # read it again even if this exact file is already in
     tags: Optional[str] = Form(None),          # JSON list or comma-separated: the asset's tags
-    extract_knowledge: bool = Form(False),     # entities and relationships into the graph (all kinds)
+    extract_knowledge: bool = Form(False),     # tables, JSON: each record of the types found a node
     whole_data: bool = Form(False),            # the data itself into the graph too: rows, keys/values, passages
     mapping_ids: Optional[str] = Form(None),   # Custom: JSON list of mappings that shape tables / JSON
-    extractors: Optional[str] = Form(None),    # Custom: JSON list of extractors that read documents
+    extractors: Optional[str] = Form(None),    # Custom: JSON list of extractors (any kind of file)
+    extractor_inputs: Optional[str] = Form(None),  # Custom: JSON {extractor: [columns, keys or sections]}
     user: CurrentUser = Depends(require_write)
 ):
     """NATIVE ingestion: upload a file and it is sent to the pipeline that SUITS IT.
@@ -75,11 +76,15 @@ async def upload_source(
         except ValueError:
             raise HTTPException(status_code=400, detail=f"{what} must be a JSON list")
     shape_with = _names(mapping_ids, "mapping_ids")
-    # A document carries the graph options, and the extractors chosen under Custom, as plan features.
+    # A document carries the whole-data option as a plan feature. The extractors chosen under Custom
+    # are booked against the run and read the asset when it is in (any kind; the inputs chosen).
     features = ",".join([*(x for x in str(features or "").split(",") if x.strip()),
-                         *([KNOWLEDGE_FEATURE] if extract_knowledge else []),
-                         *([WHOLE_DATA_FEATURE] if whole_data else []),
-                         *(f"{EXTRACTOR_FEATURE}{n}" for n in _names(extractors, "extractors"))]) or None
+                         *([WHOLE_DATA_FEATURE] if whole_data else [])]) or None
+    try:
+        chosen_inputs = json.loads(extractor_inputs) if extractor_inputs else {}
+    except ValueError:
+        raise HTTPException(status_code=400, detail="extractor_inputs must be a JSON object")
+    booked = [{"name": n, "inputs": list(chosen_inputs.get(n) or [])} for n in _names(extractors, "extractors")]
     if pipeline_ids:
         from opencortyx.ingest.sources import sync
         try:
@@ -151,6 +156,9 @@ async def upload_source(
                 _anchor_extras.get("asset_path") or fname, replace=bool(replace))
 
     await _remember_tags(user.workspace_id, run_id, tags)
+    if booked and run_id:
+        from opencortyx.tasks.enrich import book_extractors
+        book_extractors(run_id, booked)
     if extract_knowledge and run_id and chosen in (formats.SEMISTRUCTURED, formats.STRUCTURED):
         # Its types are known only after the detection pass its ingest books: the choice waits there.
         from opencortyx.tasks.maintenance import want_in_graph

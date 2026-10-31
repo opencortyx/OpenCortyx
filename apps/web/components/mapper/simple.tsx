@@ -32,6 +32,8 @@ function recordLabel(s: ShapeSource): string {
   if (!s.path) return s.kind === "structured" ? "each row" : "each record";
   const key = s.path.replace(/^\$\./, "").replace(/(\[\*\])+$/, "");
   if (s.path.endsWith("[*][*]")) return `each item of each list in "${key}"`;
+  const [outer, inner] = key.split("[*].");    // a list inside each element: a project's risks
+  if (inner) return `each item in "${inner}" of each item in "${outer}"`;
   return s.path.endsWith("[*]") ? `each item in "${key}"` : `the "${key}" object in each record`;
 }
 
@@ -88,6 +90,17 @@ function measure(e: KnowledgeEntity, shapes: Record<string, ShapeSource[]>): Mea
 const FILES_SHOWN = 6;
 
 /** A field's role from what was measured: the choices made here, then the data. */
+/** The roles that make a field knowledge: what a published record carries by default (the rest stays
+ *  in the data store). The same rule as the server's `store.KNOWLEDGE_ROLES`. */
+const KNOWLEDGE_ROLES = ["key", "text", "prose", "time", "reference"];
+
+/** A field's role: a person's choice (identifier, link) first, then what detection measured, then a guess. */
+function roleFor(f: Field, e: KnowledgeEntity, key: string, refs: Set<string>): string {
+  if (f.name === key) return "key";
+  if (refs.has(f.name)) return "reference";
+  return (e.properties || []).find((p) => p.name === f.name)?.role || roleOf(f, key, refs);
+}
+
 function roleOf(f: Field, key: string, refs: Set<string>): string {
   if (f.name === key) return "key";
   if (refs.has(f.name)) return "reference";
@@ -189,12 +202,12 @@ export default function SimpleMapping({ mappingId, paradigm, payload, status, on
             kind: key ? "entity" : "event",
             // saving here is a person's decision: what is not ignored is accepted
             status: e.status === "rejected" ? "rejected" : "accepted",
-            materialize: !!key && e.materialize,               // events stay rows (the box shows it off)
+            materialize: e.materialize,                        // one row one node, identified or not
             assets: (e.assets || []).map((a) => {
               const s = m.perAsset[a.id];
               return s ? { ...a, fields: Object.fromEntries(s.fields.map((f) => [f.name, f.source])) } : a;
             }),
-            properties: read ? m.fields.map((f) => ({ name: f.name, data_type: f.data_type, role: roleOf(f, key, refs),
+            properties: read ? m.fields.map((f) => ({ name: f.name, data_type: f.data_type, role: roleFor(f, e, key, refs),
                                                       distinct: f.distinct, words: f.words }))
                              : e.properties,
             rows: read ? m.records : e.rows,
@@ -266,11 +279,19 @@ export default function SimpleMapping({ mappingId, paradigm, payload, status, on
         const m = measure(e, shapes);
         const path = normPath(e.path);
         const ids = m.fields.filter((f) => f.identifier);
+        // one record cannot show a field is unique (detection needs two); a person may still say it is
+        const unchecked = m.records < 2 ? m.fields.filter((f) => !f.identifier && f.filled > 0 && !f.repeats
+          && !/^#|^\^(?!.*\[i\]$)/.test(String(f.source || ""))) : [];   // a position or the parent's value never identifies
         const names = m.fields.filter((f) => f.nameable);
         const key = e.keys[0] || "";
         const ignored = e.status === "rejected";
         const cols = [key, e.label || "", ...m.fields.map((f) => f.name)].filter((c, k, a) => c && a.indexOf(c) === k).slice(0, 6);
         const myRels = rels.filter((r) => r.from_type === e.type);
+        const refsOf = new Set(myRels.map((r) => r.from_field));
+        // the fields a published record carries: a person's choice, else its knowledge columns
+        const carried = (e.attributes?.length ? e.attributes
+          : m.fields.filter((f) => KNOWLEDGE_ROLES.includes(roleFor(f, e, key, refsOf))).map((f) => f.name)
+            .concat(e.label ? [e.label] : [])).filter((x, k, a) => a.indexOf(x) === k);
         const open = !!showAll[i];
         const addable = assets.filter((a) => !files.some((f) => f.id === a.id));
         const addFile = (id: string) => {
@@ -311,8 +332,11 @@ export default function SimpleMapping({ mappingId, paradigm, payload, status, on
                   onChange={(ev) => edit(i, { keys: ev.target.value ? [ev.target.value] : [], kind: ev.target.value ? "entity" : "event" })}>
                   <option value="">nothing - these are events, not things</option>
                   {key && !ids.some((f) => f.name === key) && (
-                    <option value={key}>{key}{m.loading ? "" : " (not unique or not filled in every file)"}</option>)}
+                    <option value={key}>{key}{m.loading ? "" : unchecked.some((f) => f.name === key)
+                      ? " - one record, so not checked" : " (not unique or not filled in every file)"}</option>)}
                   {ids.map((f) => <option key={f.name} value={f.name}>{f.name} - unique in every file</option>)}
+                  {unchecked.filter((f) => f.name !== key).map((f) => (
+                    <option key={f.name} value={f.name}>{f.name} - one record, so not checked</option>))}
                 </select>
                 {key && (<>
                   {" "}and called by{" "}
@@ -350,12 +374,28 @@ export default function SimpleMapping({ mappingId, paradigm, payload, status, on
                   <input type="checkbox" checked={!ignored} onChange={(ev) => edit(i, { status: ev.target.checked ? "accepted" : "rejected" })} />
                   Use this
                 </label>
-                <label className={`flex items-center gap-1.5 ${key ? "cursor-pointer" : "opacity-50"}`}
-                  title={key ? "One graph node per record, linked to the records it refers to" : "Needs an identifier"}>
-                  <input type="checkbox" disabled={!key} checked={!!key && e.materialize}
+                <label className="flex items-center gap-1.5 cursor-pointer"
+                  title="One graph node per record, linked to the records it refers to">
+                  <input type="checkbox" checked={e.materialize}
                     onChange={(ev) => edit(i, { materialize: ev.target.checked })} />
                   Add its records to the knowledge graph
                 </label>
+                {e.materialize && m.fields.length > 0 && (
+                  <span className="flex flex-wrap items-center gap-1 text-xs text-stone-500">
+                    with
+                    {m.fields.map((f) => {
+                      const on = f.name === key || carried.includes(f.name);
+                      return (
+                        <button key={f.name} type="button" disabled={f.name === key} aria-pressed={on}
+                          title={f.name === key ? "the identifier: always" : on ? "carried by the node" : "stays in the data store"}
+                          onClick={() => edit(i, { attributes: on ? carried.filter((x) => x !== f.name) : [...carried, f.name] })}
+                          className={`rounded-full border px-2 py-0.5 ${on ? "border-teal-300 bg-teal-50 text-teal-800" : "border-stone-200 text-stone-400"}`}>
+                          {f.name}
+                        </button>
+                      );
+                    })}
+                  </span>
+                )}
                 {entities.length > 1 && (
                   <button className="ml-auto text-xs text-red-600 hover:underline flex items-center gap-1"
                     onClick={() => { setEntities((es) => es.filter((_, j) => j !== i)); setDirty(true); }}>

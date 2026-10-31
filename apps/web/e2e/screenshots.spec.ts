@@ -8,10 +8,14 @@ const OUT_DIR = path.resolve(__dirname, "../../../docs/assets/screenshots");
 
 test.beforeAll(() => mkdirSync(OUT_DIR, { recursive: true }));
 
-/** The AI Assistant is shown answering a question about the example data in `examples/data`. */
-const ASSISTANT_QUESTION = "When do new employees enroll in health coverage?";
+/**
+ * Run after the README demo take (`scripts/demo/record.mjs`), which leaves the workspace holding
+ * `atlas-programme.json`: every page is then shown with that data, and the Assistant answers about it.
+ */
+const ASSISTANT_QUESTION = "Who leads the Payments Core Rewrite, and what is its biggest risk?";
+const ASSISTANT_ANSWER = /Marek Nowak/;
 
-/** A file the Add data page drafts a reading for. */
+/** The file the Add data page is shown with, its graph options open. */
 const DRAFT_FILE = path.resolve(__dirname, "../scripts/demo/atlas-programme.json");
 
 /**
@@ -21,18 +25,19 @@ const DRAFT_FILE = path.resolve(__dirname, "../scripts/demo/atlas-programme.json
 const PREPARE: Record<string, (p: Page) => Promise<unknown>> = {
   "add-data": async (p) => {
     const [chooser] = await Promise.all([p.waitForEvent("filechooser"),
-      p.getByText("Drop a file here, or click to choose one").click()]);
+      p.getByText("Drop files here, or click to choose them").click()]);
     await chooser.setFiles(DRAFT_FILE);
-    await p.getByText(/Here is how it would read/).waitFor({ timeout: 180_000 });
+    await p.getByText("Extract knowledge", { exact: true }).click({ timeout: 60_000 });
   },
   mapper: async (p) => {
-    await p.locator('a[href^="/dashboard/mapper/"]').first().click({ timeout: 15_000 });
+    const project = p.locator('a[href^="/dashboard/mapper/"]').filter({ hasText: /^Project/ }).first();
+    await (await project.count() ? project : p.locator('a[href^="/dashboard/mapper/"]').first()).click({ timeout: 15_000 });
     await p.waitForURL(/\/dashboard\/mapper\/.+/);
     await p.waitForLoadState("networkidle");
   },
   "nodes-relationships": async (p) => {
-    await p.getByRole("button", { name: "Edit Lead" }).click({ timeout: 15_000 });
-    const panel = p.getByText("When are two Lead records the same thing?");
+    await p.getByRole("button", { name: "Edit Project" }).click({ timeout: 15_000 });
+    const panel = p.getByText(/When are two Project records the same thing\?/);
     await panel.waitFor({ timeout: 15_000 });
     await panel.scrollIntoViewIfNeeded();
   },
@@ -47,15 +52,15 @@ const PREPARE: Record<string, (p: Page) => Promise<unknown>> = {
 
 for (const page of DASHBOARD_PAGES) {
   test(`screenshot ${page.slug}`, async ({ page: browser }) => {
-    test.setTimeout(page.slug === "evaluations" ? 720_000 : 240_000);
+    test.setTimeout(page.slug === "evaluations" || page.slug === "ai-assistant" ? 720_000 : 240_000);
     await browser.goto(page.path);
     await browser.waitForLoadState("networkidle");
     await PREPARE[page.slug]?.(browser).catch(() => undefined);
     if (page.slug === "ai-assistant") {
       await browser.getByPlaceholder("Ask a question...").fill(ASSISTANT_QUESTION);
       await browser.getByRole("button", { name: "Ask" }).click();
-      // Without a model or the example data there is no answer; the empty assistant is shown instead.
-      await browser.getByText(/30 days/).first().waitFor({ timeout: 180_000 }).catch(() => undefined);
+      // Without a model or the demo data there is no answer; the assistant is shown as it is.
+      await browser.getByText(ASSISTANT_ANSWER).first().waitFor({ timeout: 600_000 }).catch(() => undefined);
     }
     await browser.waitForTimeout(page.slug === "lineage" ? 6000 : 2500);
     await browser.screenshot({ path: path.join(OUT_DIR, `${page.slug}.png`) });

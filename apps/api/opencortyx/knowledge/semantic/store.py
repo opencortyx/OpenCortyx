@@ -73,6 +73,7 @@ class ObjectType:
     rows: int = 0
     properties: list = field(default_factory=list)    # [Property]
     bindings: list = field(default_factory=list)      # [Binding]
+    attributes: list = field(default_factory=list)    # what a published record carries; [] = its knowledge columns
 
     @property
     def id(self) -> str:
@@ -84,6 +85,12 @@ class ObjectType:
 
     def prop(self, name: str) -> Optional[Property]:
         return next((p for p in self.properties if p.name == name), None)
+
+    def published_fields(self) -> list[str]:
+        """The fields a published record of this type carries: a person's choice, else its
+        knowledge columns. Everything else stays in Delta, read through the type's view."""
+        return list(dict.fromkeys([*self.keys, *([self.label] if self.label else []),
+                                   *(self.attributes or knowledge_columns(self))]))
 
 
 @dataclass
@@ -119,12 +126,24 @@ class Layer:
 
 # ── reading ────────────────────────────────────────────────────────────────────────────────────
 
+#: The roles that make a column knowledge rather than data: what identifies a record, what names it,
+#: its free text, its dates and the fields that link it to other records. Measures and category codes
+#: stay in Delta and are read through the type's view.
+KNOWLEDGE_ROLES = ("key", "text", "prose", "time", "reference")
+
+
+def knowledge_columns(t: "ObjectType") -> list[str]:
+    """A type's knowledge columns, read from the roles detection measured (`KNOWLEDGE_ROLES`)."""
+    return [p.name for p in t.properties if p.role in KNOWLEDGE_ROLES]
+
+
 def _entity_type(e: dict, paradigm: str, live: bool) -> ObjectType:
     t = ObjectType(name=str(e.get("type") or ""), keys=list(e.get("keys") or []), kind=e.get("kind") or "entity",
                    status=(e.get("status") or "accepted") if live else "suggested",
                    confidence=float(e.get("confidence") or 0.0), materialize=bool(e.get("materialize")),
                    label=str(e.get("label") or ""),
                    description=e.get("description") or "", rows=int(e.get("rows") or 0),
+                   attributes=[str(a) for a in (e.get("attributes") or []) if str(a).strip()],
                    properties=[Property(**{k: v for k, v in p.items() if k in Property.__dataclass_fields__})
                                for p in (e.get("properties") or [])])
     path = str(e.get("path") or "").strip()
@@ -206,14 +225,17 @@ def _entity_dict(t: ObjectType, path: str, bindings: list) -> dict:
     return {"type": t.name, "keys": list(t.keys), "kind": t.kind, "path": path,
             "assets": [{"id": b.asset_id, "name": b.asset_name, "fields": b.fields} for b in bindings],
             "properties": [asdict(p) for p in t.properties], "materialize": t.materialize, "label": t.label,
-            "status": t.status, "confidence": t.confidence, "rows": t.rows, "description": t.description}
+            "status": t.status, "confidence": t.confidence, "rows": t.rows, "description": t.description,
+            "attributes": list(t.attributes)}
 
 
 def _keep_choices(entity: dict, before: dict) -> dict:
-    """What a person chose on the detected type - publish it to the graph - kept when the Detector
-    rewrites the structure; everything else is the Detector's."""
+    """What a person chose on the detected type - publish it to the graph, and with which fields -
+    kept when the Detector rewrites the structure; everything else is the Detector's."""
     if before:
         entity["materialize"] = bool(entity.get("materialize") or before.get("materialize"))
+        if before.get("attributes"):
+            entity["attributes"] = list(before["attributes"])
     return entity
 
 
@@ -378,9 +400,8 @@ async def choose(workspace_id, *, asset_ids=(), materialize: bool | None = None)
             ents = []
             hit = False
             for e in k.get("entities") or []:
-                # a mapping a person curated keeps its own choice; records without an identifier (events)
-                # are rows, never nodes
-                if materialize is not None and {str(a.get("id")) for a in e.get("assets") or []} & wanted                         and bool(e.get("materialize")) != materialize and not k.get("curated")                         and (e.get("keys") or not materialize):
+                # a mapping a person curated keeps its own choice; one row is one node, identified or not
+                if materialize is not None and {str(a.get("id")) for a in e.get("assets") or []} & wanted                         and bool(e.get("materialize")) != materialize and not k.get("curated"):
                     e = {**e, "materialize": materialize}
                     hit = True
                     changed.append(str(e.get("type")))
@@ -420,11 +441,11 @@ def redetected(mapping, layer: Layer) -> dict | None:
 def publish_changed(before: dict, after: dict) -> bool:
     """Whether what a mapping puts in the graph changed between two versions of its knowledge: which
     types are published, and for each published type its name, identifier, name field, record path
-    and status - or the links. Renaming a published type, or naming its records by another field,
-    changes nodes already written."""
+    and status and the fields its records carry - or the links. Renaming a published type, naming
+    its records by another field or carrying other fields changes nodes already written."""
     def published(k: dict):
         ents = sorted((str(e.get("type")), tuple(e.get("keys") or []), str(e.get("label") or ""),
-                       str(e.get("path") or ""), str(e.get("status") or ""))
+                       str(e.get("path") or ""), str(e.get("status") or ""), tuple(e.get("attributes") or []))
                       for e in (k or {}).get("entities") or [] if e.get("materialize"))
         links = sorted((str(r.get("from_type")), str(r.get("from_field")), str(r.get("to_type")),
                         str(r.get("to_field")), str(r.get("status") or ""))

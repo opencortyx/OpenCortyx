@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { DASHBOARD_PAGES } from "./pages";
 
 test.describe("signed out", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
@@ -25,7 +26,8 @@ test.describe("signed in", () => {
 
   test("dashboard shows the navigation", async ({ page }) => {
     await page.goto("/dashboard/catalogue");
-    for (const section of ["Assets", "AI Assistant", "Ingestion", "System Health"]) {
+    const shown = DASHBOARD_PAGES.filter((p) => p.nav).map((p) => p.nav as string);
+    for (const section of shown) {
       await expect(page.getByRole("link", { name: section, exact: true }).first()).toBeVisible();
     }
   });

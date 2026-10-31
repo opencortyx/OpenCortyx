@@ -150,6 +150,12 @@ async def purge_asset_full(workspace_id: uuid.UUID, asset_id: uuid.UUID) -> dict
     asset = closure[str(asset_id)]
     source_key = (asset.properties or {}).get("source_key")
     n_edges = len(await repo.edges(workspace_id, node_ids=list(closure)))
+    # published records read from this asset alone: FROM_ASSET into it and into no other asset
+    backed = await repo.edges(workspace_id, target_ids=[asset_id], types=["FROM_ASSET"])
+    recs = list({e.source_id for e in backed})
+    elsewhere = {e.source_id for e in (await repo.edges(workspace_id, source_ids=recs, types=["FROM_ASSET"]) if recs else [])
+                 if e.target_id != asset_id}
+    only_here = [r for r in recs if r not in elsewhere and str(r) not in closure]
     try:
         from opencortyx.ingest.sources.sync import unsupersede_predecessors
         await unsupersede_predecessors(workspace_id, list(closure))
@@ -159,15 +165,26 @@ async def purge_asset_full(workspace_id: uuid.UUID, asset_id: uuid.UUID) -> dict
     runs = await _purge_runs(workspace_id, asset_id, source_key)
     manifest = await _purge_manifest(workspace_id, asset_id)
     data = await _purge_data(workspace_id, asset_id)
+    # what the asset alone made, outside its own subtree: its published records, the named things no
+    # other asset still states, and a cluster's master left with no member
+    gone = only_here + list(data.pop("orphans", []) or [])
+    masters = list({e.target_id for e in (await repo.edges(workspace_id, source_ids=gone, types=["MEMBER_OF"]) if gone else [])})
+    extra = await repo.delete_nodes(workspace_id, gone) if gone else 0
+    if masters:
+        kept = {e.target_id for e in await repo.edges(workspace_id, target_ids=masters, types=["MEMBER_OF"])}
+        empty = [m for m in masters if m not in kept]
+        extra += await repo.delete_nodes(workspace_id, empty) if empty else 0
     return {"deleted": True, "id": str(asset_id), "label": asset.label, "type": asset.type,
-            "nodes": n_nodes, "edges": n_edges, "runs": runs, "manifest_entries": manifest,
-            "data": data, "by_type": _breakdown(closure.values())}
+            "nodes": n_nodes + extra, "edges": n_edges, "runs": runs, "manifest_entries": manifest,
+            "data": data, "records_and_entities": extra, "by_type": _breakdown(closure.values())}
 
 
 async def _purge_data(workspace_id, asset_id) -> dict:
     """The asset on the data plane: its managed rows or chunks, its search passages, its evidence and
     source keys, and its registry row. A customer's own external data is never touched. Entities
-    other assets still back keep their evidence; one left with none is marked stale, not deleted."""
+    other assets still back keep their evidence. One left with none is marked stale - or, when it is
+    a named thing a reader or an extractor made (`__identity: entity`), returned as an orphan for
+    the caller to delete: nothing states it any more."""
     from opencortyx.core.dataplane import assets, evidence
     try:
         row = await assets.get(workspace_id, asset_id)
@@ -179,9 +196,14 @@ async def _purge_data(workspace_id, asset_id) -> dict:
             await _udata.drop_passages(workspace_id, asset_id)
         await assets.remove(workspace_id, asset_id)
         stale = await evidence.without_evidence(workspace_id, lost)
-        if stale:
-            await NodeRepo().patch_properties(workspace_id, stale, {"__stale": True})
-        return {"kind": row.kind, "storage": row.storage, "stale": len(stale)}
+        ids = [uuid.UUID(str(i)) for i in stale]
+        named = {n.id for n in await NodeRepo().get_many(workspace_id, ids)
+                 if n is not None and (n.properties or {}).get("__identity") == "entity"} if ids else set()
+        orphans = [i for i in ids if i in named]
+        keep = [i for i in ids if i not in named]
+        if keep:
+            await NodeRepo().patch_properties(workspace_id, keep, {"__stale": True})
+        return {"kind": row.kind, "storage": row.storage, "stale": len(keep), "orphans": orphans}
     except Exception as e:                                    # noqa: BLE001 - the graph delete stands
         log.warning("asset_purge.data_failed", asset_id=str(asset_id), error=repr(e))
         return {"error": str(e)[:200]}

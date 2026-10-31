@@ -30,11 +30,9 @@ own lake tables are read in place, never copied.
   sqlite): reading a lake or attaching a database no longer downloads anything at query time.
 
 ### Added
-- **Published records connected to what text says about them** (`resolution/mentions.py`): the
-  Detector finds the field that names a record ("Named by" in the Mapper) and published records are
-  labelled by it; an entity read from text whose name names exactly one published record is drawn
-  SAME_AS it - a person named in a ticket meets the customer of that name. A record's own free text,
-  read when its upload asks, hangs what it mentions off the record itself.
+- **Published records named by what they are called**: the Detector finds the field that names a
+  record ("Named by" in the Mapper) and published records are labelled by it, so a person an
+  extractor finds in a ticket and the customer of that name reconcile into one cluster.
 - **Mapper: "Re-detect this mapping"** takes what the Detector finds now for one mapping as a new
   version (the previous one kept under Versions), keeping "Publish to graph". The list's "Detect
   from data" button is gone: detection runs after each upload, and what goes into the graph is chosen
@@ -145,30 +143,80 @@ own lake tables are read in place, never copied.
 - **Pipelines are saved setups.** Add data's Custom section saves its mappings and extractors as a
   setup (a pipeline per kind of file) to reuse in Add data and scheduled syncs; Customize and the
   pipelines page call them saved setups.
-- **Add data is drop, choose, Add.** Two choices for every kind of file: "Extract entities and
-  relationships" and "Add the whole data to the graph". A folded Custom section holds a pipeline, a
-  mapping that shapes the graph (tables and JSON), extractors (documents) and tags. The per-file
-  reading preview and "Use this reading and add it" are gone; the Mapper does that job when wanted.
-- **The graph always gets the shape of the data**: a table's columns and a JSON file's keys with their
-  types (as before), the links detection finds between them as `JOINS_TO` between those fields, and a
-  document's outline - its headings, tables and figures as nodes, the text staying in Delta.
-- **"Add the whole data to the graph"** puts the data itself in as nodes too, per upload: every row,
-  every JSON key and value, every layout element - the data still in Delta.
-- **Entities and relationships read from text without an LLM** (`ingest/extraction/text_reader.py`):
-  a new Models role, Entities, runs a spaCy pipeline in-process (by default `spacy/en_core_web_sm`,
-  MIT, downloaded from Hugging Face on first use). Types are the model's labels and relationships the
-  sentence's verb ("Alice Smith joined Acme" gives Alice Smith -JOIN-> Acme) - nothing listed by
-  hand. Documents and free-text fields are read when an upload asks; each entity and relationship
-  cites its passage or row and sentence, and is matched by name to the published record it names,
-  also when that record is published later.
+- **Add data is drop, choose, Add.** One choice for tables and JSON: *Structure only* (the default:
+  columns and keys, their types and the links between them, descriptions when an LLM is on), *Extract
+  knowledge* (each record a node of its kind - Customer, Account, a chat's Turn - carrying its
+  knowledge columns: identifier, name, text, dates and the fields that link it; measures and codes
+  stay in Delta; the fields are changed in the Mapper) or *Add the whole data* (every row, key and
+  value as nodes). Documents: a summary when AI summaries are on, or the whole data (every heading,
+  paragraph and table). The data is always in Delta. A folded Custom section holds a pipeline, a
+  mapping, tags and extractors for any kind of file, each with the columns, keys or sections it reads
+  (suggested from the file); they run when the upload's run finishes. The result card counts the
+  records Extract knowledge publishes and says it is still reading until detection has put them in
+  the graph, instead of "Finished, but nothing came out".
+- **One row is one node**, identified or not: a type without an identifier (a chat's turns, sales
+  lines) publishes each row as a node named by its own values and the records it belongs to - not
+  by values copied from them, so correcting a question's date leaves its turns the same turns - and
+  called by its text. A row that is gone when its file is read again (deleted, or an event whose own
+  values changed) is removed from the graph.
+- **Two files that disagree about one record are flagged, not overwritten**: when the files bound to
+  a type give the same record different values, each disagreement goes to Review > Conflicts with
+  both values and the file each came from. A file's own new version simply replaces its old values;
+  the earlier version stays in the data store's history.
+- **Reconcile: one step decides what is the same thing** (`resolution/engine.reconcile`), for any
+  writer and any node type. Each type has one rule - its identity fields, or its name for a named
+  thing (equal after normalising, or near at the `name_match_threshold` setting, 0.85; word by word,
+  numbers equal, short words exact, so "25 minutes" and "20 minutes" stay two) - and every match
+  becomes a member of one master node (`MEMBER_OF`) instead of a `SAME_AS` chain: never destructive,
+  undone by removing one edge; a person's "same thing" in Review joins the same way. What made the
+  match (the near name) is not filed again as a conflict; other differing values are. Masters are
+  embedded; the Assistant asks "which one?" only between records something tells apart.
+- **Entities and relationships come from extractors**, built in the extractor form; its "people,
+  places, things and how they connect" option asks the extraction's model for each named thing and
+  each "subject - relation - object", typed and named by the model for that text. A type is
+  spelled as the workspace already spells it ("Places" and "places" are its Place), so the same name
+  is one node.
+- A file with a single record can be given an identifier in the Mapper: one record cannot show a
+  field is unique, so its filled fields are offered as "not checked" instead of not at all.
+- A mapping's sentence editor shows the fields a published record carries (its knowledge columns by
+  default) as chips to switch on or off; saving accepts, puts a draft mapping in use, renames a type
+  in every link that names it and republishes when what is published changed.
 - Version detection compares a document with documents of the same name only: compared with every
   document, chat sessions that share their headers were proposed as versions of each other by the
   hundred, and each upload read the whole workspace.
+- Detection finds records at any depth of a JSON file: below wrapper objects
+  (`{"programme": {"projects": [...]}}` gives Projects, with their lead's and vendor's fields) and in
+  a list inside each element (each project's risks, each carrying its project's id). An element is
+  linked to the record it sits in from the nesting itself, however few values there are to compare.
+  A record is identified and named only by its own fields - never by its place in a list or a
+  value read from the object it sits in - and a type is named after where its records are ("risks").
+  The Mappings list shows what detection wrote after an upload without a Refresh.
 - Detection: a key is unique within each file (the same customer in two files is one customer, not a
   repeated key); a link rests on at least three distinct values; the field that names a record is a
   phrase rather than a token (a name over an email), the model deciding only a tie.
 
 ### Fixed
+- The startup check warned on every install that `sentence-transformers` was missing and reranking
+  would fall back to a model; the built-in cross-encoder runs on fastembed, which the image carries.
+  It now warns only when neither library is there.
+- **The Assistant and the API answer the same question the same way**: the Assistant cut its
+  evidence at 12 blocks, shown as the default, while an API call without `k` keeps what fits the
+  token budget - so a fact ranked 13th was in one answer and not the other. Both now let the budget
+  decide unless a person sets a number ("Evidence blocks: Auto").
+- A record published from a file's rows is cited with that file's name, not "Source unknown".
+- **An extractor run over many records no longer dies at the task time limit**: with a model on CPU,
+  a few hundred records outlived the 30-minute limit and the run started again from the first. It
+  now stops between records before the limit - each one already saved - and continues in a new task
+  with the rest.
+- "How many days ago…" and "how many weeks in total…" were answered by counting nodes of a type
+  named Day or Week, when one existed, in place of everything retrieved; a unit of time asks for a
+  duration, so these questions are retrieved and answered from the records.
+- **Deleting a file takes what it alone made**: its published records (read from no other file), the
+  values only it gave a record another file still has, the
+  named things nothing else states any more, and a cluster's master left without members - before,
+  they stayed in the graph, searchable, pointing at a file that was gone.
+- A model looked up from a background task (the workspace id as text) read as "none registered".
+- Settings' "Danger Zone" is "Reset", without the task-queue button; Runs is back in the sidebar.
 - **An upload is "completed" only when it is usable**: stored, embedded and resolved. A run now stays
   running at a last step, "Embedding & resolution", until the asset's resolution finishes; before, it
   said completed while its passages were still being embedded, and a question asked then found

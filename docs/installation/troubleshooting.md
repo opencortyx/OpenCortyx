@@ -26,7 +26,7 @@ opencortyx logs <service>     # api, worker, extraction-worker, web, mcp, postgr
 | Symptom | Fix |
 |---|---|
 | `doctor`: model `…` not served | The generation model's Model ID on the **Models** page must match a name the server serves (the **Model server** panel lists them). For Ollama run `ollama list` |
-| `doctor` or the AI Assistant: no generation model is connected | Add one on the **Models** page and tick **Make default**. A new workspace starts without one |
+| `doctor` or the AI Assistant: no generation model is connected | Add one under **Settings > Models** and tick **Make default**. A new workspace starts without one |
 | `doctor`: LLM unreachable, local Ollama | Linux: Ollama must listen on `0.0.0.0` (see [linux.md](linux.md)). All platforms: the server address on the **Models** page uses `host.docker.internal`, not `localhost`, and ends with `/v1` |
 | A model row still points at `http://vllm:8000/v1` | The bundled vLLM server was removed; upgrading deletes those rows. Add the model server you use on the **Models** page |
 | With Ollama, long documents extract poorly or answers ignore part of the context | Ollama's context window is smaller than the 8192 tokens OpenCortyx sends and it drops the rest of the prompt. Raise it to 8192 (see [models.md](../models.md#ollama-lm-studio-vllm-or-another-server-you-run)) |

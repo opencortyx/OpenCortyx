@@ -11,6 +11,8 @@ input where it lives instead - nothing is copied into the graph first:
     {"type": "Customer"}                             each record of a semantic-layer entity type,
                                                      across every asset it is bound to
     {"type": "Turn", "column": "content"}            one field of each record of a type
+    {"asset": ..., "columns": ["notes", "summary"]}  several columns (a table) or top-level keys (JSON)
+    {"asset": ..., "sections": ["Pricing"]}          a document's passages under these headings only
 
 Each input is a node-shaped record that is never written (core/dataplane/passages.VIRTUAL): its
 text is the value, its parent the asset, its evidence unit the row it came from - so what an
@@ -63,24 +65,37 @@ async def select(workspace_id, spec: dict, *, limit: int = 1000) -> list[Node]:
     a = await _asset(workspace_id, spec.get("asset") or "")
     if a is None:
         return []
-    column, path = spec.get("column"), spec.get("path")
+    path = spec.get("path")
+    columns = [str(c) for c in (spec.get("columns") or ([spec["column"]] if spec.get("column") else [])) if str(c).strip()]
+    sections = [str(s).strip().lower() for s in (spec.get("sections") or []) if str(s).strip()]
+
+    def _lit(text: str) -> str:
+        return "'" + text.replace("'", "''") + "'"
 
     def read() -> list[Node]:
         with Views(workspace_id, [a], lock=True) as v:
             view = '"' + next(iter(v.names)).replace('"', '""') + '"'
             if a.kind == layout.UNSTRUCTURED:
-                rows = v.query(f"SELECT * FROM {view} ORDER BY ordinal LIMIT {int(limit)}").to_pylist()
-                return [passage(workspace_id, r) for r in rows]
+                rows = v.query(f"SELECT * FROM {view} ORDER BY ordinal").to_pylist()
+                if sections:                    # the passages under the chosen headings only
+                    rows = [r for r in rows if any(s in str(r.get("section_path") or "").lower() for s in sections)]
+                return [passage(workspace_id, r) for r in rows[:int(limit)]]
             unit = "_row_key" if a.kind == layout.STRUCTURED else "record_id"
             if path:
-                expr, field = f"json_extract_string(raw, '{str(path).replace(chr(39), chr(39) * 2)}')", str(path)
-            elif column:
-                expr, field = '"' + str(column).replace('"', '""') + '"', str(column)
+                reads = [(f"json_extract_string(raw, {_lit(str(path))})", str(path))]
+            elif columns:
+                # a JSON record's top-level key is read from the record; a table's column is a column
+                reads = [((f"json_extract_string(raw, {_lit('$.' + chr(34) + c + chr(34))})"
+                           if a.kind == layout.SEMISTRUCTURED else '"' + c.replace('"', '""') + '"'), c)
+                         for c in columns]
             else:
-                expr, field = ("raw" if a.kind == layout.SEMISTRUCTURED else "to_json(t)"), "record"
-            rows = v.query(f"SELECT CAST({unit} AS VARCHAR) AS u, CAST({expr} AS VARCHAR) AS x FROM {view} AS t "
-                           f"WHERE {expr} IS NOT NULL LIMIT {int(limit)}").to_pylist()
-            return [_node(workspace_id, a.asset_id, r["u"], r["x"], field) for r in rows if r["x"]]
+                reads = [("raw" if a.kind == layout.SEMISTRUCTURED else "to_json(t)", "record")]
+            out = []
+            for expr, field in reads:
+                rows = v.query(f"SELECT CAST({unit} AS VARCHAR) AS u, CAST({expr} AS VARCHAR) AS x FROM {view} AS t "
+                               f"WHERE {expr} IS NOT NULL LIMIT {int(limit)}").to_pylist()
+                out += [_node(workspace_id, a.asset_id, r["u"], r["x"], field) for r in rows if r["x"]]
+            return out[:int(limit)]
     return await anyio.to_thread.run_sync(read)
 
 

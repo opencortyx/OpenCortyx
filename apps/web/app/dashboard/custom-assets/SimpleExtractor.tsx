@@ -29,14 +29,14 @@ export function fitsSimple(d: ExtractorDraft): boolean {
 
 /** Named things, one node each (merged by name across every text), linked from the text they are in,
  *  and to each other by the verb of the sentence that connects them ("Alice -JOIN-> Acme"). */
-function applySpacy(d: ExtractorDraft) {
+function applyNamed(d: ExtractorDraft) {
   d.setMechRef("unstructured.ner"); d.setMechPrompt("");
   [...d.emitAttrs.map((a: any) => a.key), ...(d.emitNodes[0]?.attributes || [])].forEach((k: string) => d.removeAttr(k));
   d.setEmitMode("node");
   d.emitNodes.slice(1).forEach(() => d.removeNode(1));
   if (!d.emitNodes.length) d.addNode();
-  // each find is a node of the type the model names it, with the identity the text reader gives the
-  // same name: the book an extractor finds and the book the reader finds are one node
+  // each find is a node of the type the model names it, identified by type and name: the same book
+  // found by any extractor in any file is one node
   d.setNode(0, { type: "$type", id: "", dedup: true, name: "$name", attributes: [] });
   d.setEmitEdges([
     { type: "MENTIONS", from: "source", to: "emitted" },
@@ -55,7 +55,7 @@ export default function SimpleExtractor({ d, onFull }: { d: ExtractorDraft; onFu
   const reads = d.sourceMode === "data" && d.dataInput.type ? "type" : d.sourceMode;
   const typeFields = (layer?.types || []).find((t) => t.name === d.dataInput.type)?.properties || [];
 
-  const spacy = d.mechRef === "unstructured.ner";
+  const named = d.mechRef === "unstructured.ner";
   const records = d.emitMode === "node";
   const target = records ? (d.emitNodes[0]?.type || "") : "__source";
   const keys: string[] = records ? (d.emitNodes[0]?.attributes || []) : d.emitAttrs.map((a: any) => a.key);
@@ -78,7 +78,7 @@ export default function SimpleExtractor({ d, onFull }: { d: ExtractorDraft; onFu
   };
 
   const addField = () => d.addAttrToNode(target || "Finding");
-  const results = spacy
+  const results = named
     ? Array.from(new Map((d.preview?.nodes || []).map((n: any) => [n.label, n])).values()).map((n: any) => ({ title: `${n.label} (${(n.attributes || []).find((a: any) => a.key === "type")?.value || n.type})`, attrs: [] }))
       .concat((d.preview?.edges || []).filter((e: any) => e.type && e.type !== "MENTIONS")
         .map((e: any) => ({ title: `${e.from} -${e.type}-> ${e.to}`, attrs: [] })))
@@ -132,17 +132,17 @@ export default function SimpleExtractor({ d, onFull }: { d: ExtractorDraft; onFu
 
         <div className="flex flex-wrap items-center gap-2">
           Find with
-          <select className={`${inputCls} w-auto`} aria-label="Find with" value={spacy ? "spacy" : "model"}
+          <select className={`${inputCls} w-auto`} aria-label="Find with" value={named ? "named" : "model"}
             onChange={(e) => {
-              if (e.target.value === "spacy") applySpacy(d);
+              if (e.target.value === "named") applyNamed(d);
               else { d.setMechRef("unstructured.llm"); d.emitNodes.forEach(() => d.removeNode(0)); d.setEmitEdges([]); d.setEmitMode("source"); }
             }}>
             <option value="model">the model, field by field</option>
-            <option value="spacy">named things and how sentences connect them (no model calls)</option>
+            <option value="named">people, places, things and how they connect (the model)</option>
           </select>
         </div>
 
-        {spacy ? (
+        {named ? (
           <div className="flex flex-wrap items-center gap-2">
             each saved as what it is (Person, Org, Place…), linked as
             <input className={`${inputCls} w-32 font-mono text-xs`} aria-label="Link name" value={edge?.type || ""}
@@ -169,7 +169,7 @@ export default function SimpleExtractor({ d, onFull }: { d: ExtractorDraft; onFu
         )}
       </section>
 
-      {!spacy && <section className="bg-white border border-stone-200 rounded-xl overflow-hidden">
+      {!named && <section className="bg-white border border-stone-200 rounded-xl overflow-hidden">
         <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_32px] gap-2 px-4 py-2 text-xs font-semibold text-stone-500 bg-stone-50 border-b border-stone-100">
           <span>Field</span><span>What to look for</span><span />
         </div>
@@ -226,7 +226,7 @@ export default function SimpleExtractor({ d, onFull }: { d: ExtractorDraft; onFu
       </section>
 
       <div className="flex justify-end">
-        <Button variant="primary" icon={Save} onClick={d.handleSaveExtraction} disabled={!d.extName.trim() || (!spacy && !keys.length)}>Save</Button>
+        <Button variant="primary" icon={Save} onClick={d.handleSaveExtraction} disabled={!d.extName.trim() || (!named && !keys.length)}>Save</Button>
       </div>
     </div>
   );

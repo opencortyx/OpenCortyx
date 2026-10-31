@@ -86,8 +86,9 @@ When it finishes, open http://localhost:3000.
 
 ## 4. Choose the model
 
-Open **Models** in the dashboard. A new workspace has no generation model, so **Add** one under
-Generation and tick **Make default** (extraction and utility use it too):
+Open **Settings > Models** in the dashboard. A new workspace answers with a small built-in model
+(Qwen3-0.6B on CPU); for better and faster answers, **Add** one under Generation and tick **Make
+default** (extraction and utility use it too):
 
 | Field | Ollama | LM Studio |
 |---|---|---|

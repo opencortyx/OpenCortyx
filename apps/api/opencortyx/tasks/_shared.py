@@ -30,9 +30,8 @@ def _fail_run(run_id: str, reason: str) -> None:
 GIVE_UP_HOOKS.append(_fail_run)
 
 
-#: Add data's two graph options, as upload features of a document's plan.
-KNOWLEDGE_FEATURE = "knowledge"            # read entities and relationships from the text (text_reader)
-WHOLE_DATA_FEATURE = "whole_data"          # every layout element a graph node too, not only the outline
+#: Add data's graph option for a document, as an upload feature of its plan.
+WHOLE_DATA_FEATURE = "whole_data"          # every layout element a graph node
 #: Custom: one extractor (by name) to read the document with, as a pipeline stage would.
 EXTRACTOR_FEATURE = "extractor:"
 
@@ -41,15 +40,12 @@ def _doc_plan_from_features(features):
     """Simple upload feature toggles (csv) → ingest plan. None → default full pipeline.
     Negative flags trim per-doc LLM cost for bulk/benchmark ingests:
       no_assets        — skip the Asset Profile sections (~9 calls/doc, catalogue-UI only)
-    Add data's options: `knowledge` (entities and relationships read from the text, no LLM),
-    `whole_data` (the passages into the graph as nodes) and, under Custom, `extractor:<name>` (the
-    extractors to read it with)."""
+    Add data's option `whole_data` (the passages into the graph as nodes) and, under Custom,
+    `extractor:<name>` (the extractors to read it with)."""
     if not features:
         return None
     f = {x.strip() for x in str(features).split(",") if x.strip()}
     plan = {"asset_sections": "no_assets" not in f}
-    if KNOWLEDGE_FEATURE in f:
-        plan["read_entities"] = True
     if WHOLE_DATA_FEATURE in f:
         plan["whole_data"] = True
     named = sorted(x[len(EXTRACTOR_FEATURE):] for x in f if x.startswith(EXTRACTOR_FEATURE) and x[len(EXTRACTOR_FEATURE):])

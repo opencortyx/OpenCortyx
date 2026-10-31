@@ -286,6 +286,15 @@ async def provenance(workspace_id, node_ids: Sequence, *, query: str = "", store
     orphans = [i for i in ids if not walker.asset_of.get(i)
                and not any(walker.asset_of.get(c) for c in lineage[i])
                and i in walker.nodes and origin_of(walker.nodes[i]) == "unknown"]
+    # a published record points at the files it was read from (record -FROM_ASSET-> asset); nothing
+    # contains it, so there is nothing to climb
+    read_from: dict[str, list[str]] = {}
+    if orphans:
+        for e in await store.find_edges(workspace_id, EdgeQuery(source_ids=orphans, types=["FROM_ASSET"],
+                                                                limit=CLIMB_NODES * len(orphans))):
+            read_from.setdefault(str(e.source_id), []).append(str(e.target_id))
+        await walker.load([a for As in read_from.values() for a in As])
+        orphans = [i for i in orphans if not any(a in walker.nodes for a in read_from.get(i, []))]
     climbed = await walker.climb(orphans) if orphans else {}
 
     for nid in ids:
@@ -299,7 +308,7 @@ async def provenance(workspace_id, node_ids: Sequence, *, query: str = "", store
             a = walker.asset_of.get(chunk)
             if a:
                 candidates.append((a, chunk))
-        for a in climbed.get(nid, []):
+        for a in climbed.get(nid, []) + [a for a in read_from.get(nid, []) if a in walker.nodes]:
             candidates.append((a, nid))
         best: dict[str, tuple[float, Optional[str]]] = {}
         for asset_id, via in candidates:

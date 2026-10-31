@@ -47,7 +47,7 @@ Choose which models OpenCortyx uses for each job.
 
 ### How to use it
 
-1. Open **Models**. The **Model server** box at the top lists what each connected server is serving.
+1. Open **Settings > Models**. The **Model server** box at the top lists what each connected server is serving.
 2. Each role shows the model it uses now, under **Active now**, or **Not connected**:
 
    | Role | Used for |
@@ -64,8 +64,9 @@ Choose which models OpenCortyx uses for each job.
 
 ### Good to know
 
-- A new workspace has no generation model. Until you add one, the AI Assistant and extraction say
-  that no generation model is connected.
+- A new workspace starts with a small built-in generation model (Qwen3-0.6B, on CPU). If a
+  workspace's generation model is removed, the Assistant and extraction say that no generation
+  model is connected until you add one.
 - Providers: an OpenAI-compatible server (Ollama, LM Studio, vLLM, Together, Azure), OpenAI,
   Anthropic, Groq, Hugging Face Inference, and a Hugging Face model running in OpenCortyx for
   generation; fastembed for embeddings and reranking (sentence-transformers too, for reranking,
@@ -85,7 +86,7 @@ A live check of every part of the system, in plain language.
 
 ### How to use it
 
-1. Open **System Health**. The banner says whether everything is working.
+1. Open **Settings > System health**. The banner says whether everything is working.
 2. Each part has its own card: the API, the models, Postgres, the graph (NebulaGraph), the vectors
    (Qdrant), Redis, the MCP server and the workers. Each one is **healthy**, a warning, or down,
    with an explanation and a suggested fix.

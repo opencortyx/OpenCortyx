@@ -1,9 +1,19 @@
-"""`resolve_asset`: the last step of an asset's ingestion, after its extractors and embeddings.
+"""Reconcile: whether what a writer just wrote is something the workspace already knows.
 
-  1. records     for each node type with a resolution spec, the asset's nodes are matched by identity
-                 against the organization's graph (`records.decide`), then linked, extended and
-                 recorded in bulk. Any node type: what is resolved, and how, is only its spec.
-  2. statements  the asset's statements go through the contradiction engine, unchanged
+`reconcile(nodes)` is the one place that decides it, for any writer (an asset's ingestion, a
+published record, an extractor's output) and any node type:
+  1. rule        each type's spec says when two of its nodes are the same (`ResolutionSpec`): equal
+                 identity fields, or a similar name. A named thing (`__identity: entity`) without a
+                 spec of its own is matched by its name (`named_spec`). A type with neither is
+                 never matched: every node of it stands alone.
+  2. decide      `records.decide`: the same (score >= auto), a person decides (>= review), or new
+  3. cluster     the same ones become members of one master node (`join`): the master carries the
+                 type and name, each member links to it MEMBER_OF and stays as it was, so splitting
+                 one off is removing one edge
+`resolve_asset` is the last step of an asset's ingestion, after its extractors and embeddings:
+  1. records     reconcile the asset's nodes
+  2. references  link the asset's nodes to the nodes their foreign keys name
+  3. statements  the asset's statements go through the contradiction engine, unchanged
 
 Every read and write is per node type or per asset, never per node: one identity-index query, one
 node read, one edge write, one property write and one ledger insert for each type.
@@ -14,17 +24,22 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
+from typing import Optional
 
 from opencortyx.core.observability import get_logger
 from opencortyx.resolution import records
 from opencortyx.resolution.normalize import identity_key
-from opencortyx.resolution.spec import load_specs
+from opencortyx.resolution.spec import ResolutionSpec, load_specs
 
 log = get_logger(__name__)
 _CHUNK = 1000
 #: Set on an asset whose resolution found embeddings still missing; the embedding job that finishes
 #: them queues the resolution again when it sees it, and resolving clears it.
 RESOLVE_WAITING = "__resolve_waiting"
+#: A cluster: each member links to its master.
+MEMBER = "MEMBER_OF"
+_MASTER_NS = uuid.uuid5(uuid.NAMESPACE_URL, "opencortyx/resolution/master")
+
 #: The identity index's namespaces for links: the values a reference may name ("val:Customer.id",
 #: "val:Source.identifiers"), and the values nodes refer to under each relation
 #: ("ref:Customer.id:PLACED_BY", "ref:Source.identifiers:OBSOLETES").
@@ -99,17 +114,16 @@ class Store:
         from sqlalchemy.dialects.postgresql import insert
         from opencortyx.core.db import V2Session
         from opencortyx.domain.resolution import ResolutionDecision, ResolutionKey
-        if plan.same:
-            await self.repo.add_edges(workspace_id=workspace_id, edges=[
-                {"source_id": a, "target_id": b, "type": "SAME_AS", "properties": {"__by": "resolution"}}
-                for a, b in plan.same])
+        masters = await join(self.repo, workspace_id, plan.same, known) if plan.same else {}
         if plan.extend:
+            # what a member adds is the cluster's: written on its master (the members stay as they were)
             await self.repo.upsert_many(workspace_id, [
-                {"node_id": cid, "type": known[cid].type, "properties": attrs,
+                {"node_id": masters.get(cid, cid), "type": known[cid].type, "properties": attrs,
                  "confidence": known[cid].confidence, "level": known[cid].level}
                 for cid, attrs in plan.extend.items() if cid in known], date_link=False)
         if plan.same:
-            await self.share_evidence(workspace_id, plan.same)
+            await self.share_evidence(workspace_id, [(x, masters[c]) for a, c in plan.same
+                                                     for x in (a, c) if c in masters])
         async with V2Session() as db:
             key_rows = [{"workspace_id": workspace_id, "node_type": node_type, "key_hash": k, "node_id": n} for k, n in plan.keys]
             for i in range(0, len(key_rows), _CHUNK):
@@ -222,6 +236,103 @@ class Store:
         return await c.resolve_many(workspace_id, ids, cfg=cfg)
 
 
+def master_id(workspace_id, canonical) -> uuid.UUID:
+    """A cluster's master: one per canonical member, the same id however often it is joined."""
+    return uuid.uuid5(_MASTER_NS, f"{workspace_id}:{canonical}")
+
+
+async def join(repo, workspace_id, pairs, known: Optional[dict] = None, *, by: str = "resolution") -> dict:
+    """Put each (member, canonical) pair in the canonical's cluster: its master node - written the
+    first time with the canonical's type, name and fields - and a MEMBER_OF edge from both to it.
+    Never destructive: the members stay as they were. Returns {canonical: master id}."""
+    known = dict(known or {})
+    masters: dict = {}
+    specs = []
+    for _, c in pairs:
+        if c in masters:
+            continue
+        masters[c] = master_id(workspace_id, c)
+        base = known.get(c) or await repo.get(workspace_id, c)
+        if base is None:
+            continue
+        props = {k: v for k, v in (base.properties or {}).items() if not str(k).startswith("__")}
+        props.update({"__master": True, "__identity": (base.properties or {}).get("__identity") or "record"})
+        specs.append({"node_id": masters[c], "type": base.type, "label": base.label, "properties": props,
+                      "confidence": base.confidence, "level": base.level})
+    if specs:
+        await repo.upsert_many(workspace_id, specs, date_link=False)
+    edges = {(x, masters[c]): {"source_id": x, "target_id": masters[c], "type": MEMBER, "properties": {"__by": by}}
+             for a, c in pairs for x in (a, c) if c in masters}
+    if edges:
+        await repo.add_edges(workspace_id=workspace_id, edges=list(edges.values()))
+    from opencortyx.tasks.graph import embed_later            # a master is in no asset's subtree
+    embed_later(workspace_id, list(masters.values()))
+    return masters
+
+
+def named(node) -> bool:
+    """A thing whose name is its identity (an entity read from text or named by an extractor)."""
+    return (getattr(node, "properties", None) or {}).get("__identity") == "entity"
+
+
+def named_spec() -> ResolutionSpec:
+    """The rule for a named thing whose type has none of its own: the same when the names match -
+    equal after normalising, or near (`normalize.similarity`) at the `name_match_threshold` setting;
+    a little below it a person decides."""
+    from opencortyx.core.config import runtime as rc
+    bar = rc.name_match_threshold()
+    return ResolutionSpec(identify_by=("label",), scorer="similar", auto=bar, review=max(0.5, round(bar - 0.1, 2)))
+
+
+def spec_for(specs: dict, node) -> Optional[ResolutionSpec]:
+    spec = specs.get(node.type)
+    if spec is not None and spec.active:
+        return spec
+    return named_spec() if named(node) else None
+
+
+async def reconcile(workspace_id, nodes, *, store=None, source_id=None, specs: Optional[dict] = None) -> dict:
+    """Whether each of `nodes` - just written, by any writer - is something already known, per its
+    type's rule; the same ones joined into clusters. Masters are never matched themselves.
+    Returns per-type summaries."""
+    workspace_id = uuid.UUID(str(workspace_id))
+    store = store or Store()
+    specs = specs if specs is not None else await store.specs(workspace_id)
+    by_type: dict = defaultdict(list)
+    rule: dict = {}
+    for node in nodes or []:
+        if node is None or (node.properties or {}).get("__master"):
+            continue
+        spec = spec_for(specs, node)
+        if spec is None:
+            continue
+        by_type[node.type].append(node)
+        rule[node.type] = spec
+    out: dict = {}
+    for node_type, nodes_ in by_type.items():
+        spec = rule[node_type]
+        mine = {n.id for n in nodes_}
+        keys = {k for k in (records.key_of(n, spec) for n in nodes_) if k}
+        existing = await store.lookup(workspace_id, node_type, keys, exclude=mine) if keys else {}
+        pool = {}
+        if spec.scorer == "similar":
+            blocks = {b for b in (records.block_of(n, spec) for n in nodes_) if b}
+            pool = await store.candidates(workspace_id, node_type, blocks, exclude=mine) if blocks else {}
+        held = set(existing.values()) | {i for ids in pool.values() for i in ids}
+        known = await store.nodes(workspace_id, held)
+        # The index outlives the graph: an asset deleted, or the workspace reset, leaves keys of
+        # nodes that are gone. Matching one would join a cluster of nothing, so it is dropped here
+        # and from the index, and this node becomes the identity's canonical one instead.
+        if gone := held - set(known):
+            existing = {k: v for k, v in existing.items() if v not in gone}
+            pool = {b: [i for i in ids if i not in gone] for b, ids in pool.items()}
+            await store.forget(workspace_id, node_type, gone)
+        plan = records.decide(workspace_id, source_id, node_type, spec, nodes_, existing, known, pool)
+        await store.apply(workspace_id, node_type, plan, {**known, **{n.id: n for n in nodes_}})
+        out[node_type] = plan.summary()
+    return out
+
+
 def _values(node, attribute: str) -> list:
     """The values of one attribute of a node, as identity keys: a list gives one each."""
     raw = node.label if attribute == "label" else (node.properties or {}).get(attribute)
@@ -315,35 +426,8 @@ async def resolve_asset(workspace_id, source_id, *, store=None) -> dict:
     out: dict = {"types": {}}
     specs = await store.specs(workspace_id)
     nodes_of_asset = await store.asset_nodes(workspace_id, source_id)
-    if specs:
-        by_type = defaultdict(list)
-        for node in nodes_of_asset:
-            if node.type in specs and specs[node.type].active:      # identity fields: matched as records
-                by_type[node.type].append(node)
-        for node_type, nodes in by_type.items():
-            spec = specs[node_type]
-            mine = {n.id for n in nodes}
-            keys = {k for k in (records.key_of(n, spec) for n in nodes) if k}
-            existing = await store.lookup(workspace_id, node_type, keys, exclude=mine) if keys else {}
-            pool = {}
-            if spec.scorer == "similar":
-                blocks = {b for b in (records.block_of(n, spec) for n in nodes) if b}
-                pool = await store.candidates(workspace_id, node_type, blocks, exclude=mine) if blocks else {}
-            held = set(existing.values()) | {i for ids in pool.values() for i in ids}
-            known = await store.nodes(workspace_id, held)
-            # The index outlives the graph: an asset deleted, or the workspace reset, leaves keys of
-            # nodes that are gone. Matching one would link SAME_AS to nothing, so it is dropped here
-            # and from the index, and this node becomes the identity's canonical one instead.
-            if gone := held - set(known):
-                existing = {k: v for k, v in existing.items() if v not in gone}
-                pool = {b: [i for i in ids if i not in gone] for b, ids in pool.items()}
-                await store.forget(workspace_id, node_type, gone)
-            plan = records.decide(workspace_id, source_id, node_type, spec, nodes, existing, known, pool)
-            await store.apply(workspace_id, node_type, plan, {**known, **{n.id: n for n in nodes}})
-            out["types"][node_type] = plan.summary()
+    out["types"] = await reconcile(workspace_id, nodes_of_asset, store=store, source_id=source_id, specs=specs)
     out["links"] = await link_references(workspace_id, source_id, specs, nodes_of_asset, store)
-    from opencortyx.resolution.mentions import link_mentions
-    out["mentions"] = await link_mentions(workspace_id, nodes_of_asset, repo=getattr(store, "repo", None))
     out["statements"] = await store.statements(workspace_id, source_id)
     await store.mark_resolved(workspace_id, source_id, out["types"])
     log.info("resolution.asset", workspace_id=str(workspace_id), source_id=str(source_id), types=out["types"])

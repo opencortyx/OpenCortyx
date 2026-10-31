@@ -89,6 +89,19 @@ def test_a_countable_noun_is_required():
     assert s is not None and not s.grounded
 
 
+def test_a_unit_of_time_asks_for_a_duration_not_a_count_of_nodes():
+    """An extractor that called "Saturday" a Day must not turn "how many days ago" into "count of
+    Day: 2" in place of the turns that hold the answer."""
+    from tests.retrieval.test_l0_vocabulary import vocab
+    v = vocab(nodes={"Turn": 88, "Day": 2, "Week": 1})
+    for q in ("How many days ago did I attend a networking event?",
+              "How many days did I spend in total traveling in Hawaii?",
+              "How many weeks have passed since I started?"):
+        s = spec_for(q, v)
+        assert s is None or not s.grounded, q
+    assert spec_for("How many turns are there?", v).grounded, "a type that is a thing is still counted"
+
+
 @pytest.mark.anyio
 async def test_an_ungrounded_spec_executes_to_nothing_rather_than_zero():
     res = await A.execute(ORG, A.AggregationSpec(function="count", grounded=False))

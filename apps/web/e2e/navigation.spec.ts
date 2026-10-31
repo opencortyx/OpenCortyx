@@ -14,7 +14,7 @@ for (const page of DASHBOARD_PAGES) {
     await expect(browser).toHaveURL(new RegExp(`${page.path}(\\?|$)`));
     await browser.waitForLoadState("networkidle");
     await expect(browser.locator("body")).not.toContainText(CRASH_TEXT);
-    await expect(browser.getByRole("link", { name: page.name, exact: true }).first()).toBeVisible();
+    if (page.nav) await expect(browser.getByRole("link", { name: page.nav, exact: true }).first()).toBeVisible();
 
     expect(pageErrors, "uncaught errors in the browser").toEqual([]);
   });

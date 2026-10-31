@@ -155,7 +155,7 @@ function _headline(outcome: IngestOutcome): string {
   if (outcome.pending) {
     return outcome.found.length
       ? `Extracting… ${outcome.found.reduce((n, t) => n + t.count, 0)} found so far`
-      : "Your file is in — extracting entities and claims…";
+      : "Your file is in — reading what it holds into the graph…";
   }
   if (outcome.status === "failed") return "This one did not go through";
   if (outcome.status === "duplicate") return "Already had this one";

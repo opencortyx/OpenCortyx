@@ -446,16 +446,22 @@ class RetrievalWorkflow:
         """The ambiguous names that are really two things. A name is ambiguous between records
         something else tells apart (two customers called John Smith, each with its own id); named
         things whose name IS their identity (`__identity: entity`) - the same book read from text by
-        two readers - are one thing seen twice, not a question to ask back."""
+        two readers - are one thing seen twice, not a question to ask back; and a cluster's master and
+        its members (resolution/engine.join) are one thing however many of them match the name."""
         if not choices:
             return choices
         ids = [uuid.UUID(str(c["node_id"])) for ch in choices for c in ch["candidates"]]
         nodes = {str(n.id): n for n in await self.repo.get_many(workspace_id, ids) if n is not None}
+        cluster = {str(i): str(i) for i in ids}
+        for e in await self.repo.edges(workspace_id, source_ids=ids, types=["MEMBER_OF"]):
+            cluster[str(e.source_id)] = str(e.target_id)
 
         def named(i) -> bool:
             n = nodes.get(str(i))
             return n is not None and (n.properties or {}).get("__identity") == "entity"
-        return [ch for ch in choices if not all(named(c["node_id"]) for c in ch["candidates"])]
+        return [ch for ch in choices
+                if len({cluster.get(str(c["node_id"]), str(c["node_id"])) for c in ch["candidates"]}) > 1
+                and not all(named(c["node_id"]) for c in ch["candidates"])]
 
     # ── L2 ───────────────────────────────────────────────────────────────────────────────────
     async def expand(self, workspace_id: uuid.UUID, plan: QueryPlan, graph: CandidateGraph,

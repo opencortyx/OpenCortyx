@@ -28,19 +28,20 @@ never leaves your machine.
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2.svg?logo=discord&logoColor=white)](https://discord.gg/5NNgprxvk)
 
 <a href="docs/assets/demo/opencortyx-demo.mp4">
-  <img src="docs/assets/demo/opencortyx-demo.gif" alt="OpenCortyx demo: a JSON file is added, read by the Mapper, ingested, explored in the knowledge graph and questioned in the AI Assistant, which answers with cited sources" width="900" />
+  <img src="docs/assets/demo/opencortyx-demo.gif" alt="OpenCortyx demo: a JSON file is added with Extract knowledge, its detected mapping opened, explored in the knowledge graph and questioned in the Assistant, which answers with cited sources" width="900" />
 </a>
 
-<sub>Add a JSON file → the Mapper drafts how to read it → ingest typed nodes and edges → open the graph in place → ask the AI Assistant, which answers with the records it rests on. Recorded end to end in the real product. <a href="docs/assets/demo/opencortyx-demo.mp4">Watch it in full quality (MP4)</a>.</sub>
+<sub>Add a JSON file and choose Extract knowledge → each record becomes a node of its kind (programme, projects, risks) → open the mapping detection wrote → explore the graph in place → ask the Assistant, which answers with the records it rests on. Recorded end to end in the real product. <a href="docs/assets/demo/opencortyx-demo.mp4">Watch it in full quality (MP4)</a>.</sub>
 
 </div>
 
 ## Three promises
 
 - **One question across all your data.** SQL databases, data lakes (S3, GCS, Azure Data Lake),
-  CSV, Parquet and Excel are read as tables, columns and rows. JSON, XML and YAML are mapped
-  exactly as you define, not guessed by a model. PDFs, Word, Markdown, HTML and email are read and
-  extracted. All of it is searched together.
+  CSV, Parquet and Excel are read as tables, columns and rows. In JSON, XML and YAML, detection
+  finds the records at any depth, what identifies and names each, and how they link, and you correct
+  it in the Mapper. PDFs, Word, Markdown, HTML and email are read by their layout. All of it is
+  searched together, and questions about rows are answered with SQL over all of them.
 - **Every answer shows its proof, or abstains.** Each piece of evidence names the asset it came
   from, in the chat, the API and MCP. When the evidence isn't there, OpenCortyx says so instead of
   guessing. Evaluations measure groundedness and abstention on your own questions.
@@ -57,8 +58,12 @@ citations and human review. The two work well side by side.
 
 ## What it does
 
-- **Structure it your way**: define node types, relationships and extractors in the dashboard;
-  every derived fact keeps its source and confidence.
+- **Add data, then choose what the graph gets**: a table's or a JSON file's structure only, its
+  knowledge (one record, one node, with its identifier, name, text and dates, picked from the
+  columns' values), or the whole data. The data itself is always kept and read with SQL.
+- **Structure it your way**: define node types, relationships and extractors in the dashboard,
+  including one that reads people, places and how they connect with your own model; every derived
+  fact keeps its source and confidence.
 - **Retrieve with evidence**: hybrid search (vector, BM25, entity graph, multi-hop, structured
   catalogue) fused and reranked. An entity found in many assets lists them ranked for the
   question. Sources show only the records an answer rests on, grouped by file; the rest of what
@@ -67,8 +72,9 @@ citations and human review. The two work well side by side.
   contains, opened in place 100 at a time, so even a very large graph stays readable. The
   workspace carries your name or your organisation's, set in Settings.
 - **Every record stays itself**: ids in your data are kept as attributes, never used to merge
-  records; whether two records are the same thing is decided by the Resolution Engine, which keeps
-  both values and flags conflicts for review instead of overwriting.
+  records; whether two records are the same thing is decided by the Resolution Engine, which groups
+  them under one master node, keeps both values and flags conflicts for review instead of
+  overwriting.
 - **Serve agents**: a built-in MCP server gives Claude, Cursor, VS Code and other clients search,
   answers, memory and governed write-back.
 - **Run anywhere**: NebulaGraph holds the graph, Qdrant its search surfaces, Postgres the control
@@ -126,9 +132,10 @@ utility, embedding, rerank). No `.env` setting is involved.
 | OpenAI, Anthropic, Groq | The provider, its API key and a Model ID such as `gpt-4o-mini` |
 | Azure, Together | OpenAI-compatible, the provider's Base URL and API key |
 
-A new workspace has no generation model: the AI Assistant answers once you add one. Embeddings run
-on CPU inside the stack, so they need no server. OpenCortyx does not start a model server of its
-own. See [docs/models.md](docs/models.md).
+A new workspace starts with a small built-in generation model (Qwen3-0.6B, on CPU inside the
+stack), so the Assistant answers from the first file; connect a larger model for better and faster
+answers. Embeddings and reranking also run on CPU inside the stack. OpenCortyx does not start a
+model server of its own. See [docs/models.md](docs/models.md).
 
 ## Features
 
@@ -153,17 +160,18 @@ its format, size, content fingerprint and everything derived from it.
 </td>
 <td width="50%" valign="top">
 
-**[Lineage](docs/features/discover.md#lineage)**: the knowledge graph as a tree you open in place:
-workspace, sources, tags, assets, and the entities and facts extracted from each.
+**[Graph](docs/features/discover.md#lineage)**: the knowledge graph as a tree you open in place:
+workspace, sources, tags, assets, and the records and entities each one holds.
 
-<img src="docs/assets/screenshots/lineage.png" alt="Lineage graph" />
+<img src="docs/assets/screenshots/lineage.png" alt="Knowledge graph" />
 </td>
 </tr>
 <tr>
 <td valign="top">
 
-**[Mapper](docs/features/integration.md#mapper)**: declare the nodes, edges and attributes a
-source becomes; one builder for JSON, tables and documents.
+**[Mapper](docs/features/integration.md#mapper)**: what detection found in your tables and JSON,
+in sentences you can correct: what each record is, what identifies and names it, the fields it
+carries into the graph and what it links to.
 
 <img src="docs/assets/screenshots/mapper.png" alt="Mapper" />
 </td>
@@ -192,6 +200,11 @@ database, worker and models, with suggested fixes.
 </td>
 </tr>
 </table>
+
+The sidebar shows the pages used every day: Assistant, Add data, Connections, Customize, Runs,
+Assets, Graph and Review. The rest are a click away inside them (Customize holds Mappings,
+Extractors, Saved setups and Scheduled syncs; Settings holds Users, Models and System health), or
+all in the sidebar with `FULL_UI=1`.
 
 | Area | What you get | Guide |
 |---|---|---|

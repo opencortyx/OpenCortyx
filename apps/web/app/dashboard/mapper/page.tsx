@@ -55,16 +55,21 @@ export default function MapperHubPage() {
   const [busy, setBusy] = useState<string>("");
   const [confirmDel, setConfirmDel] = useState<{ row: Row; pipelines: string[] } | null>(null);
 
-  const load = async () => {
-    setLoading(true); setErr("");
+  const load = async (quiet = false) => {
+    if (!quiet) { setLoading(true); setErr(""); }
     try {
       const res = await contextV2Api.listSchemaMappings(undefined, true);
       setRows((res.items || []) as Row[]);
     } catch (e: any) {
-      setErr(e?.response?.data?.detail || e?.message || "Could not load mappings");
-    } finally { setLoading(false); }
+      if (!quiet) setErr(e?.response?.data?.detail || e?.message || "Could not load mappings");
+    } finally { if (!quiet) setLoading(false); }
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    // detection writes mappings a few minutes after an upload: show them without a Refresh
+    const every = setInterval(() => { if (document.visibilityState === "visible") load(true); }, 20_000);
+    return () => clearInterval(every);
+  }, []);
 
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -130,7 +135,7 @@ export default function MapperHubPage() {
         description="What your data means - found automatically after each upload. Open one to correct it (the identifier, a link, a name, whether its records go into the graph), or create one to shape the graph yourself."
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="secondary" size="sm" icon={RefreshCw} onClick={load}>Refresh</Button>
+            <Button variant="secondary" size="sm" icon={RefreshCw} onClick={() => load()}>Refresh</Button>
             {PARADIGMS.map((p) => (
               <Button key={p} variant={p === "semistructured" ? "primary" : "secondary"} size="sm"
                 icon={Plus} busy={busy === "create"} onClick={() => create(p)}>

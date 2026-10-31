@@ -28,7 +28,7 @@ const SCOPES = [
 ];
 
 export default function ChatPage() {
-  const [k, setK] = useState(12);
+  const [k, setK] = useState(0);   // 0: the token budget decides, as an API call without `k` does
   const [mode, setMode] = useState<"answer" | "context">("answer");
   // What the assistant is allowed to answer FROM. Defaults to "knowledge" so a question about your
   // data can never be answered out of our own chat history (which is itself stored in the graph).
@@ -154,7 +154,7 @@ export default function ChatPage() {
     setMsgs((m) => [...m, { role: "user", text: q }]);
     setBusy(true);
     const opts = {
-      k,      // the L4 diversify cut — how many blocks come back
+      ...(k ? { k } : {}),   // the L4 diversify cut, only when a person sets one
       scope,  // knowledge (ingested data) | conversations (our sessions) | all
       chat_id: chatId, save_chat: true,   // saved to the history sidebar; follow-ups resolve against it
     };
@@ -272,10 +272,10 @@ export default function ChatPage() {
         <div className="space-y-5 pt-2 border-t border-stone-200">
           <label className="block text-xs">
             <span className="text-stone-600 font-medium mb-2 block flex justify-between">
-              Evidence blocks <b className="text-stone-900">{k}</b>
+              Evidence blocks <b className="text-stone-900">{k || "Auto"}</b>
             </span>
-            <input type="range" min={4} max={40} value={k} onChange={(e) => setK(+e.target.value)} className="w-full accent-primary" />
-            <span className="block mt-1.5 text-[10px] text-stone-500 leading-tight">How many pieces of evidence the answer is built from.</span>
+            <input type="range" min={0} max={40} value={k} onChange={(e) => setK(+e.target.value)} className="w-full accent-primary" />
+            <span className="block mt-1.5 text-[10px] text-stone-500 leading-tight">How many pieces of evidence the answer is built from. Auto: as many as fit the token budget, the same as the API.</span>
           </label>
         </div>
 

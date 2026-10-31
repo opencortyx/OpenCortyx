@@ -456,7 +456,7 @@ kept where meaning already lives, never in a store of its own:
 Two ways to get there:
 
 - **Default (Mode A).** After an ingestion settles, the Detector (`knowledge/semantic/detector.py`)
-  reads the data: record sources (a table's rows; an object or list inside JSON/YAML/XML records),
+  reads the data: record sources (a table's rows; an object or list inside JSON/YAML/XML records, below wrapper objects too, and a list inside each element - `$.programme.projects[*].risks[*]`, its elements reading the element they sit in as `^.F`),
   groups of one shape, field profiles, identifiers (never empty, never repeated; the one others refer
   to wins; one whose values all come from a larger key elsewhere is a reference), types (groups whose
   keys hold the same values), links (inclusion dependencies) and names (the model picks among the
@@ -475,21 +475,32 @@ read it, so what the Mapper shows is what a question sees.
 **Text inside records.** The Detector profiles each text field's words per value: free text (a
 median of 8 words or more) is `prose`, a short value `text`, and of the nearly unique short text
 fields the model picks the one that names a record (the type's `label`, "Named by" in the Mapper).
-Nothing is read out of a field until a person picks extractors for it in the Knowledge panel
-("Extract from text"; `Property.extract`). Then each record's text runs through them
-(`knowledge/semantic/text_fields.py`) - when the record's ingest settles, and over existing records
-when the choice is saved:
+The roles `key`, `text`, `prose`, `time` and `reference` are a type's **knowledge columns**
+(`store.KNOWLEDGE_ROLES`); a person can replace them with their own choice in the Mapper (the field
+chips under "Add its records", `ObjectType.attributes`). Add data's "Extract knowledge" publishes
+them: one record, one node of the type, carrying `published_fields()` - the keys, the label and the
+knowledge columns. A type with no identifier (an event: a turn, a sale) is published too, each row
+named by its own knowledge values and its references (`publish.row_key`) - never by values copied
+from the record it sits in ("^.question_date"), so the same row read again is the same node. A
+publish removes what it no longer yields for a type it read in full (`_retire`). Where the files
+bound to one identified type disagree about a record, the logical table still shows one value
+(`any_value`), and `views.conflicts_sql` finds each disagreement; publish records it as a CONTRADICTS
+decision for Review with every value and its file (`publish.conflict_decisions`).
 
-| Type published? | Input | What the extractor's `source -> emitted` edge connects |
-|---|---|---|
-| yes | the record's own entity node, carrying the text | the record and what its text names (Customer "Alice Smith" -MENTIONS-> Product "X200") |
-| no | a data input (asset + record key), never written | the asset; the output cites the row |
+Nothing is read out of a field's text unless an extractor is run over it: chosen in Add data's
+Custom section with the columns, keys or sections it reads (`tasks/enrich.book_extractors`, run when
+the upload's run finishes), or built in Custom Extractors over a type's records. The named-things
+mechanism (`unstructured.ner`) asks the extraction model for entities `{name, type}` and the
+relationships between them; each becomes a node of the type the model named, identified by
+`templates.entity_id(type, normalised name)`.
 
-What is extracted is then resolved by name (`resolution/mentions.py`): an extracted entity whose
-normalised label names exactly one published record is drawn SAME_AS it - a person named in a
-ticket meets the customer of that name. Two records with the same name are not guessed between.
-Published records are labelled by their name for this, the key kept as a property. The same name
-resolution runs for entities extracted from documents, in each asset's resolution pass.
+**Reconcile.** Everything an extractor or a publish writes goes through one function,
+`resolution/engine.reconcile`: per type, one rule (the type's ResolutionSpec, or for named things
+`named_spec` - identified by label, scorer "similar", auto at `name_match_threshold`, review just
+below it), `records.decide` says same / review / new, and `join` groups a match under a **master**
+node (`__master`, the agreed values) with each record linked `MEMBER_OF` it. Records are never merged
+or overwritten; conflicting values stay on their members and go to review. Retrieval treats a
+cluster's members as one thing.
 
 **Choices survive detection.** "Publish to graph", the extractors picked for a field and the Add
 data choice "Also add to the knowledge graph" (for tables and JSON, applied to the types detection

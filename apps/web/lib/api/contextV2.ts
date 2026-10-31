@@ -1456,12 +1456,14 @@ export const contextV2Api = {
                                    pipelineIds?: Record<string, string>;
                                    /** read it again even if this exact file is already in */
                                    replace?: boolean; tags?: string[];
-                                   /** entities and relationships into the graph (records; text read without an LLM) */
+                                   /** tables and JSON: each record of the types found a node (its knowledge columns) */
                                    extractKnowledge?: boolean;
                                    /** the data itself into the graph too: rows, keys and values, passages */
                                    wholeData?: boolean;
                                    /** Custom: mappings that shape tables / JSON; extractors that read documents */
-                                   mappingIds?: string[]; extractors?: string[] }) => {
+                                   mappingIds?: string[]; extractors?: string[];
+                                   /** per extractor: the columns, keys or sections it reads (empty: all) */
+                                   extractorInputs?: Record<string, string[]> }) => {
     const fd = new FormData();
     fd.append("file", file);
     const perKind = Object.fromEntries(Object.entries(opts?.pipelineIds || {}).filter(([, id]) => id));
@@ -1471,6 +1473,8 @@ export const contextV2Api = {
     if (opts?.wholeData) fd.append("whole_data", "true");
     if (opts?.mappingIds?.length) fd.append("mapping_ids", JSON.stringify(opts.mappingIds));
     if (opts?.extractors?.length) fd.append("extractors", JSON.stringify(opts.extractors));
+    if (opts?.extractorInputs && Object.values(opts.extractorInputs).some((v) => v.length))
+      fd.append("extractor_inputs", JSON.stringify(opts.extractorInputs));
     if (opts?.tags?.length) fd.append("tags", JSON.stringify(opts.tags));
     if (opts?.pipelineId) fd.append("pipeline_id", opts.pipelineId);
     if (opts?.collectionId) fd.append("collection_id", opts.collectionId);
@@ -1504,6 +1508,8 @@ export interface KnowledgeEntity {
   assets: { id: string; name: string; fields: Record<string, string> }[];
   properties: KnowledgeProperty[];
   materialize: boolean;
+  /** the fields a published record carries; empty = its knowledge columns (identifier, name, text, dates, links) */
+  attributes?: string[];
   /** the property that names a record ("name", "title"): published records are labelled by it,
    *  and a name read from text is matched against it */
   label?: string;

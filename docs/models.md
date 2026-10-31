@@ -15,9 +15,10 @@ and API keys are stored encrypted. **Test** checks that the server answers, and 
 panel shows which names the server actually serves. `bin/opencortyx doctor` checks each workspace's
 generation model from the command line.
 
-A new workspace starts with the embedding and rerank models (they run inside OpenCortyx) and **no
-generation model**. Until you add one, the AI Assistant and extraction say "No generation model is
-connected" instead of answering.
+A new workspace starts with the embedding and rerank models and a small generation model,
+**Qwen3-0.6B**, all running on CPU inside OpenCortyx: the Assistant and extraction work from the
+first file. It is slow on long contexts and weak at arithmetic and multi-step questions; connect a
+larger model below for better answers, and make it the default for generation and extraction.
 
 ## Ollama, LM Studio, vLLM or another server you run
 

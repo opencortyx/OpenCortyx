@@ -61,7 +61,10 @@ def _schedule_detection(workspace_id, kind: str | None, run_id=None, source_id=N
     """Book a detection pass after a run that changed the records detection reads - tables and JSON.
     A document is not one: booked for every upload, a chat import re-read every table in the
     workspace each two minutes (65-95 s at 2.5 CPUs) and found the same types each time. An asset
-    whose upload asked for knowledge waits for that pass, which binds it to its types."""
+    whose upload asked for knowledge waits for that pass, which binds it to its types. The extractors
+    the upload chose (Add data, Custom) are queued over the asset here too, whatever its kind."""
+    from opencortyx.tasks.enrich import queue_booked_extractors
+    queue_booked_extractors(workspace_id, run_id, source_id, kind)
     if kind == "document":
         return
     from opencortyx.tasks.maintenance import book_after_detection, schedule_detection

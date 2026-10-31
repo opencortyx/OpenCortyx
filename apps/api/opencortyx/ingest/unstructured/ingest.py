@@ -616,9 +616,11 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
         return {"status": "ignored", "title": filename, "reason": _ignored, "chunks": 0}
     plan = dict(plan or {})
     # Add data's "add the whole data": with the passages in Delta, every layout element is a graph
-    # node as well. Without it the graph gets the document's outline only - its headings, tables and
-    # figures - and the text stays in Delta.
+    # node as well. Without it the text stays in Delta and the graph gets the document itself (and its
+    # summary when an LLM is on); its outline - headings, tables and figures as nodes - only when a
+    # plan asks for it (`outline`).
     whole_data = bool(plan.get("whole_data"))
+    outline_nodes = bool(plan.get("outline"))
     parsed = parse_content(content, mime_type, filename=filename)
     text = parsed["raw_text"] or ""
     title = (filename or extract_title(text))[:300]
@@ -824,7 +826,7 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
                     if prev:
                         edge_specs_out.append({"source_id": prev, "target_id": nid, "type": "NEXT"})
                     prev = nid
-                elif ast_node.level is not None or kind in ("table", "image"):
+                elif outline_nodes and (ast_node.level is not None or kind in ("table", "image")):
                     # The outline: a heading, table or figure as a node under the nearest one above it.
                     # Its own id - the element's text is a row in Delta, not on this node.
                     oid = uuid.uuid5(source_id, f"outline:{ast_node.id}")
@@ -892,7 +894,7 @@ async def ingest_document(workspace_id: uuid.UUID, content: bytes, filename: str
                 offset += len(ct)
                 if not whole_data:
                     heading = str(discovered.get("heading") or "").strip()
-                    if build_sections and heading and heading not in sections:
+                    if outline_nodes and build_sections and heading and heading not in sections:
                         # The outline: one node per section heading, the text staying in Delta.
                         snode = await _repo.upsert_node(node_id=_det_section_id(source_id, heading), workspace_id=workspace_id,
                             type=section_type, label=heading[:300],

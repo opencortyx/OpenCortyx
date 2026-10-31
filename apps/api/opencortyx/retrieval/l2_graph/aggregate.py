@@ -66,7 +66,11 @@ _TARGET = re.compile(
 _GROUP = re.compile(r"\b(?:per|each|every|by)\s+(?:the\s+)?([a-z][\w\-]*)", re.I)
 
 _NOISE = frozenset({"the", "a", "an", "of", "many", "much", "one", "ones", "thing", "things",
-                    "time", "times", "there", "them", "it", "they"})
+                    "time", "times", "there", "them", "it", "they"}
+                   # a unit of time asks for a duration ("how many days ago", "how many weeks in
+                   # total"), never for the number of nodes of a type an extractor called Day
+                   | {u + s for u in ("second", "minute", "hour", "day", "week", "month", "year")
+                      for s in ("", "s")})
 
 
 @dataclass

@@ -45,8 +45,9 @@ class _Node:
         self.type, self.label = type_, label
 
 
-def _install(monkeypatch, run, nodes, *, graph_raises=False):
-    """Stub the two reads the projection makes: the run row, and the graph."""
+def _install(monkeypatch, run, nodes, *, graph_raises=False, published=(), pending=False):
+    """Stub the reads the projection makes: the run row, the graph (`published`: records that point
+    at the asset with FROM_ASSET), and whether detection still owes the upload its records."""
     class _Session:
         async def __aenter__(self): return self
         async def __aexit__(self, *_): return False
@@ -59,6 +60,15 @@ def _install(monkeypatch, run, nodes, *, graph_raises=False):
             _Store.seen = query
             return nodes
 
+        async def find_edges(self, workspace_id, query):
+            if "FROM_ASSET" in (query.types or []):
+                return [type("E", (), {"source_id": n.id})() for n in published]
+            return []
+
+        async def get_nodes(self, workspace_id, ids):
+            return [n for n in published if str(n.id) in {str(i) for i in ids}]
+
+    monkeypatch.setattr("opencortyx.tasks.maintenance.knowledge_pending", lambda *a: pending)
     monkeypatch.setattr("opencortyx.core.db.V2Session", _Session)
     monkeypatch.setattr("opencortyx.stores.graph.get_graph_store", lambda: _Store())
     return _Store
@@ -227,3 +237,26 @@ async def test_the_outcome_serialises_whole(monkeypatch):
     assert set(payload) >= {"run_id", "status", "found", "structural", "next_steps", "reported"}
     assert payload["found"][0]["type"] == "Vendor"
     assert payload["next_steps"][0]["action"] == "ask"
+
+
+# ── Extract knowledge: records published after the run ─────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_records_published_from_the_file_are_what_it_found(monkeypatch):
+    """Extract knowledge puts a file's records in the graph after detection; they point at the file
+    (FROM_ASSET) rather than sitting in it, and are what the upload found."""
+    projects = [_Node("Project", f"P{i}") for i in range(3)]
+    for n in projects:
+        n.id = uuid.uuid4()
+    _install(monkeypatch, _Run(), [_Node("Source", "atlas.json")], published=projects)
+    result = await mod.ingest_outcome(ORG, uuid.uuid4())
+    assert [(t.type, t.count) for t in result.found] == [("Project", 3)]
+    assert not result.pending
+
+
+@pytest.mark.asyncio
+async def test_an_upload_waiting_for_detection_is_pending_not_empty(monkeypatch):
+    """Finished reading, records not in the graph yet: "reading what it holds", never "nothing
+    came out"."""
+    _install(monkeypatch, _Run(), [_Node("Source", "atlas.json")], pending=True)
+    result = await mod.ingest_outcome(ORG, uuid.uuid4())
+    assert result.pending and any("detection" in n for n in result.notes)

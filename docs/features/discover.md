@@ -54,7 +54,7 @@ readable however big the graph gets.
 
 ### How to use it
 
-1. Open **Lineage**. You see one item: your workspace — you (a Person) or your team (an
+1. Open **Graph**. You see one item: your workspace — you (a Person) or your team (an
    Organization), named after the **Workspace name** in [Settings](administration.md#settings).
 2. Click the workspace to open its sources: **Files**, your collections, and any connected
    databases.

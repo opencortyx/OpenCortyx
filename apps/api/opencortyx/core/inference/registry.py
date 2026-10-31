@@ -17,7 +17,7 @@ import uuid
 
 from opencortyx.core.config import (
     BUILTIN_EMBED_MODEL, BUILTIN_EMBED_PROVIDER, BUILTIN_GENERATION_MODEL, BUILTIN_GENERATION_PROVIDER,
-    BUILTIN_ENTITIES_MODEL, BUILTIN_RERANK_MODEL, BUILTIN_RERANK_PROVIDER,
+    BUILTIN_RERANK_MODEL, BUILTIN_RERANK_PROVIDER,
     LOCAL_LLM_PROVIDERS,
     OPENAI_COMPATIBLE_PROVIDERS,
 )
@@ -41,7 +41,7 @@ class NoModelConfigured(RuntimeError):
 
 #: The roles something actually resolves a model for. A role outside this list would be a setting
 #: nothing reads — registering a "vision" or "ocr" model changed nothing — so it is refused.
-MODEL_ROLES = ("generation", "embedding", "rerank", "extraction", "utility", "entities")
+MODEL_ROLES = ("generation", "embedding", "rerank", "extraction", "utility")
 
 #: Roles served by the workspace's generation model when they have no row of their own.
 _SHARES_GENERATION = ("extraction", "utility")
@@ -58,7 +58,6 @@ def _row_to_spec(m) -> dict:
 #: base_url on such a row makes the Models page claim a server that is not there.
 IN_PROCESS_PROVIDERS = frozenset({
     "fastembed", "onnx", "sentence-transformers", "sentence_transformers", "local", "st",
-    "spacy",                       # the entities role: a spaCy pipeline read in-process (text_reader)
 }) | LOCAL_LLM_PROVIDERS
 #: Every provider something here can call. A registered model with any other provider could never run.
 KNOWN_PROVIDERS = OPENAI_COMPATIBLE_PROVIDERS | IN_PROCESS_PROVIDERS | {"anthropic", "huggingface", "hf"}
@@ -78,8 +77,6 @@ def _builtin_rows() -> list[dict]:
         {"role": "rerank", "name": BUILTIN_RERANK_MODEL.split("/")[-1],
          "provider": BUILTIN_RERANK_PROVIDER, "model_id": BUILTIN_RERANK_MODEL,
          "base_url": None, "params": {}},
-        {"role": "entities", "name": BUILTIN_ENTITIES_MODEL.split("/")[-1],
-         "provider": "spacy", "model_id": BUILTIN_ENTITIES_MODEL, "base_url": None, "params": {}},
     ]
 
 
