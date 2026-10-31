@@ -99,8 +99,9 @@ An ingestion is a saved job you can run again: where to read from, what to read,
 
 ### How to use it
 
-1. Open **Customize > Scheduled syncs** (or **Connections > Scheduled syncs**), press **New
-   Ingestion** and give it a name.
+1. Open **Customize > Scheduled syncs** (or **Connections > Scheduled syncs**), press **New sync**
+   and give it a name. The short form asks only for the connection and what to read; **More
+   options** shows everything below.
 2. Choose the **Source**: a saved connection, or **Upload** to pick files (**Pick Files**) or a
    whole folder (**Pick Folder**).
 3. Choose the **Classification**. **Auto-detect** sends each file to the pipeline that suits it.

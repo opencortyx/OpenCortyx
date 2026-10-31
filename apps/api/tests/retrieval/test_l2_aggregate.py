@@ -89,17 +89,31 @@ def test_a_countable_noun_is_required():
     assert s is not None and not s.grounded
 
 
-def test_a_unit_of_time_asks_for_a_duration_not_a_count_of_nodes():
-    """An extractor that called "Saturday" a Day must not turn "how many days ago" into "count of
-    Day: 2" in place of the turns that hold the answer."""
+@pytest.mark.anyio
+async def test_the_model_decides_whether_a_grounded_noun_is_counted():
+    """"How many days ago…" names a type an extractor called Day, and asks for a duration: the
+    model reads the question and the count gives way to retrieval. No word list decides it, and
+    without a model the grounded count stands."""
     from tests.retrieval.test_l0_vocabulary import vocab
-    v = vocab(nodes={"Turn": 88, "Day": 2, "Week": 1})
-    for q in ("How many days ago did I attend a networking event?",
-              "How many days did I spend in total traveling in Hawaii?",
-              "How many weeks have passed since I started?"):
-        s = spec_for(q, v)
-        assert s is None or not s.grounded, q
-    assert spec_for("How many turns are there?", v).grounded, "a type that is a thing is still counted"
+    v = vocab(nodes={"Turn": 88, "Day": 2})
+    spec = spec_for("How many days ago did I attend a networking event?", v)
+    assert spec.grounded and spec.target_type == "Day", "the noun still names the type"
+    asked = []
+
+    async def model(prompt, options, baseline):
+        asked.append(options)
+        return options[1]
+    assert not await A.asks_for_count("How many days ago did I attend a networking event?", spec, model)
+    assert asked == [["the number of Day records", "facts found in the records themselves"]]
+
+    async def counts(prompt, options, baseline):
+        return options[0]
+    turns = spec_for("How many turns are there?", v)
+    assert await A.asks_for_count("How many turns are there?", turns, counts)
+
+    async def no_model(prompt, options, baseline):
+        return None
+    assert await A.asks_for_count("How many turns are there?", turns, no_model)
 
 
 @pytest.mark.anyio

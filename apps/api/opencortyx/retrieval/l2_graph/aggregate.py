@@ -66,11 +66,7 @@ _TARGET = re.compile(
 _GROUP = re.compile(r"\b(?:per|each|every|by)\s+(?:the\s+)?([a-z][\w\-]*)", re.I)
 
 _NOISE = frozenset({"the", "a", "an", "of", "many", "much", "one", "ones", "thing", "things",
-                    "time", "times", "there", "them", "it", "they"}
-                   # a unit of time asks for a duration ("how many days ago", "how many weeks in
-                   # total"), never for the number of nodes of a type an extractor called Day
-                   | {u + s for u in ("second", "minute", "hour", "day", "week", "month", "year")
-                      for s in ("", "s")})
+                    "time", "times", "there", "them", "it", "they"})
 
 
 @dataclass
@@ -177,6 +173,17 @@ def parse(plan: QueryPlan, vocab: Optional[TypeVocabulary]) -> Optional[Aggregat
     spec.grounded = True
     spec.why = f"grounded: {spec.describe()}"
     return spec
+
+
+async def asks_for_count(question: str, spec: AggregationSpec, choose) -> bool:
+    """Whether the question asks for the number of `spec.target_type` records at all. A noun can
+    name a type and still not be counted: "how many days ago did I…" asks for a duration, whatever
+    an extractor called a Day. The model reads the question and chooses; without one the grounded
+    count stands. `choose(prompt, options, baseline)` returns the option chosen, or None."""
+    counting = f"the number of {spec.target_type} records"
+    picked = await choose(f"Question: {question}\nTo answer it, what is needed is", [
+        counting, "facts found in the records themselves"], "To answer it, what is needed is")
+    return picked is None or picked == counting
 
 
 async def execute(workspace_id: uuid.UUID, spec: AggregationSpec, *,

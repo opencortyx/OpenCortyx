@@ -867,7 +867,8 @@ async def register_emit_types(db, workspace_id, emit, *, source="user", status="
 
     made = 0
     for name, kind, schema in items:
-        if not name or await find_type(db, workspace_id, name, kind) is not None:
+        # "$type", "$relation": filled from each record (the type the model gives a name), not a type
+        if not name or name.startswith("$") or await find_type(db, workspace_id, name, kind) is not None:
             continue
         stmt = pg_insert(TypeRegistry).values(
             workspace_id=workspace_id, name=name, kind=kind, description=f"(from extraction) {name}",

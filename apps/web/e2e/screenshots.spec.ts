@@ -48,6 +48,16 @@ const PREPARE: Record<string, (p: Page) => Promise<unknown>> = {
     await p.getByText(/Running case/).waitFor({ state: "detached", timeout: 600_000 });
   },
   "custom-extractors": (p) => p.getByRole("tab", { name: /Built-in/ }).click({ timeout: 15_000 }),
+  // the tree opened as the demo opens it: workspace, its source, the tag, the file and what it holds
+  lineage: async (p) => {
+    const svg = p.locator('svg[aria-label="Knowledge graph"]');
+    await svg.waitFor({ timeout: 60_000 });
+    const item = (re: RegExp) => svg.locator("g").filter({ has: p.locator(":scope > title", { hasText: re }) }).first();
+    for (const re of [/click to open/, /^Files|^Uploads|click to open/, /portfolio/, /atlas-programme/]) {
+      await item(re).click({ timeout: 15_000 });
+      await p.waitForTimeout(1500);
+    }
+  },
 };
 
 for (const page of DASHBOARD_PAGES) {
@@ -57,10 +67,13 @@ for (const page of DASHBOARD_PAGES) {
     await browser.waitForLoadState("networkidle");
     await PREPARE[page.slug]?.(browser).catch(() => undefined);
     if (page.slug === "ai-assistant") {
+      // a new chat, so the answer shown is this question's and not an earlier one's
+      await browser.getByRole("button", { name: "New chat" }).click().catch(() => undefined);
       await browser.getByPlaceholder("Ask a question...").fill(ASSISTANT_QUESTION);
       await browser.getByRole("button", { name: "Ask" }).click();
       // Without a model or the demo data there is no answer; the assistant is shown as it is.
       await browser.getByText(ASSISTANT_ANSWER).first().waitFor({ timeout: 600_000 }).catch(() => undefined);
+      await browser.getByText(/^Sources$/i).first().waitFor({ timeout: 120_000 }).catch(() => undefined);
     }
     await browser.waitForTimeout(page.slug === "lineage" ? 6000 : 2500);
     await browser.screenshot({ path: path.join(OUT_DIR, `${page.slug}.png`) });

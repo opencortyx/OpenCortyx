@@ -173,9 +173,9 @@ own lake tables are read in place, never copied.
   embedded; the Assistant asks "which one?" only between records something tells apart.
 - **Entities and relationships come from extractors**, built in the extractor form; its "people,
   places, things and how they connect" option asks the extraction's model for each named thing and
-  each "subject - relation - object", typed and named by the model for that text. A type is
-  spelled as the workspace already spells it ("Places" and "places" are its Place), so the same name
-  is one node.
+  each "subject - relation - object", typed and named by the model for that text. The model is
+  shown the workspace's existing types to reuse (Place again, not Places), and a type that differs
+  from one only in case or separators is that one, so the same name is one node.
 - A file with a single record can be given an identifier in the Mapper: one record cannot show a
   field is unique, so its filled fields are offered as "not checked" instead of not at all.
 - A mapping's sentence editor shows the fields a published record carries (its knowledge columns by
@@ -209,8 +209,9 @@ own lake tables are read in place, never copied.
   now stops between records before the limit - each one already saved - and continues in a new task
   with the rest.
 - "How many days ago…" and "how many weeks in total…" were answered by counting nodes of a type
-  named Day or Week, when one existed, in place of everything retrieved; a unit of time asks for a
-  duration, so these questions are retrieved and answered from the records.
+  named Day or Week, when one existed, in place of everything retrieved. Before a count replaces
+  retrieval, the workspace's model now reads the question and says whether it asks for that number
+  at all; no word list decides.
 - **Deleting a file takes what it alone made**: its published records (read from no other file), the
   values only it gave a record another file still has, the
   named things nothing else states any more, and a cluster's master left without members - before,

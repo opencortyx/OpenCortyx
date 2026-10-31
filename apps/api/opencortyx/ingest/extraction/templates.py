@@ -151,56 +151,56 @@ _ENTITIES_PROMPT = (
     "\n\nTEXT:\n")
 
 
-#: The node types a workspace has: (read at, {folded spelling: (nodes, type)}). Re-read a minute on.
+#: The named-thing types a workspace has: (read at, {folded spelling: (nodes, type)}). Re-read a minute on.
 _KNOWN_TYPES: dict = {}
 
+#: How many of them the model is shown, the most used first.
+_TYPES_SHOWN = 40
 
-def _fold(kind: str) -> list:
-    """The spellings one type can take: case and separators dropped, and its singular when the
-    word looks plural ("Time_Period" and "time period"; "Libraries" and "Library")."""
-    k = re.sub(r"[^a-z0-9]", "", kind.lower())
-    forms = [k]
-    if k.endswith("ies") and len(k) > 4:
-        forms.append(k[:-3] + "y")
-    elif k.endswith("es") and len(k) > 4:
-        forms += [k[:-2], k[:-1]]
-    elif k.endswith("s") and not k.endswith("ss") and len(k) > 3:
-        forms.append(k[:-1])
-    return forms
+
+def _fold(kind: str) -> str:
+    """One type's spelling without case or separators: "Time_Period", "time period" and
+    "TIME-PERIOD" are one type."""
+    return re.sub(r"[^a-z0-9]", "", kind.lower())
 
 
 async def _known_types(workspace_id) -> dict:
-    """{folded spelling: (nodes, type)} for the types already in the workspace, so the model's
-    "Places" is the workspace's Place: one type, one identity for the same name. Best-effort; cached
-    a minute."""
+    """{folded spelling: (nodes, type)} for the named-thing types already in the workspace - shown to
+    the model so it reuses them, and matched so a spelling of one is that one. Best-effort; cached a
+    minute."""
     import time
     if workspace_id is None:
         return {}
     at, known = _KNOWN_TYPES.get(str(workspace_id), (0.0, None))
     if known is None or time.monotonic() - at > 60:
+        counts: dict = {}
         try:
-            names = await NodeRepo().count_by_type(workspace_id)
+            for n in await NodeRepo().find(workspace_id, NodeQuery(props={"__identity": "entity"}, limit=5000)):
+                counts[n.type] = counts.get(n.type, 0) + 1
         except Exception:                                      # noqa: BLE001
-            names = {}
+            counts = {}
         known = {}
-        for t, n in names.items():
-            for f in _fold(t):
-                if n > known.get(f, (-1, ""))[0]:
-                    known[f] = (n, t)
+        for t, n in counts.items():
+            if n > known.get(_fold(t), (-1, ""))[0]:
+                known[_fold(t)] = (n, t)
         _KNOWN_TYPES[str(workspace_id)] = (time.monotonic(), known)
     return known
 
 
+def _types_prompt(known: dict) -> str:
+    """The workspace's types for the model to reuse: "Place" again rather than "Places" or "Location"."""
+    names = [t for _, t in sorted(known.values(), key=lambda v: -v[0])][:_TYPES_SHOWN]
+    return ("Types already used here: " + ", ".join(names) + ". Use one of them when it fits; "
+            "otherwise name a new one.\n") if names else ""
+
+
 def _type_named(kind: str, known: dict) -> str:
-    """The model's type as the workspace already spells it - the most used type sharing a spelling
-    with it - else as given (first letter capital); a new type is remembered so the rest of the run
-    spells it the same way."""
-    found = [known[f] for f in _fold(kind) if f in known]
-    if found:
-        return max(found)[1]
+    """The model's type as the workspace already spells it, else as given (first letter capital); a
+    new type is remembered so the rest of the run spells it the same way."""
+    if _fold(kind) in known:
+        return known[_fold(kind)][1]
     kind = kind[:1].upper() + kind[1:]
-    for f in _fold(kind):
-        known.setdefault(f, (0, kind))
+    known[_fold(kind)] = (0, kind)
     return kind
 
 
@@ -208,10 +208,13 @@ async def _ner_records(text: str, model_spec: dict | None = None, workspace_id=N
     """Named things and how each sentence connects them, read by the extraction's model: a record per
     entity {name, type}, then a record per relationship {name, type, relation, object, object_type} -
     the subject's name and type, so an edge can run from it to the object found by name. Types and
-    relations are the model's words for this text, a type spelled as the workspace already spells it
-    (`_type_named`); nothing is listed here."""
+    relations are the model's words for this text: it is shown the types the workspace already has
+    to reuse (`_types_prompt`), and a type differing from one only in case or separators is that one
+    (`_type_named`); no type is listed here."""
+    known = await _known_types(workspace_id)
     try:
-        raw = await complete(_ENTITIES_PROMPT + (text or "")[:4000],
+        raw = await complete(_ENTITIES_PROMPT.replace("\n\nTEXT:\n", "\n" + _types_prompt(known) + "\nTEXT:\n")
+                             + (text or "")[:4000],
                              system="You read text into a knowledge graph. JSON only.", max_tokens=900,
                              json_mode=True, temperature=0.0, model_spec=model_spec)
     except NoModelConfigured:
@@ -220,7 +223,7 @@ async def _ner_records(text: str, model_spec: dict | None = None, workspace_id=N
         return []
     parsed = _parse_json(raw)
     parsed = parsed if isinstance(parsed, dict) else {}
-    ents, seen, known = [], {}, await _known_types(workspace_id)
+    ents, seen = [], {}
     for e in parsed.get("entities") or []:
         if not isinstance(e, dict):
             continue

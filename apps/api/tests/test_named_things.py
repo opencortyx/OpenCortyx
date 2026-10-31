@@ -40,24 +40,30 @@ async def test_an_unreadable_answer_finds_nothing(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_a_type_is_spelled_as_the_workspace_already_spells_it(monkeypatch):
-    """The model's "places", "Time period" and "Libraries" are the workspace's Place, Time_Period
-    and Library: one type, so the same name is one node. A new type keeps the model's word, and the
-    rest of the run spells it the same way; a word that only ends in "ss" is not made singular."""
+async def test_the_model_is_shown_the_workspace_s_types_and_a_spelling_of_one_is_that_one(monkeypatch):
+    """The model sees the named-thing types already here, most used first, to reuse them ("Place",
+    not "Places"); a type that differs from one only in case or separators is that one ("Time
+    period" is Time_Period). No plural or language rule decides: "novels" is a new type the rest of
+    the run spells the same way, and a type nothing names yet is not shown."""
+    from types import SimpleNamespace as NS
+
     class Repo:
-        async def count_by_type(self, ws):
-            return {"Place": 8, "Places": 3, "Time_Period": 1, "Library": 1, "Process": 2}
+        async def find(self, ws, query):
+            assert query.props == {"__identity": "entity"}, "only named things' types"
+            return [NS(type="Place")] * 8 + [NS(type="Time_Period")] + [NS(type="Library")]
     monkeypatch.setattr(templates, "NodeRepo", Repo)
     templates._KNOWN_TYPES.clear()
+    prompts = []
 
     async def complete(prompt, **kw):
-        return ('{"entities":[{"name":"Hawaii","type":"places"},{"name":"Q3","type":"Time period"},'
-                '{"name":"Bodleian","type":"Libraries"},{"name":"Onboarding","type":"Process"},'
-                '{"name":"Dune","type":"novels"},{"name":"Emma","type":"Novel"}],"relationships":[]}')
+        prompts.append(prompt)
+        return ('{"entities":[{"name":"Hawaii","type":"place"},{"name":"Q3","type":"Time period"},'
+                '{"name":"Dune","type":"novels"},{"name":"Emma","type":"Novels"}],"relationships":[]}')
     monkeypatch.setattr(templates, "complete", complete)
-    recs = await templates._ner_records("...", workspace_id=WS)
-    assert [r["type"] for r in recs] == ["Place", "Time_Period", "Library", "Process", "Novels", "Novels"]
-    assert templates._fold("Address") == ["address"], "a word ending in ss is not plural"
+    recs = await templates._ner_records("Hawaii in Q3, reading Dune and Emma.", workspace_id=WS)
+    assert "Types already used here: Place, Time_Period, Library." in prompts[0]
+    assert prompts[0].endswith("TEXT:\nHawaii in Q3, reading Dune and Emma.")
+    assert [r["type"] for r in recs] == ["Place", "Time_Period", "Novels", "Novels"]
 
 
 # ── a detected link between the fields themselves ─────────────────────────────────────────────
@@ -89,3 +95,25 @@ async def test_a_detected_link_joins_the_two_fields_in_every_pair_of_assets(monk
         (ids[("orders-1", "customer_id")], ids[("crm", "id")]), (ids[("orders-2", "customer_id")], ids[("crm", "id")])}
     assert all(e["type"] == "JOINS_TO" and e["properties"]["relationship_type"] == "INFERRED_REFERENCE"
                for e in Repo.edges)
+
+
+@pytest.mark.anyio
+async def test_a_type_filled_from_each_record_is_not_registered_as_a_type(monkeypatch):
+    """The people-and-places extractor writes nodes typed "$type" and edges "$relation": the model's
+    own words for each record. They are slots, never ontology to review; a named type still is."""
+    from opencortyx.ontology import extractors
+    written = []
+
+    async def find_type(db, ws, name, kind):
+        return None
+    monkeypatch.setattr("opencortyx.domain.ontology.find_type", find_type)
+
+    class Db:
+        async def execute(self, stmt):
+            written.append(stmt.compile().params["name"])
+            return SimpleNamespace(rowcount=1)
+    emit = {"nodes": [{"type": "$type"}, {"type": "Risk"}],
+            "edges": [{"type": "MENTIONS"}, {"type": "$relation"}]}
+    made = await extractors.register_emit_types(Db(), WS, emit)
+    assert "$type" not in written and "$relation" not in written
+    assert "Risk" in written and made == len(written)

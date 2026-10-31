@@ -10,14 +10,14 @@ const KINDS = [
 for (const { kind, label } of KINDS) {
   test(`${label} pipeline: step 1 is a mapping and two options`, async ({ page }) => {
     await page.goto(`/dashboard/pipelines/new?kind=${kind}`);
-    await expect(page.getByRole("heading", { name: "Reading rule" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "How it reads" })).toBeVisible();
     // By role, not by text: during hydration the server-rendered copy and the client one are both
     // briefly in the DOM, and a strict text locator fails on the two matches rather than waiting.
-    await expect(page.getByRole("heading", { name: "Bind a mapping" }).first()).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Mapping", exact: true }).first()).toBeVisible();
     await expect(page.getByRole("heading", { name: "Options" }).first()).toBeVisible();
 
-    const accept = page.getByRole("checkbox", { name: /Accept a newly detected shape automatically/ });
-    const extractOnly = page.getByRole("checkbox", { name: /Extract only/ });
+    const accept = page.getByRole("checkbox", { name: /Read new kinds of file automatically/ });
+    const extractOnly = page.getByRole("checkbox", { name: /Keep only what is extracted/ });
     // The heading above renders server-side, so it is visible before React has attached anything.
     // Wait for a control to be interactive before asserting on form state, or the assertions race
     // hydration and the failure looks like a missing element rather than a too-early read.

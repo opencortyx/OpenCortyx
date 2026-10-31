@@ -12,7 +12,7 @@
 // (default http://localhost:3000), DEMO_API (default http://localhost:8000/api/v2), DEMO_QUESTION,
 // DEMO_WORKSPACE (the workspace name shown at the top of the graph, default "Atlas Group").
 //
-// The reset deletes this workspace's data, saved ingestion jobs, schema mappings, chat history and
+// The reset deletes this workspace's data, saved ingestion jobs, schema mappings, collections, chat history and
 // the pipelines earlier takes drafted from the demo file. Users, API keys and settings stay, except
 // the workspace name, which it sets. It exists so every take starts from the same empty state.
 //
@@ -69,7 +69,7 @@ async function api(method, url, token, body) {
 
 async function resetWorkspace() {
   const { access_token: t } = await api("POST", "/auth/token", null, { username: EMAIL, password: PASSWORD });
-  const list = (d) => (Array.isArray(d) ? d : d.items || d.ingestions || d.mappings || []);
+  const list = (d) => (Array.isArray(d) ? d : d.items || d.ingestions || d.mappings || d.collections || []);
   for (const i of list(await api("GET", "/ingestions", t))) await api("DELETE", `/ingestions/${i.id}`, t);
   for (const m of list(await api("GET", "/schema-mappings?light=true", t))) await api("DELETE", `/schema-mappings/${m.id}`, t);
   for (const c of list(await api("GET", "/chats?limit=200", t))) await api("DELETE", `/chats/${c.id}`, t);
@@ -78,11 +78,13 @@ async function resetWorkspace() {
   for (const p of list(await api("GET", "/pipelines", t)))
     if (!p.is_system_default && String(p.description || "").startsWith(drafted)) await api("DELETE", `/pipelines/${p.id}`, t);
   await api("DELETE", "/reset", t);
+  // collections outlive a reset (they are groupings people make); earlier takes' and tests' go too
+  for (const c of list(await api("GET", "/collections", t))) await api("DELETE", `/collections/${c.id}`, t);
   await api("PUT", "/config", t, { values: { workspace_name: WORKSPACE } });   // the top of the graph
-  console.log(`workspace reset: data, ingestion jobs, mappings and chat history deleted; named "${WORKSPACE}"`);
+  console.log(`workspace reset: data, ingestion jobs, mappings, collections and chat history deleted; named "${WORKSPACE}"`);
 }
 
-// ── on-screen overlay: cursor, click ripple, captions, title cards, the "sped up" badge ──────────
+// ── on-screen overlay: cursor, click ripple, captions, the "sped up" badge ──────────
 // Installed on demand rather than at document start: the app router hydrates <html>, and a node
 // added before hydration would be a mismatch. `ensure()` reinstalls it after any full navigation.
 function installOverlay() {
@@ -107,15 +109,7 @@ function installOverlay() {
       #__demo .cap small{display:block;font-weight:500;font-size:13.5px;color:#cbd5e1;margin-top:3px}
       #__demo .ff{position:absolute;top:84px;left:50%;transform:translateX(-50%);background:rgba(15,23,42,.85);color:#fff;
         font:600 13px Inter,system-ui,sans-serif;padding:7px 12px;border-radius:9px;opacity:0;transition:opacity .2s}
-      #__demo .card{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
-        background:radial-gradient(circle at 50% 38%,#134e4a 0%,#0f172a 62%);color:#fff;opacity:0;transition:opacity .6s;
-        font-family:Inter,ui-sans-serif,system-ui,sans-serif;text-align:center}
-      #__demo .card.on{opacity:1}
-      #__demo .card h1{font-size:58px;font-weight:800;letter-spacing:-1.5px;margin:0}
-      #__demo .card p{font-size:24px;font-weight:500;color:#99f6e4;margin:14px 0 0}
-      #__demo .card i{font-style:normal;font-size:16px;color:#94a3b8;margin-top:26px;letter-spacing:.3px}
     </style>
-    <div class="card"></div>
     <div class="cap"><b></b><div><span></span><small></small></div></div>
     <div class="ff">⏩ sped up</div>
     <svg class="cur" viewBox="0 0 24 24"><path d="M4 2.5l15.5 9.2-6.9 1.5 4.4 7.9-2.9 1.6-4.4-7.9L4.2 19.8z"
@@ -141,12 +135,6 @@ function installOverlay() {
       c.classList.add("on");
     },
     ff(on) { root.querySelector(".ff").style.opacity = on ? "1" : "0"; },
-    card(html) {
-      const c = root.querySelector(".card");
-      cur.style.visibility = html ? "hidden" : "visible";      // no cursor on a title card
-      if (!html) { c.classList.remove("on"); return; }
-      c.innerHTML = html; c.classList.add("on");
-    },
   };
 }
 
@@ -180,7 +168,6 @@ class Director {
     this.caption = [String(n), text, sub, top];
     await this.ensure();
   }
-  async card(html) { await this.ensure(); await this.page.evaluate((h) => window.__demo.card(h), html); }
   async speed(factor) {
     this.speeds.push({ t: Date.now() / 1000, factor });
     await this.ensure();
@@ -349,10 +336,9 @@ async function record() {
     else await d.hold(2600);
     await d.still("ai-assistant");
 
-    // Close
+    // Close on the answer itself: no title card at either end
     await d.say(null, "");
-    await d.card(`<h1>OpenCortyx</h1><p>The Knowledge Layer for AI</p><i>Self-hosted · MCP-ready · opencortyx.com</i>`);
-    await d.hold(3600);
+    await d.hold(2400);
   } finally {
     await cdp.send("Page.stopScreencast").catch(() => {});
     await page.waitForTimeout(300);

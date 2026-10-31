@@ -193,6 +193,23 @@ class RetrievalWorkflow:
         except Exception as exc:                              # noqa: BLE001
             t.mark("L0", "record_route", detail=f"FAILED {type(exc).__name__}: {exc}")
 
+    async def _chooser(self, workspace_id: uuid.UUID):
+        """`choose(prompt, options, baseline)` with the workspace's model: the option it takes the
+        prompt to mean, or None (no model, or it cannot tell)."""
+        from opencortyx.core.inference import choice
+        try:
+            spec = await choice.workspace_model(workspace_id)
+        except Exception:                                     # noqa: BLE001 - no model: no choice
+            spec = None
+
+        async def choose(prompt: str, options: list, baseline: str):
+            try:
+                c = await choice.choose(prompt, options, model_spec=spec, baseline=baseline)
+            except Exception:                                 # noqa: BLE001
+                return None
+            return c.option if c is not None else None
+        return choose
+
     def _bound_complete(self, workspace_id: uuid.UUID):
         """The rewriting callable for ONE workspace: the default resolves that workspace's own model;
         an injected one (tests) is used as given."""
@@ -802,6 +819,11 @@ class RetrievalWorkflow:
             return None
         if not spec.grounded:
             t.mark("L2", "aggregate", detail=f"not grounded: {spec.why} — falling back to retrieval")
+            return None
+        if not await aggregate_mod.asks_for_count(plan.raw_query or plan.normalized_query or "", spec,
+                                                  await self._chooser(workspace_id)):
+            t.mark("L2", "aggregate", detail=f"{spec.describe()}: the question asks for more than a "
+                                             f"count — falling back to retrieval")
             return None
         try:
             result = await aggregate_mod.execute(workspace_id, spec, scope=self.cfg.scope,
