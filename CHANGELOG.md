@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0-beta.1 - unreleased
+## 0.2.0-beta.1 - 2026-10-31
 
 Data and knowledge are stored apart ([ADR-006](docs/adr/006-data-and-knowledge-apart.md),
 [design](docs/knowledge-layer.md)). A new workspace keeps its documents, tables and records as Delta
