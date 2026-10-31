@@ -82,7 +82,13 @@ jobs:
           python -c "import asyncio, opencortyx.bootstrap as b; asyncio.run(b.init_v2_schema())"
           alembic upgrade head
       - name: Unit tests
-        run: python -m pytest -q -p no:cacheprovider
+        # Each failing test is also an annotation, which anyone can read on the run without its log.
+        run: |
+          set +e
+          python -m pytest -q -p no:cacheprovider -rfE 2>&1 | tee /tmp/pytest.log
+          status=${PIPESTATUS[0]}
+          grep -E '^(FAILED|ERROR) ' /tmp/pytest.log | head -20 | sed 's/^/::error title=pytest::/'
+          exit $status
       - name: Dependency audit
         run: |
           poetry export --with dev --without-hashes -f requirements.txt -o /tmp/requirements-audit.txt
