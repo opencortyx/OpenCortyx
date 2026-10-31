@@ -90,8 +90,9 @@ jobs:
           grep -E '^(FAILED|ERROR) ' /tmp/pytest.log | head -20 | sed 's/^/::error title=pytest::/'
           exit $status
       - name: Dependency audit
-        # Every package the lock pins, read from poetry.lock itself: `poetry export` cannot walk a
-        # dependency with a different constraint per Python version (fastembed's numpy). A package
+        # Every package the lock pins, read from poetry.lock itself: Poetry 1.8's `poetry export`
+        # cannot walk a dependency with a different constraint per Python version (fastembed's
+        # numpy), and every pin is audited whatever its markers. A package
         # pinned at two versions (one per platform) goes in a second file: pip-audit takes one each.
         run: |
           python - <<'PY'

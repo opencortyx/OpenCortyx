@@ -29,10 +29,12 @@ ENV TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/tessdata
 ARG INSTALL_RERANK=0
 
 # Poetry only resolves the lock file; it runs in a throwaway venv and is not part of the image.
+# Poetry 2 and its export plugin: Poetry 1.8's exporter cannot walk a dependency with a different
+# constraint per Python version (fastembed 0.9's numpy) and stops the build.
 COPY pyproject.toml poetry.lock ./
 RUN --mount=type=cache,target=/root/.cache/pip \
     python -m venv /opt/poetry && \
-    /opt/poetry/bin/pip install poetry==1.8.2 && \
+    /opt/poetry/bin/pip install poetry==2.5.1 poetry-plugin-export==1.10.1 && \
     /opt/poetry/bin/poetry export --with dev --without-hashes -f requirements.txt -o /tmp/requirements.txt && \
     rm -rf /opt/poetry && \
     pip install --upgrade pip setuptools && \
