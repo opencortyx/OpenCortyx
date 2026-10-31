@@ -155,9 +155,12 @@ DECLARED = [{"name": "Deliveries", "status": "declared", "keys": [
 
 
 @pytest.fixture
-def fake_repo(monkeypatch):
+def fake_repo(monkeypatch, tmp_path):
+    from opencortyx.core.config import settings
     from opencortyx.ingest.semistructured import ingest as walker_module
     repo = _FakeRepo()
+    # a Delta workspace writes its files under DATA_ROOT: the test's own folder, never /data
+    monkeypatch.setattr(settings, "DATA_ROOT", str(tmp_path))
     monkeypatch.setattr(walker_module, "_repo", repo)
     # the data store's path (a Delta workspace) writes the file's Attribute nodes with its own repo
     monkeypatch.setattr("opencortyx.core.substrate.NodeRepo", lambda: repo)
