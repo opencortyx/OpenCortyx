@@ -60,6 +60,14 @@ def check_redis() -> str:
 async def _probe_generation(label: str, gen: dict) -> str:
     base = (gen.get("base_url") or "").rstrip("/")
     provider, model, key = gen.get("provider"), gen.get("model_id"), gen.get("api_key")
+    from opencortyx.core.config import LOCAL_LLM_PROVIDERS
+    if str(provider or "").lower() in LOCAL_LLM_PROVIDERS:
+        # runs inside OpenCortyx (the built-in Qwen3-0.6B): no server to reach and no key
+        from opencortyx.core.inference import hf_hub
+        ready = hf_hub.is_downloaded(model)
+        _line(OK if ready else WARN, "llm", f"{label}: {model} (in-process, "
+                                            f"{'downloaded' if ready else 'downloads on first use'})")
+        return OK if ready else WARN
     if not base:
         _line(OK if key else FAIL, "llm", f"{label}: {provider} (hosted, key {'set' if key else 'MISSING'})")
         return OK if key else FAIL
@@ -89,8 +97,8 @@ async def check_llm() -> str:
         workspaces = (await db.execute(text(
             f"SELECT workspace_id, name FROM {V2_SCHEMA}.workspace ORDER BY created_at"))).all()
     if not workspaces:
-        _line(WARN, "llm", "no workspace yet: create the admin at the dashboard, then connect a model "
-                           "on the Models page")
+        _line(WARN, "llm", "no workspace yet: create the admin at the dashboard - its workspace starts "
+                           "with the built-in models")
         return WARN
     results = []
     for workspace_id, name in workspaces:
@@ -106,6 +114,10 @@ async def check_llm() -> str:
 
 async def check_embedding() -> str:
     from opencortyx.core.inference.embedding import embed_batch
+    if not await _default_rows("embedding") and not await _default_rows("generation"):
+        # a new installation before its admin exists: the workspace brings its embedder
+        _line(WARN, "embedding", "no workspace yet: create the admin at the dashboard")
+        return WARN
     try:
         vectors = await embed_batch(["opencortyx doctor probe"])
         dim = len(vectors[0]) if vectors and vectors[0] else 0
