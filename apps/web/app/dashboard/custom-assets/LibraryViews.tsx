@@ -4,6 +4,7 @@
 // Every card action from the old page is here (Run / Edit / Delete, approve / reject, companion
 // Run + Edit prompt & model); the dense built-in card body now opens from a row instead of always
 // being on screen.
+import { FULL_UI } from "@/lib/simple";
 import { useEffect, useState, type ReactNode } from "react";
 import {
   Network, Settings2, Code, Trash2, Edit2, Workflow, Activity, AlertCircle, ChevronRight, Play,
@@ -159,7 +160,8 @@ export function BuiltinList({ d, q }: { d: ExtractorDraft; q: string }) {
   const { proposals } = d;
   return (
     <div className="space-y-6">
-      {proposals.length > 0 && (
+      {/* decisions live in Review > Decisions; listed here too only in the full UI */}
+      {FULL_UI && proposals.length > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
           <div className="flex flex-wrap items-center gap-2 mb-1">
             <AlertCircle size={17} className="text-amber-600" />

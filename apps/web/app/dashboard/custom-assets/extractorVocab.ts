@@ -102,6 +102,10 @@ export const MECH_META: Record<string, { label: string; hint: string; icon: any 
 export const readsLabel = (ext: any): string => {
   const sel = ext?.source?.select;
   if (!ext?.source) return "Nothing (creates its own records)";
+  // read where the data lives: a type's records, or a file (and the field)
+  const data = ext.source.data;
+  if (data?.type) return data.column ? `${data.type} - ${data.column}` : `Each ${data.type}`;
+  if (data?.asset) return [data.asset, data.column || data.path].filter(Boolean).join(" - ");
   if (!sel || sel === "*") return "Any node (set in pipeline)";
   return Array.isArray(sel) ? sel.join(", ") : String(sel);
 };

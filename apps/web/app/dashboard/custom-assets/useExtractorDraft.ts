@@ -33,7 +33,8 @@ export function useExtractorDraft() {
   const [sourceMode, setSourceMode] = useState<"dependent"|"independent"|"data">("dependent");
   // `source.data`: input read from the data store - an asset (and a column or JSON path), or an entity type's records
   const [dataInput, setDataInput] = useState<{ asset: string; field: string; type: string }>({ asset: "", field: "", type: "" });
-  const dataSpec = () => dataInput.type.trim() ? { type: dataInput.type.trim() }
+  const dataSpec = () => dataInput.type.trim()
+    ? { type: dataInput.type.trim(), ...(dataInput.field.trim() ? { column: dataInput.field.trim() } : {}) }
     : { asset: dataInput.asset.trim(),
         ...(dataInput.field.trim().startsWith("$") ? { path: dataInput.field.trim() }
           : dataInput.field.trim() ? { column: dataInput.field.trim() } : {}) };

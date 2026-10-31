@@ -1,6 +1,6 @@
 "use client";
 
-import { SHOW_DEFAULT_PIPELINES } from "@/lib/simple";
+import { FULL_UI, SHOW_DEFAULT_PIPELINES } from "@/lib/simple";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { contextV2Api, Pipeline, SYSTEM_DEFAULT_PIPELINES_LIST } from "@/lib/api/contextV2";
@@ -84,12 +84,14 @@ export default function PipelinesDashboard() {
   return (
     <div className="max-w-7xl mx-auto pb-20">
       <PageHeader
-        title="Pipelines"
+        title={FULL_UI ? "Pipelines" : "Saved setups"}
         icon={GitBranch}
-        description="Design reusable extraction pipelines once, then assign them to any source from Ingestion. Every stage runs on top of a prior step's output — for both documents and structured data."
+        description={FULL_UI
+          ? "Design reusable extraction pipelines once, then assign them to any source from Ingestion. Every stage runs on top of a prior step's output — for both documents and structured data."
+          : "Mappings and extractors saved together, for Add data and scheduled syncs."}
         actions={
           <Button variant="primary" icon={Plus}
-            onClick={() => router.push("/dashboard/pipelines/new" as any)}>New Pipeline</Button>
+            onClick={() => router.push("/dashboard/pipelines/new" as any)}>{FULL_UI ? "New Pipeline" : "New setup"}</Button>
         }
       />
 

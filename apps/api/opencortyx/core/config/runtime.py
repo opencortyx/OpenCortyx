@@ -69,6 +69,7 @@ _DEFAULTS = {
     "structured_default_max_rows": 1000,    # 0 = every row
     "knowledge_detect": True,          # after ingestion: propose entity types, keys and links (metadata)
     "knowledge_publish": False,        # ...and publish the confident ones to the graph (Mode A.1)
+    "name_match_threshold": 0.85,      # named things of one type whose names are this alike: SAME_AS
     "defer_extraction": True,
     # ── Chunking (read when a file is read or embedded; files already in keep theirs) ─────────
     "chunk_window_chars": 800,         # longest paragraph kept as one node / text embedded as one vector
@@ -299,6 +300,11 @@ SCHEMA: list[dict[str, Any]] = [
      "help": "Also make the confident detected entities and their links graph nodes and edges, resolved "
      "against what the graph already holds. Off by default: the records stay in their tables and "
      "the graph holds only the knowledge a mapping or an extractor declares."},
+    {"key": "name_match_threshold", "label": "Name match", "kind": "float", "min": 0.5, "max": 1.0,
+     "group": "Structured",
+     "help": "How alike two names of one type must be to be linked as the same thing (SAME_AS): "
+     "\"Kristin Hannah\" and \"Kristen Hannah\". Exact names, ignoring case, punctuation and articles, are "
+     "always one node. 1.0 links only exact names."},
     {"key": "structured_default_max_rows", "label": "Default rows sampled per table", "kind": "int",
      "min": 0, "max": 100000000, "group": "Structured",
      "help": "How many rows become nodes when no pipeline says otherwise. 0 = every row. A sample "
@@ -515,6 +521,9 @@ def structured_default_max_rows() -> int:
 def defer_extraction() -> bool: return bool(get("defer_extraction"))
 def knowledge_detect() -> bool: return bool(get("knowledge_detect"))
 def knowledge_publish() -> bool: return bool(get("knowledge_publish"))
+def name_match_threshold() -> float:
+    v = get("name_match_threshold")
+    return max(0.5, min(1.0, float(0.85 if v is None else v)))
 def chunk_window_chars() -> int: return max(200, min(8000, int(get("chunk_window_chars") or 800)))
 def chunk_overlap_chars() -> int:
     return max(0, min(chunk_window_chars() // 2, int(get("chunk_overlap_chars") or 0)))

@@ -6,6 +6,8 @@ import PageHeader from "@/components/layout/PageHeader";
 import Button from "@/components/ui/Button";
 import { useExtractorDraft, type TabId, type ExtractorDraft } from "./useExtractorDraft";
 import ExtractorStudio from "./ExtractorStudio";
+import SimpleExtractor, { fitsSimple } from "./SimpleExtractor";
+import { FULL_UI } from "@/lib/simple";
 import RelationshipStudio from "./RelationshipStudio";
 import { CustomList, RelationshipList, BuiltinList } from "./LibraryViews";
 
@@ -32,6 +34,9 @@ function Notice({ d }: { d: ExtractorDraft }) {
 export default function DeclarativeExtractionStudio() {
   const d = useExtractorDraft();
   const [q, setQ] = useState("");
+  // The short form unless the extractor needs more than it shows (decided when the editor opens).
+  const [full, setFull] = useState(FULL_UI);
+  useEffect(() => { if (d.isAdding) setFull(FULL_UI || !fitsSimple(d)); }, [d.isAdding]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const counts = {
     extractions: d.savedExtractions.filter((e: any) => !e.name.startsWith("builtin:") && !String(e.mechanism?.ref || "").startsWith("relate.")).length,
@@ -54,9 +59,9 @@ export default function DeclarativeExtractionStudio() {
   return (
     <div className={`${editing ? "max-w-[1600px]" : "max-w-6xl"} mx-auto ${editing ? "" : "pb-32"}`}>
       <PageHeader
-        title="Custom Extractors"
+        title="Extractors"
         icon={SlidersHorizontal}
-        description="Define extractors that turn existing nodes into new nodes, edges, and attributes — declaratively, no code."
+        description="Pull out what you need from documents and records."
         actions={!editing ? newAction : undefined}
       />
 
@@ -70,7 +75,7 @@ export default function DeclarativeExtractionStudio() {
                 className={`shrink-0 whitespace-nowrap px-3.5 py-2.5 text-sm font-semibold border-b-2 -mb-px transition-colors flex items-center gap-2 ${on ? "border-primary text-stone-900" : "border-transparent text-stone-500 hover:text-stone-800"}`}>
                 <t.icon size={15} className={on ? "text-primary" : ""} /> {t.label}
                 <span className={`text-[11px] font-semibold tabular-nums rounded-full px-1.5 ${on ? "bg-primary/10 text-primary" : "bg-stone-100 text-stone-500"}`}>{counts[t.id]}</span>
-                {t.id === "built-in" && d.proposals.length > 0 && (
+                {t.id === "built-in" && FULL_UI && d.proposals.length > 0 && (
                   <span className="text-[11px] font-semibold rounded-full px-1.5 bg-amber-100 text-amber-800">{d.proposals.length} to review</span>
                 )}
               </button>
@@ -86,7 +91,9 @@ export default function DeclarativeExtractionStudio() {
         )}
       </div>
 
-      {d.activeTab === "extractions" && (d.isAdding ? <ExtractorStudio d={d} /> : <CustomList d={d} q={q} />)}
+      {d.activeTab === "extractions" && (d.isAdding
+        ? (full ? <ExtractorStudio d={d} /> : <SimpleExtractor d={d} onFull={() => setFull(true)} />)
+        : <CustomList d={d} q={q} />)}
       {d.activeTab === "relationship" && (d.isAddingRel ? <RelationshipStudio d={d} /> : <RelationshipList d={d} q={q} />)}
       {/* A built-in is edited by the SAME editor as a custom one — no second, cut-down built-in form. */}
       {d.activeTab === "built-in" && (d.isAdding ? <ExtractorStudio d={d} /> : <BuiltinList d={d} q={q} />)}

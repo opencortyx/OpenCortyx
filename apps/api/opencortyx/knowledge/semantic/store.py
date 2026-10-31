@@ -238,6 +238,12 @@ def with_version(payload: dict, knowledge: dict) -> dict:
     return payload
 
 
+def _path(p) -> str:
+    """A record path as bindings store it: "rows", "row" and "$" are the record itself ("")."""
+    p = str(p or "").strip()
+    return "" if p.lower() in ("rows", "row", "$") else p
+
+
 async def save_detected(workspace_id, layer: Layer) -> dict:
     """Write what the Detector found: one mapping per type and record shape (status `auto` when
     confident, `draft` when not), the types and relationship types in the type registry, each type's
@@ -262,6 +268,11 @@ async def save_detected(workspace_id, layer: Layer) -> dict:
                 # An older detected copy under the same name: kept, it was read first and its stale
                 # label ("contact_email") named the type's records instead of the current one.
                 await db.delete(m)
+        # Record sources a person described: what detection finds there is theirs already, under the
+        # names they gave (re-detected under the data's own words it was a second, duplicate type).
+        covered = {(str(a.get("id")), _path(e.get("path")))
+                   for m in existing.values() if ((m.payload or {}).get("knowledge") or {}).get("curated")
+                   for e in (m.payload["knowledge"].get("entities") or []) for a in e.get("assets") or []}
         names: set = set()
         for t in layer.types:
             shapes: dict = {}
@@ -269,6 +280,9 @@ async def save_detected(workspace_id, layer: Layer) -> dict:
                 shapes.setdefault((b.kind, b.path), []).append(b)
             for (kind, path), bindings in shapes.items():
                 name = f"{t.name}: {path or 'rows'}" + (f" ({kind})" if len({k for k, _ in shapes}) > 1 else "")
+                if all((str(b.asset_id), _path(b.path)) in covered for b in bindings):
+                    kept += 1
+                    continue
                 names.add(name)
                 m = existing.get(name)
                 if m is not None and ((m.payload or {}).get("knowledge") or {}).get("curated"):
@@ -364,7 +378,9 @@ async def choose(workspace_id, *, asset_ids=(), materialize: bool | None = None)
             ents = []
             hit = False
             for e in k.get("entities") or []:
-                if materialize is not None and {str(a.get("id")) for a in e.get("assets") or []} & wanted                         and bool(e.get("materialize")) != materialize:
+                # a mapping a person curated keeps its own choice; records without an identifier (events)
+                # are rows, never nodes
+                if materialize is not None and {str(a.get("id")) for a in e.get("assets") or []} & wanted                         and bool(e.get("materialize")) != materialize and not k.get("curated")                         and (e.get("keys") or not materialize):
                     e = {**e, "materialize": materialize}
                     hit = True
                     changed.append(str(e.get("type")))
@@ -402,7 +418,16 @@ def redetected(mapping, layer: Layer) -> dict | None:
 
 
 def publish_changed(before: dict, after: dict) -> bool:
-    """Whether any type's "publish to graph" changed between two versions of a mapping's knowledge."""
-    old = {e.get("type"): bool(e.get("materialize")) for e in (before or {}).get("entities") or []}
-    return any(bool(e.get("materialize")) != old.get(e.get("type"), False)
-               for e in (after or {}).get("entities") or [])
+    """Whether what a mapping puts in the graph changed between two versions of its knowledge: which
+    types are published, and for each published type its name, identifier, name field, record path
+    and status - or the links. Renaming a published type, or naming its records by another field,
+    changes nodes already written."""
+    def published(k: dict):
+        ents = sorted((str(e.get("type")), tuple(e.get("keys") or []), str(e.get("label") or ""),
+                       str(e.get("path") or ""), str(e.get("status") or ""))
+                      for e in (k or {}).get("entities") or [] if e.get("materialize"))
+        links = sorted((str(r.get("from_type")), str(r.get("from_field")), str(r.get("to_type")),
+                        str(r.get("to_field")), str(r.get("status") or ""))
+                       for r in (k or {}).get("relationships") or [])
+        return ents, links
+    return published(before) != published(after)

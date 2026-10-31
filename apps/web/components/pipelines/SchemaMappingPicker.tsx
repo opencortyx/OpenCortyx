@@ -79,12 +79,12 @@ export default function SchemaMappingPicker({
               ? "No saved mappings yet — author one in the engine"
               : remaining.length === 0
                 ? "All saved mappings are bound"
-                : value.length === 0 ? emptyHint : "+ bind another mapping…"}
+                : value.length === 0 ? emptyHint : "+ add another mapping…"}
           </option>
           {remaining.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
         </select>
         <a href={engineHref} className={`text-[11px] font-semibold ${link} hover:underline whitespace-nowrap`}>
-          Open engine ↗
+          Edit mappings ↗
         </a>
       </div>
 
@@ -92,15 +92,13 @@ export default function SchemaMappingPicker({
         <p className="text-[11px] text-emerald-600 flex items-start gap-1.5">
           <CheckCircle2 size={12} className="mt-0.5 shrink-0" />
           <span>
-            {value.length} mapping{value.length === 1 ? "" : "s"} bound — the pipeline reads its shape from
-            {value.length === 1 ? " it" : " them"} at ingest, so edits in the engine take effect without
-            re-saving. {boundHint}
+            {value.length} mapping{value.length === 1 ? "" : "s"} used; edits to {value.length === 1 ? "it" : "them"} apply on the next run. {boundHint}
           </span>
         </p>
       ) : (
         <p className="text-[11px] text-stone-400 flex items-start gap-1.5">
           <Plus size={12} className="mt-0.5 shrink-0" />
-          <span>Bind as many mappings as this pipeline needs — one per table or shape.</span>
+          <span>One per kind of table or record.</span>
         </p>
       )}
     </div>

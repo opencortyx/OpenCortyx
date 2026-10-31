@@ -20,8 +20,12 @@ import type { PipelineStage } from "./model";
 export interface StageOutput { nodes: { type: string; attrs: string[] }[]; edges: string[] }
 export interface SourceOption { value: string; label: string }
 
-export const stageName = (t?: string, fallback?: string) =>
-  fallback || String(t || "step").replace(/_/g, " ");
+export const stageName = (t?: string, fallback?: string) => {
+  if (fallback) return fallback;
+  const s = String(t || "step").replace(/^builtin:/, "").replace(/^(doc|py)\./, "")
+    .replace(/^relate\./, "relate ").replace(/[_.]/g, " ").trim();
+  return s.charAt(0).toUpperCase() + s.slice(1);
+};
 
 const field =
   "w-full px-2.5 py-1.5 rounded-md border border-stone-200 bg-white text-[12.5px] text-stone-800 " +

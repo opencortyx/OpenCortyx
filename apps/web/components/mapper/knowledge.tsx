@@ -37,8 +37,8 @@ const fieldsText = (f: Record<string, string>) => Object.entries(f || {}).map(([
 const parseFields = (t: string) => Object.fromEntries(t.split("\n").map((l) => l.trim()).filter(Boolean)
   .map((l) => { const [p, s] = l.split("=").map((x) => x.trim()); return [p, s || p]; }));
 
-export default function KnowledgePanel({ mappingId, payload, onSaved }: {
-  mappingId: string; payload: any; onSaved: (rec: any) => void;
+export default function KnowledgePanel({ mappingId, payload, onSaved, redetect: canRedetect = true }: {
+  mappingId: string; payload: any; onSaved: (rec: any) => void; redetect?: boolean;
 }) {
   const [k, setK] = useState<MappingKnowledge>({ entities: [], relationships: [] });
   const [dirty, setDirty] = useState(false);
@@ -86,21 +86,22 @@ export default function KnowledgePanel({ mappingId, payload, onSaved }: {
   };
 
   return (
-    <div className="space-y-4 p-3.5">
+    <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <p className="flex-1 min-w-[260px] text-[12.5px] text-stone-500">
-          What the data means: entity types, the field that identifies each record, and how types refer to each other.
-          Records stay in their tables; questions read them through these types. {k.version ? `Version ${k.version}${k.curated ? " · edited" : " · detected"}.` : ""}
-        </p>
+        <span className="flex-1 text-xs text-stone-400">
+          {k.version ? `Version ${k.version}${k.curated ? " · edited" : " · detected"}` : ""}
+        </span>
         <Button variant="secondary" size="sm" icon={ShieldCheck} busy={busy === "validate"} disabled={dirty} onClick={validate}
           title={dirty ? "Save first" : "Check identifiers, references and joins against the data"}>Validate</Button>
         <Button variant="secondary" size="sm" icon={Eye} busy={busy === "preview"} disabled={dirty} onClick={showPreview}>Preview</Button>
         <Button variant="secondary" size="sm" icon={History} busy={busy === "history"} onClick={showHistory}>Versions</Button>
-        <Button variant="secondary" size="sm" icon={RefreshCw} busy={busy === "redetect"} disabled={dirty} onClick={redetect}
-          title={dirty ? "Save or discard your edits first" : "Read this mapping's data again and take what the Detector finds now"}>
-          Re-detect this mapping
-        </Button>
-        <Button variant="primary" size="sm" icon={Save} busy={busy === "save"} disabled={!dirty} onClick={save}>Save knowledge</Button>
+        {canRedetect && (
+          <Button variant="secondary" size="sm" icon={RefreshCw} busy={busy === "redetect"} disabled={dirty} onClick={redetect}
+            title={dirty ? "Save or discard your edits first" : "Read this mapping's data again and take what the Detector finds now"}>
+            Re-detect
+          </Button>
+        )}
+        <Button variant="primary" size="sm" icon={Save} busy={busy === "save"} disabled={!dirty} onClick={save}>Save</Button>
       </div>
       {msg && <p className={`text-sm ${msg.ok ? "text-emerald-700" : "text-red-600"}`}>{msg.text}</p>}
 

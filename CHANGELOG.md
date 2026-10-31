@@ -127,6 +127,24 @@ own lake tables are read in place, never copied.
   database. Types shows the types in this workspace's data (the built-in catalogue on request);
   Pipelines lists the pipelines people built. Nothing is removed: every page keeps its address, each
   of these is one entry in `apps/web/lib/simple.ts`, and `NEXT_PUBLIC_FULL_UI=1` shows everything.
+- **Mappings read as sentences.** A table or JSON mapping opens on "Each [row] in these [N files] is a
+  [Customer], identified by [customer_id] and called by [name]": every choice is a dropdown of what the
+  data supports (a field is offered as an identifier only if it is filled and unique in every file the
+  type reads), with the files as chips, a preview of real rows, links as sentences and one Save that
+  checks the result. The rule editor is under Advanced, now one card with tabs (Rules, Graph, Fields &
+  links, Check) instead of five stacked panels; document mappings use the same card with Elements,
+  Chunking and Document links as tabs. Check picks a file instead of asking for an asset id.
+- **Extractors open on a short form**: a name, what it reads, the fields to pull out (each a name and
+  what to look for), whether each find becomes a record, a model and a sample to try it on. It writes
+  the same extractor as the full editor, which is one click away and opens for anything the form
+  cannot show (Python, patterns, one prompt, conditions, built-ins).
+- **Scheduled syncs is a short form**: a connection, what to read it with ("Automatic" or a saved
+  setup), its folders, how often (on demand, hourly, daily, weekly, monthly, a cron, or as it changes)
+  and a name. Several sources, tables, attach rules and the rest are under More options. The page's
+  tiles and file-type list and the built-in pipelines are shown only with `FULL_UI`.
+- **Pipelines are saved setups.** Add data's Custom section saves its mappings and extractors as a
+  setup (a pipeline per kind of file) to reuse in Add data and scheduled syncs; Customize and the
+  pipelines page call them saved setups.
 - **Add data is drop, choose, Add.** Two choices for every kind of file: "Extract entities and
   relationships" and "Add the whole data to the graph". A folded Custom section holds a pipeline, a
   mapping that shapes the graph (tables and JSON), extractors (documents) and tags. The per-file

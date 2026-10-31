@@ -27,6 +27,15 @@ def words(text: str) -> list[str]:
     return _WORD.findall(str(text or "").lower().replace("_", " "))
 
 
+def names_value(qtext: str, value) -> bool:
+    """Whether a question names a column's value. `qtext` is the question's words joined, padded
+    with a space on each side. The value's words must appear together as whole words, and at least
+    one of them must be longer than a letter: a value of one-letter words ("a", "b") is, in running
+    text, an article or an initial, not the value. The one rule for every planner."""
+    vw = words(value)
+    return bool(vw) and any(len(w) > 1 for w in vw) and f" {' '.join(vw)} " in qtext
+
+
 @dataclass
 class Column:
     name: str
@@ -287,7 +296,7 @@ def score_tables(schema: Schema, question: str) -> list[tuple[float, Table]]:
                 s += 1.0
             s += 0.3 * len(q & set(words(c.description)))
             for v in c.value_set:
-                if f" {' '.join(words(v))} " in qtext and words(v):
+                if names_value(qtext, v):
                     s += 2.5
         if s > 0:
             ranked.append((s, t))

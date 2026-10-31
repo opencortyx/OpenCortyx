@@ -142,11 +142,31 @@ async def add_verified_query(workspace_id, *, question: str, sql: str, verified_
                             properties={"question": question, "sql": sql, "verified_by": verified_by,
                                         "verified_at": datetime.now(timezone.utc).isoformat(),
                                         "result_checksum": checksum, "assets": used}, author=author)
-    attrs = []
-    for v in used:
-        attrs += await _attributes(workspace_id, v, sql)
-    await _link(workspace_id, nid, attrs, "USES")
+    await link_verified_query(workspace_id, nid, used, sql, verified_by)
     return {"id": str(nid), "rows": len(rows), "result_checksum": checksum}
+
+
+async def link_verified_query(workspace_id, nid, used: list, sql: str, verified_by: Optional[str]) -> None:
+    """A verified query USES the attributes its SQL names - or, naming none ("count(*)"), the tables
+    it reads - and is VERIFIED by the person who checked it. Without them it was a node on its own,
+    drawn beside the workspace instead of under the data it is about."""
+    from opencortyx.retrieval.l2_data.schema import load
+    schema = await load(workspace_id)
+    targets = []
+    for v in used:
+        attrs = await _attributes(workspace_id, v, sql)
+        t = schema.tables.get(v)
+        targets += attrs or ([uuid.UUID(str(a)) for a in ([t.asset_id] if t.asset_id else t.assets)] if t else [])
+    await _link(workspace_id, nid, targets, "USES")
+    if verified_by:
+        from opencortyx.knowledge import actors
+        try:
+            who = await actors.resolve(workspace_id, actor_id=verified_by, actor_type="user")
+            if who.user is not None:
+                uid = await actors.ensure(workspace_id, who.user)
+                await _link(workspace_id, uid, [nid], "VERIFIED")
+        except Exception:                                    # noqa: BLE001 - the link is a courtesy
+            pass
 
 
 async def list_definitions(workspace_id) -> dict:

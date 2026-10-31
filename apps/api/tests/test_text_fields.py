@@ -124,6 +124,22 @@ def test_a_published_record_mentions_what_its_text_names_else_its_asset():
     assert str(one.holder) == asset and one.unit_kind == "record", "unpublished: the asset holds the mention"
 
 
+def test_an_event_mentions_through_the_record_it_belongs_to_and_each_row_is_its_own_unit():
+    from opencortyx.knowledge.semantic import text_fields
+    from opencortyx.knowledge.semantic.publish import entity_id
+    from opencortyx.knowledge.semantic.store import LinkType
+    t = ObjectType(name="Turn", keys=[], kind="event")
+    rows = [{"content": "I met Sarah from Google.", "session": "s1", "_assets": "chats.json"},
+            {"content": "Then I flew to Paris.", "session": "s1", "_assets": "chats.json"},
+            {"content": "No session.", "session": None, "_assets": "chats.json"}]
+    asset = str(uuid.uuid4())
+    up = LinkType(name="SESSION", source="Turn", source_prop="session", target="Session", target_prop="id")
+    a, b, c = text_fields._inputs(WS, t, rows, ["content"], False, {"chats.json": asset}, "record", up)
+    assert str(a.holder) == str(b.holder) == entity_id(WS, "Session", "s1"), "the session holds its turns' mentions"
+    assert str(c.holder) == asset, "no session: the file holds it"
+    assert len({a.unit_key, b.unit_key, c.unit_key}) == 3 and all(a.unit_key for a in (a, b, c)), "each row cited"
+
+
 # ── mentions resolved by name ─────────────────────────────────────────────────────────────────
 
 class _Repo:

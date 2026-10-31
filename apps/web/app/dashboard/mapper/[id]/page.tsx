@@ -35,13 +35,15 @@ import {
 } from "@/components/mapper/model";
 import {
   ChunkingPanel, DOC_ELEMENTS, DocSource, DocumentMetadataPanel, EdgeForm, ElementsPanel, JsonSource,
-  KindLegend, Label, NodeForm, PARADIGM_META, Panel, RuleList, TableSource, UploadBar,
+  Label, NodeForm, PARADIGM_META, Panel, RuleList, TableSource, UploadBar,
   type ExistingType,
 } from "@/components/mapper/panels";
 import ConformancePanel from "@/components/mapper/conformance";
 import KnowledgePanel from "@/components/mapper/knowledge";
 import { SqlConnectBar, SqlSchemaSource, type SqlOrigin } from "@/components/mapper/sqlsource";
 import DeclaredCanvas from "@/components/mapper/canvas";
+import SimpleMapping from "@/components/mapper/simple";
+import { FULL_UI } from "@/lib/simple";
 
 const READERS = ["unstructured.llm", "unstructured.ner", "unstructured.regex", "unstructured.keyword",
   "unstructured.dictionary", "unstructured.attributes", "unstructured.generative_llm", "unstructured.python"];
@@ -80,6 +82,9 @@ export default function MapperBuilderPage() {
   const [rec, setRec] = useState<any>(null);
   const [ed, setEd] = useState<EditorModel>(emptyEditor());
   const [paradigm, setParadigm] = useState<Paradigm>("semistructured");
+  const [tab, setTab] = useState<"elements" | "chunking" | "links" | "rules" | "graph" | "fields" | "check">("rules");
+  // a document mapping opens on what it reads; tables and JSON on their rules
+  useEffect(() => { setTab(paradigm === "unstructured" ? "elements" : "rules"); }, [paradigm]);
   const [name, setName] = useState("");
   const [sample, setSample] = useState<any>(null);
   const [docs, setDocs] = useState<{ id: string; name: string }[]>([]);
@@ -415,162 +420,193 @@ export default function MapperBuilderPage() {
   const derived = !!ed.__derived && !ed.__touched;
   const cards = ed.__structures || 0;
 
-  return (
-    <div className="p-6 max-w-[1500px] mx-auto">
-      <PageHeader
-        title={name || "Mapping"}
-        icon={meta.icon}
-        description={`${meta.label} — ${meta.sub}. Declare the nodes and edges this source becomes.`}
-        actions={
-          <div className="flex items-center gap-2">
-            <Link href="/dashboard/mapper">
-              <Button variant="ghost" size="sm" icon={ArrowLeft}>All mappings</Button>
-            </Link>
-            <Button variant="secondary" size="sm" icon={Play} busy={running} onClick={runSample}>
-              Run sample
-            </Button>
-            <Button variant="primary" size="sm" icon={Save} busy={saving} onClick={save}
-              disabled={!dirty && !!rec}>
-              {dirty ? "Save changes" : "Saved"}
-            </Button>
+  // Tables and JSON open on the plain-sentence editor; the rule editor is folded under Advanced.
+  // Documents keep the rule editor (their choices are elements and chunking, not identifiers).
+  const simple = paradigm !== "unstructured" && !FULL_UI;
+  const handActions = (
+    <>
+      <Button variant="secondary" size="sm" icon={Play} busy={running} onClick={runSample}>
+        Run sample
+      </Button>
+      <Button variant="primary" size="sm" icon={Save} busy={saving} onClick={save}
+        disabled={!dirty && !!rec}>
+        {dirty ? "Save changes" : "Saved"}
+      </Button>
+    </>
+  );
+
+  const picked = !!(currentNode || currentEdge);
+  const nodeCount = ed.keyRows.filter((r) => r.kind === "node").length;
+  const entityCount = (rec?.payload as any)?.knowledge?.entities?.length || 0;
+  const doc = paradigm === "unstructured";
+  const TABS: { key: typeof tab; label: string }[] = [
+    ...(doc ? [
+      { key: "elements" as const, label: `Elements (${DOC_ELEMENTS.filter((e) => elementOn(e.key)).length}/${DOC_ELEMENTS.length})` },
+      { key: "chunking" as const, label: `Chunking (${chunkCount})` },
+      { key: "links" as const, label: "Document links" },
+    ] : []),
+    { key: "rules", label: `Rules (${nodeCount + ed.edgeRules.length})` },
+    { key: "graph", label: "Graph" },
+    ...(!doc || entityCount ? [{ key: "fields" as const, label: `Fields & links (${entityCount})` }] : []),
+    { key: "check", label: "Check" },
+  ];
+
+  const handEditor = (
+    <>
+      <div className="bg-white border border-stone-200 rounded-xl">
+        <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-stone-200">
+          <input value={name} onChange={(e) => { setName(e.target.value); setDirty(true); }}
+            className="px-2.5 py-1.5 rounded-md border border-stone-200 bg-white text-sm w-64
+                       focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40"
+            aria-label="Mapping name" />
+          <nav className="flex gap-1" role="tablist">
+            {TABS.map((t) => (
+              <button key={t.key} role="tab" aria-selected={tab === t.key} onClick={() => setTab(t.key)}
+                className={`px-3 py-1.5 rounded-md text-sm ${tab === t.key ? "bg-stone-900 text-white" : "text-stone-600 hover:bg-stone-100"}`}>
+                {t.label}
+              </button>
+            ))}
+          </nav>
+          {simple && <div className="ml-auto flex items-center gap-2">{handActions}</div>}
+        </div>
+        <div className="p-3">
+        {err && (
+          <div className="mb-4 flex items-start gap-2 px-3.5 py-3 rounded-xl border border-red-200 bg-red-50 text-sm text-red-800">
+            <AlertTriangle size={16} className="mt-0.5 shrink-0" /><div>{err}</div>
           </div>
-        }
-      />
+        )}
+        {ok && (
+          <div className="mb-4 flex items-start gap-2 px-3.5 py-3 rounded-xl border border-lime-300 bg-lime-50 text-sm text-lime-800">
+            <CheckCircle2 size={16} className="mt-0.5 shrink-0" /><div>{ok}</div>
+          </div>
+        )}
+        {derived && (
+          <div className="mb-4 px-3.5 py-3 rounded-xl border border-amber-300 bg-amber-50 text-[12.5px] text-amber-900">
+            <b className="font-semibold">These rules were derived from the compiled mapping.</b>{" "}
+            {cards > 1
+              ? <>It was stored as <b>{cards} structure cards</b>, shown here merged into one. Nothing changes until you
+                 save — and saving writes the merged card, which can differ from the {cards} it replaces.</>
+              : <>Nothing changes until you save.</>}
+          </div>
+        )}
 
-      <div className="flex flex-wrap items-center gap-3 mb-4">
-        <input value={name} onChange={(e) => { setName(e.target.value); setDirty(true); }}
-          className="px-3 py-2 rounded-lg border border-stone-200 bg-white text-sm w-80
-                     focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40"
-          aria-label="Mapping name" />
-        <span className="text-[12px] text-stone-500">
-          {meta.label} · {ed.keyRows.filter((r) => r.kind === "node").length} node rules · {ed.edgeRules.length} edge rules
-        </span>
-      </div>
-
-      {err && (
-        <div className="mb-4 flex items-start gap-2 px-3.5 py-3 rounded-xl border border-red-200 bg-red-50 text-sm text-red-800">
-          <AlertTriangle size={16} className="mt-0.5 shrink-0" /><div>{err}</div>
-        </div>
-      )}
-      {ok && (
-        <div className="mb-4 flex items-start gap-2 px-3.5 py-3 rounded-xl border border-lime-300 bg-lime-50 text-sm text-lime-800">
-          <CheckCircle2 size={16} className="mt-0.5 shrink-0" /><div>{ok}</div>
-        </div>
-      )}
-      {derived && (
-        <div className="mb-4 px-3.5 py-3 rounded-xl border border-amber-300 bg-amber-50 text-[12.5px] text-amber-900">
-          <b className="font-semibold">These rules were derived from the compiled mapping.</b>{" "}
-          {cards > 1
-            ? <>It was stored as <b>{cards} structure cards</b>, shown here merged into one. Nothing changes until you
-               save — and saving writes the merged card, which can differ from the {cards} it replaces.</>
-            : <>Nothing changes until you save.</>}
-        </div>
-      )}
-
-      {paradigm === "unstructured" && (
-        <div className="space-y-4 mb-4">
-          <Panel title="Extractable document elements & model assignment"
-                 count={`${DOC_ELEMENTS.filter((e) => elementOn(e.key)).length} / ${DOC_ELEMENTS.length} on`}>
-            <p className="px-3.5 pt-3 text-[12.5px] text-stone-500">
-              Turn each element on or off and see the model that reads it. The choices come from your Model Registry.
-            </p>
+          {tab === "elements" && (
             <ElementsPanel state={elements} models={models}
               onToggle={(k) => patchEditor({ elements: { ...elements, [k]: !elementOn(k) } })} />
-          </Panel>
-          <Panel title="Chunking & reading rules" count={`→ ${chunkCount} chunks`}>
+          )}
+          {tab === "chunking" && (
             <ChunkingPanel cfg={chunk} sample={chunkSample}
               onCfg={(c) => patchEditor({ chunking: { ...chunk, ...c } })}
               onSample={setChunkSample} />
-          </Panel>
-          <Panel title="Document metadata & links"
-                 count={ed.metadata?.header_references === false ? "links off" : "links on"}>
+          )}
+          {tab === "links" && (
             <DocumentMetadataPanel rules={ed.metadata || {}} onRules={(r) => patchEditor({ metadata: r })} />
-          </Panel>
-        </div>
-      )}
-
-      <div className="mb-4"><KindLegend paradigm={paradigm} /></div>
-
-      <div className="grid xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,1.15fr)] lg:grid-cols-2 gap-4 items-start">
-        <Panel title={paradigm === "structured" ? "Source tables" : paradigm === "unstructured" ? "Parsed document" : "Source sample"}
-               count={sample ? undefined : "no sample"}>
-          {paradigm === "structured" && sqlTables ? (
-            <SqlSchemaSource tables={sqlTables} source={sqlSource} proposed={ed.keyRows.length > 0}
-              onReconnect={() => { setSqlTables(null); setSqlSource(""); setSqlOrigin(null); }}
-              onPropose={proposeFromSchema} />
-          ) : !sample ? (
-            <p className="px-3.5 py-6 text-sm text-stone-500">
-              {paradigm === "structured"
-                ? "No source yet. Connect a database below to read its real keys, or upload a CSV."
-                : "No sample loaded. Upload one below to see what this mapping produces."}
-            </p>
-          ) : paradigm === "structured" ? <TableSource tables={sample} />
-            : paradigm === "unstructured" ? <DocSource doc={sample} elementOn={(k) => elementOn(kindForBlock(k))} />
-            : <JsonSource data={sample} />}
-          {paradigm === "structured" && !sqlTables && (
-            <SqlConnectBar onTables={(t, label, origin) => { setSqlTables(t); setSqlSource(label); setSqlOrigin(origin); }} />
           )}
-          {!(paradigm === "structured" && sqlTables) && (
-            <UploadBar paradigm={paradigm} docs={docs} pick={pick} onPick={setPick}
-              onFile={onFile} msg={uploadMsg} onPropose={propose} />
-          )}
-        </Panel>
+          {tab === "rules" && (
+          <div className={`grid gap-4 items-start lg:grid-cols-2 ${picked ? "xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,1.15fr)]" : ""}`}>
+            <Panel title={paradigm === "structured" ? "Source tables" : paradigm === "unstructured" ? "Parsed document" : "Source sample"}
+                   count={sample ? undefined : "no sample"}>
+              {paradigm === "structured" && sqlTables ? (
+                <SqlSchemaSource tables={sqlTables} source={sqlSource} proposed={ed.keyRows.length > 0}
+                  onReconnect={() => { setSqlTables(null); setSqlSource(""); setSqlOrigin(null); }}
+                  onPropose={proposeFromSchema} />
+              ) : !sample ? (
+                <p className="px-3.5 py-6 text-sm text-stone-500">
+                  {paradigm === "structured"
+                    ? "No source yet. Connect a database below to read its real keys, or upload a CSV."
+                    : "No sample loaded. Upload one below to see what this mapping produces."}
+                </p>
+              ) : paradigm === "structured" ? <TableSource tables={sample} />
+                : paradigm === "unstructured" ? <DocSource doc={sample} elementOn={(k) => elementOn(kindForBlock(k))} />
+                : <JsonSource data={sample} />}
+              {paradigm === "structured" && !sqlTables && (
+                <SqlConnectBar onTables={(t, label, origin) => { setSqlTables(t); setSqlSource(label); setSqlOrigin(origin); }} />
+              )}
+              {!(paradigm === "structured" && sqlTables) && (
+                <UploadBar paradigm={paradigm} docs={docs} pick={pick} onPick={setPick}
+                  onFile={onFile} msg={uploadMsg} onPropose={propose} />
+              )}
+            </Panel>
 
-        <Panel title="Rules" count={`${nodeIndexes.length} nodes, ${ed.edgeRules.length} edges`}>
-          <RuleList rows={ed.keyRows} edges={ed.edgeRules} sel={sel} onSelect={setSel} disabledFor={disabledFor} />
-          <div className="flex gap-2 px-3.5 py-3 border-t border-stone-200 bg-stone-50/70">
-            <Button variant="secondary" size="sm" icon={Plus} onClick={addNode}>Add node</Button>
-            <Button variant="secondary" size="sm" icon={Plus} onClick={addEdge}>Add edge</Button>
+            <Panel title="Rules" count={`${nodeIndexes.length} nodes, ${ed.edgeRules.length} edges`}>
+              <RuleList rows={ed.keyRows} edges={ed.edgeRules} sel={sel} onSelect={setSel} disabledFor={disabledFor} />
+              <div className="flex gap-2 px-3.5 py-3 border-t border-stone-200 bg-stone-50/70">
+                <Button variant="secondary" size="sm" icon={Plus} onClick={addNode}>Add node</Button>
+                <Button variant="secondary" size="sm" icon={Plus} onClick={addEdge}>Add edge</Button>
+              </div>
+            </Panel>
+
+            {picked && (
+            <section className="bg-white border border-stone-300 rounded-xl overflow-hidden shadow-sm">
+              <header className="flex items-center gap-2 px-3.5 py-2.5 border-b border-stone-200 bg-stone-50/70">
+                <h2 className="text-[11px] font-semibold uppercase tracking-wider text-stone-600">
+                  {sel.kind === "node" ? "Edit node" : "Edit edge"}
+                </h2>
+                <span className="ml-auto text-[11px] text-stone-500">{sel.kind} rule</span>
+              </header>
+              {currentNode ? (
+                <NodeForm row={currentNode} rows={ed.keyRows} paradigm={paradigm} sample={nodeSample}
+                  paths={paths} readers={paradigm === "unstructured" ? READERS : undefined}
+                  disabledNote={disabledFor(currentNode)
+                    ? `${currentNode.node_type} produces nothing right now — ${disabledFor(currentNode)}.`
+                    : null}
+                  onPatch={(p, a) => patchRow(sel.index, p, a)}
+                  onDelete={() => removeNode(sel.index)} />
+              ) : currentEdge ? (
+                <EdgeForm edge={currentEdge} rows={ed.keyRows} paradigm={paradigm} sample={sample} existing={existing}
+                  onPatch={(p) => patchEdge(sel.index, p)}
+                  onDelete={() => removeEdge(sel.index)} />
+              ) : null}
+            </section>
+            )}
           </div>
-        </Panel>
-
-        <section className="bg-white border border-stone-300 rounded-xl overflow-hidden shadow-sm">
-          <header className="flex items-center gap-2 px-3.5 py-2.5 border-b border-stone-200 bg-stone-50/70">
-            <h2 className="text-[11px] font-semibold uppercase tracking-wider text-stone-600">
-              {sel.kind === "node" ? "Edit node" : "Edit edge"}
-            </h2>
-            <span className="ml-auto text-[11px] text-stone-500">{sel.kind} rule</span>
-          </header>
-          {currentNode ? (
-            <NodeForm row={currentNode} rows={ed.keyRows} paradigm={paradigm} sample={nodeSample}
-              paths={paths} readers={paradigm === "unstructured" ? READERS : undefined}
-              disabledNote={disabledFor(currentNode)
-                ? `${currentNode.node_type} produces nothing right now — ${disabledFor(currentNode)}.`
-                : null}
-              onPatch={(p, a) => patchRow(sel.index, p, a)}
-              onDelete={() => removeNode(sel.index)} />
-          ) : currentEdge ? (
-            <EdgeForm edge={currentEdge} rows={ed.keyRows} paradigm={paradigm} sample={sample} existing={existing}
-              onPatch={(p) => patchEdge(sel.index, p)}
-              onDelete={() => removeEdge(sel.index)} />
-          ) : (
-            <p className="px-3.5 py-6 text-sm text-stone-500">Select a rule, or add one.</p>
           )}
-        </section>
-      </div>
-
-      <div className="mt-4">
-        <Panel title="Knowledge" count="entity types, identifiers, relationships">
-          <KnowledgePanel mappingId={String(id)} payload={rec?.payload} onSaved={setRec} />
-        </Panel>
-      </div>
-
-      <div className="mt-4">
-        <Panel title="Verify against an ingested asset" count="declared vs produced">
-          <ConformancePanel mappingId={String(id)} />
-        </Panel>
-      </div>
-
-      <div className="mt-4">
-        <Panel title="Declared graph" count="your rules">
+          {tab === "graph" && (
           <DeclaredCanvas
             rows={ed.keyRows} edges={ed.edgeRules} positions={ed.canvas || {}} sel={sel}
             onSelect={setSel}
             onMove={(next) => { setDirty(true); setEd((e) => ({ ...e, canvas: next, __touched: true })); }}
             onConnect={connectTypes}
             onDeleteEdge={removeEdge} />
-        </Panel>
+          )}
+          {tab === "fields" && (
+            <KnowledgePanel mappingId={String(id)} payload={rec?.payload} onSaved={setRec} redetect={!simple} />
+          )}
+          {tab === "check" && <ConformancePanel mappingId={String(id)} />}
+        </div>
       </div>
+    </>
+  );
+
+  return (
+    <div className="p-6 max-w-[1500px] mx-auto">
+      <PageHeader
+        title={name || "Mapping"}
+        icon={meta.icon}
+        description={simple ? meta.label : `${meta.label} — ${meta.sub}.`}
+        actions={
+          <div className="flex items-center gap-2">
+            <Link href="/dashboard/mapper">
+              <Button variant="ghost" size="sm" icon={ArrowLeft}>All mappings</Button>
+            </Link>
+            {!simple && handActions}
+          </div>
+        }
+      />
+
+      {simple ? (
+        <>
+          <div className="max-w-4xl">
+            <SimpleMapping mappingId={String(id)} paradigm={paradigm} payload={rec?.payload} status={rec?.status} onSaved={setRec} />
+          </div>
+          <details className="mt-8">
+            <summary className="mb-3 cursor-pointer select-none text-sm font-medium text-stone-600 hover:text-stone-900">
+              Advanced
+            </summary>
+            {handEditor}
+          </details>
+        </>
+      ) : handEditor}
     </div>
   );
 }

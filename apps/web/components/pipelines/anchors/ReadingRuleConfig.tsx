@@ -20,12 +20,6 @@ import { contextV2Api } from "@/lib/api/contextV2";
 import type { PipelineKind } from "@/components/pipelines/model";
 import { AnchorSection, MappingOption } from "./shared";
 
-const MAPPING_HINT: Record<PipelineKind, string> = {
-  document: "A mapping declares the nodes, edges and attributes a document becomes.",
-  structured: "A mapping declares which tables and columns become nodes, attributes and edges, with keys taken from the schema.",
-  semistructured: "A mapping declares which key paths become nodes and attributes, their identity and their edges.",
-};
-
 const EXTRACT_ONLY_HINT: Record<PipelineKind, string> = {
   document: "Chunks are used to extract entities and claims, then discarded. Only the extracted nodes are kept.",
   structured: "Only the schema: tables and columns, no rows.",
@@ -42,13 +36,13 @@ export default function ReadingRuleConfig({ kind, config, onChange, mappings }: 
 
   return (
     <div className="space-y-4">
-      <AnchorSection title="Bind a mapping" hint={MAPPING_HINT[kind]}>
+      <AnchorSection title="Mapping">
         <SchemaMappingPicker
           options={mappings} value={bound}
           onChange={(ids) => onChange({ mapping_ids: ids })}
           engineHref="/dashboard/mapper"
           accent="teal"
-          emptyHint="— none (the default walker reads every source) —" />
+          emptyHint="none: read automatically" />
         {kind === "semistructured" && <DeclaredPaths mappingId={bound[0]} />}
       </AnchorSection>
 
@@ -56,14 +50,12 @@ export default function ReadingRuleConfig({ kind, config, onChange, mappings }: 
         <Option
           checked={config.auto_accept !== false}
           onChange={(value) => onChange({ auto_accept: value })}
-          label="Accept a newly detected shape automatically"
-          hint={bound.length
-            ? "A source the bound mapping does not match is read by the default walker. Off: it is skipped."
-            : "No mapping is bound, so the default walker reads every source."} />
+          label={bound.length ? "Read files the mapping does not fit automatically" : "Read new kinds of file automatically"}
+          hint={bound.length ? "Off: they are skipped." : ""} />
         <Option
           checked={config.extract_only === true}
           onChange={(value) => onChange({ extract_only: value })}
-          label="Extract only"
+          label="Keep only what is extracted"
           hint={EXTRACT_ONLY_HINT[kind]} />
       </AnchorSection>
     </div>
@@ -82,7 +74,7 @@ function Option({ checked, onChange, label, hint }: {
         onChange={(e) => onChange(e.target.checked)} />
       <span>
         <b className="font-semibold">{label}</b>
-        <span className="block text-[11.5px] text-stone-500 mt-0.5">{hint}</span>
+        {hint && <span className="block text-[11.5px] text-stone-500 mt-0.5">{hint}</span>}
       </span>
     </label>
   );

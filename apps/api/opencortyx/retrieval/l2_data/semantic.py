@@ -36,7 +36,7 @@ from typing import Optional
 from opencortyx.core.observability import get_logger
 from opencortyx.retrieval.l2_data import planner
 from opencortyx.retrieval.l2_data.planner import Plan, _lit, _q
-from opencortyx.retrieval.l2_data.schema import Schema, Table, words
+from opencortyx.retrieval.l2_data.schema import Schema, Table, names_value, words
 
 log = get_logger(__name__)
 
@@ -127,11 +127,11 @@ def _with_type_values(t: Table, objects: list[Table]) -> Table:
 
 
 def _value_filters(question: str, t: Table) -> list[tuple]:
-    """(column, values) for each category value of `t` the question contains."""
+    """(column, values) for each category value of `t` the question contains (`names_value`)."""
     qtext = " " + " ".join(words(question)) + " "
     out = []
     for c in t.columns:
-        hits = [v for v in c.value_set if words(v) and f" {' '.join(words(v))} " in qtext]
+        hits = [v for v in c.value_set if names_value(qtext, v)]
         hits = [h for h in hits if not any(h != o and h.lower() in o.lower() for o in hits)]
         if hits:
             out.append((c.name, hits))

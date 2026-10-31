@@ -21,7 +21,6 @@ export const HIDDEN_NAV: ReadonlySet<string> = new Set(when([
   "/dashboard/custom-assets",   // Customize
   "/dashboard/pipelines",       // Customize
   "/dashboard/ingest",          // Customize, and Connections > Scheduled syncs
-  "/dashboard/progress",        // Add data > Recent runs
   "/dashboard/sessions",        // Assistant > Agent conversations
   "/dashboard/users",           // Settings > Users & access
   "/dashboard/models",          // Settings > Models

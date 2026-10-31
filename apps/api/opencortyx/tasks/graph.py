@@ -177,6 +177,35 @@ def v2_embed_node(self, workspace_id: str, node_id: str):
         raise self.retry(exc=exc, countdown=10, max_retries=3)
 
 
+@celery_app.task(bind=True, queue="embedding", name="opencortyx.embed_nodes", max_retries=3)
+def v2_embed_nodes(self, workspace_id: str, node_ids: list):
+    """Embed these nodes. For what belongs to no one asset's subtree - an entity an extractor or the
+    text reader names, merged by name across every text it is in - so no asset's embedding job
+    reaches it. Idempotent."""
+    async def _run():
+        repo, oid = NodeRepo(), uuid.UUID(workspace_id)
+        nodes = [n for n in await repo.get_many(oid, [uuid.UUID(str(i)) for i in node_ids]) if n is not None]
+        for i in range(0, len(nodes), PAGE):
+            await repo.index_embeddings(oid, nodes[i:i + PAGE], embed_batch)
+        return {"status": "ok", "nodes": len(nodes)}
+
+    try:
+        return async_to_sync(_run)()
+    except Exception as exc:
+        raise self.retry(exc=exc, countdown=10, max_retries=3)
+
+
+def embed_later(workspace_id, node_ids) -> None:
+    """Queue `v2_embed_nodes` for `node_ids`; never fails the write that asks."""
+    ids = [str(i) for i in node_ids if i]
+    if not ids:
+        return
+    try:
+        v2_embed_nodes.delay(str(workspace_id), ids)
+    except Exception as e:                                      # noqa: BLE001
+        log.warning("embed_nodes.enqueue_failed", error=str(e)[:200])
+
+
 #: Nodes loaded and embedded at a time by the passes that find their work by id.
 PAGE = 500
 #: Most nodes without vectors one sweep looks at; the rest are found by the next.

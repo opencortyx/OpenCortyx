@@ -1,8 +1,11 @@
 """Each object type as ONE logical table, in SQL over the asset views (stores/data Views).
 
     binding_sql   one asset's records of the type: its rows, an object inside each record ("$.K"),
-                  or each element of a list inside it ("$.K[*]"), every property read from its field
-                  and cast to the property's type
+                  each element of a list inside it ("$.K[*]") or of each list in a list ("$.K[*][*]"),
+                  every property read from its field and cast to the property's type. A list
+                  element's field can also be read from the record it is in ("^.F"), from a list
+                  beside it at its position ("^.F[i]"), or be its position ("#i", "#j") or, for a
+                  plain value, the value itself ("#v")
     type_sql      every binding together (UNION ALL BY NAME); for an entity, one row per key - the
                   same customer in the CRM and in billing is ONE row with the fields of both
 
@@ -41,9 +44,18 @@ def _field_expr(b: Binding, src: str, columns: Optional[set]) -> str:
         if columns is not None and src not in columns:
             return "NULL"
         return q(src)
-    parts = src.split(".")
     if b.path.endswith("[*]"):
-        return f"json_extract_string(_r, {lit(_json_path(*parts))})"
+        if src in ("#i", "#j"):
+            return f"_{src[1]}.{src[1]}"
+        if src == "#v":
+            return "json_extract_string(_r, '$')"
+        if src.startswith("^."):
+            at = src[2:]
+            if at.endswith("[i]"):
+                return f"json_extract_string(raw, {lit(_json_path(at[:-3]))} || '[' || _i.i || ']')"
+            return f"json_extract_string(raw, {lit(_json_path(*at.split('.')))})"
+        return f"json_extract_string(_r, {lit(_json_path(*src.split('.')))})"
+    parts = src.split(".")
     if b.path.startswith("$."):
         return f"json_extract_string(raw, {lit(_json_path(b.path[2:], *parts))})"
     return f"json_extract_string(raw, {lit(_json_path(*parts))})"
@@ -57,8 +69,14 @@ def binding_sql(t: ObjectType, b: Binding, view: str, columns: Optional[set] = N
     cols.append(f"{lit(b.asset_name)} AS _asset")
     frm = q(view)
     if b.kind == "semistructured" and b.path.endswith("[*]"):
-        arr = lit(_json_path(b.path[2:-3]))
-        frm = f"{q(view)}, unnest(CAST(json_extract(raw, {arr}) AS JSON[])) AS _u(_r)"
+        # each element by its position, so a field can be read beside it ("^.F[i]") or be it ("#i")
+        nested = b.path.endswith("[*][*]")
+        arr = lit(_json_path(b.path[2:-6] if nested else b.path[2:-3]))
+        outer = (f"{q(view)}, range(CAST(coalesce(json_array_length(raw, {arr}), 0) AS BIGINT)) AS _i(i), "
+                 f"LATERAL (SELECT json_extract(raw, {arr} || '[' || _i.i || ']') AS _o) AS _o")
+        frm = (f"{outer}, range(CAST(coalesce(json_array_length(_o._o), 0) AS BIGINT)) AS _j(j), "
+               f"LATERAL (SELECT json_extract(_o._o, '$[' || _j.j || ']') AS _r) AS _e" if nested
+               else f"{outer}, LATERAL (SELECT _o._o AS _r) AS _e")
     return f"SELECT {', '.join(cols)} FROM {frm}"
 
 

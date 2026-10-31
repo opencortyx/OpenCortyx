@@ -229,7 +229,7 @@ export default function SettingsPage() {
     { id: "agents", label: "Agents", icon: Shield },
     { id: "backup", label: "Backup & Export", icon: HardDriveDownload },
     { id: "audit", label: "Audit Log", icon: Server },
-    { id: "danger", label: "Danger Zone", icon: AlertCircle },
+    { id: "danger", label: "Reset", icon: AlertCircle },
   ].filter((tb) => !HIDDEN_SETTINGS_TABS.has(tb.id));
 
   return (
@@ -248,7 +248,6 @@ export default function SettingsPage() {
             { href: "/dashboard/models", title: "Models", text: "The models answers and reading use" },
             { href: "/dashboard/users", title: "Users & access", text: "Who can see and change what" },
             { href: "/dashboard/eval", title: "Quality checks", text: "Questions with known answers, run on demand" },
-            { href: "/dashboard/progress", title: "Runs", text: "Every ingest, step by step" },
             { href: "/dashboard/health", title: "System health", text: "Is every part up" },
           ].map((c) => (
             <Link key={c.href} href={c.href as any}
@@ -1256,7 +1255,7 @@ export default function SettingsPage() {
             <AlertCircle size={20} />
           </div>
           <div>
-            <h3 className="font-semibold text-red-900">Danger Zone</h3>
+            <h3 className="font-semibold text-red-900">Reset</h3>
             <p className="text-xs text-red-700">Irreversible Actions</p>
           </div>
         </div>
@@ -1285,29 +1284,7 @@ export default function SettingsPage() {
           >
             Factory Reset Database
           </button>
-          <button
-            onClick={() => {
-              if (window.confirm("Clear the task queue? Every queued, running and scheduled ingestion task is dropped/terminated. Already-ingested data is NOT touched.")) {
-                setComputing(true);
-                contextV2Api.purgeQueue()
-                  .then((r: any) => {
-                    alert(`Queue cleared: ${r.purged_queued ?? 0} queued dropped, ${r.revoked ?? 0} running/scheduled revoked, ${r.runs_canceled ?? 0} progress runs canceled.`);
-                    loadLogs();
-                  })
-                  .catch(err => alert("Error clearing queue: " + err))
-                  .finally(() => setComputing(false));
-              }
-            }}
-            disabled={computing}
-            className="px-4 py-2 bg-white border border-red-300 text-red-700 hover:bg-red-100 rounded-lg text-sm font-semibold transition-colors disabled:opacity-50"
-          >
-            Clear Task Queue Only
-          </button>
         </div>
-        <p className="text-[11px] text-red-700/70 mt-3">
-          Use &quot;Clear Task Queue Only&quot; when work is stuck behind stale/zombie tasks (e.g. an old giant
-          ingest still queued) — it drains the broker even when no worker is running, without touching your data.
-        </p>
       </div>
       )}
     </div>

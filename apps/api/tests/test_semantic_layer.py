@@ -45,6 +45,42 @@ def test_one_entity_from_a_table_and_a_json_list_is_one_row_per_key():
     assert rows["C-1"][2:] == ("EUR", "gold", "a@x")         # the fields of both sources on one record
 
 
+_CHATS = [{"qid": "q1", "ids": ["s1", "s2"], "dates": ["2023-01-01", "2023-02-01"], "tags": ["a", "b", "c"],
+           "sessions": [[{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}],
+                        [{"role": "user", "content": "x"}]]},
+          {"qid": "q2", "ids": ["s3"], "dates": ["2023-03-01"], "tags": ["d"],
+           "sessions": [[{"role": "user", "content": "z"}]]}]
+
+
+def _rows_of(path: str) -> list[dict]:
+    raws = [json.dumps(r) for r in _CHATS]
+    src = next(s for s in detector._semi_sources("a", "chats.json", "chats", raws) if s.path == path)
+    t = ObjectType(name="T", properties=[Property(p) for p in src.fields])
+    con = duckdb.connect()
+    con.execute("CREATE TABLE chats AS SELECT unnest(?) AS raw", [raws])
+    sql = views.binding_sql(t, Binding("a", "chats.json", "semistructured", path, src.fields), "chats")
+    cur = con.execute(f"SELECT * FROM ({sql})")
+    cols = [d[0] for d in cur.description]
+    return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+
+def test_each_inner_list_of_a_list_of_lists_is_a_record_placed_by_the_lists_beside_it():
+    rows = sorted(_rows_of("$.sessions[*]"), key=lambda r: r["ids"])
+    assert [(r["ids"], r["dates"], r["qid"], r["position"]) for r in rows] == [
+        ("s1", "2023-01-01", "q1", "0"), ("s2", "2023-02-01", "q1", "1"), ("s3", "2023-03-01", "q2", "0")]
+
+
+def test_each_element_of_the_inner_lists_carries_its_list_and_record():
+    rows = sorted(_rows_of("$.sessions[*][*]"), key=lambda r: (r["ids"], r["position"]))
+    assert [(r["ids"], r["qid"], r["position"], r["role"]) for r in rows] == [
+        ("s1", "q1", "0", "user"), ("s1", "q1", "1", "assistant"), ("s2", "q1", "0", "user"), ("s3", "q2", "0", "user")]
+
+
+def test_a_list_of_plain_values_beside_nothing_is_one_record_per_value():
+    rows = _rows_of("$.tags[*]")
+    assert sorted((r["tags"], r["qid"]) for r in rows) == [("a", "q1"), ("b", "q1"), ("c", "q1"), ("d", "q2")]
+
+
 def test_an_event_table_is_the_plain_union_of_its_files():
     t = ObjectType(name="Sales", kind="event", properties=[Property("name")],
                    bindings=[Binding("b", "x", "structured", "", {"name": "name"}),
@@ -150,6 +186,14 @@ def _licences() -> Table:
                      Column("region", "VARCHAR", role="category", value_set={"EU": 8, "US": 7}, semantic=True),
                      Column("fee", "DOUBLE", role="measure", semantic=True),
                      Column("issued", "DATE", role="time", semantic=True)])
+
+
+def test_a_one_letter_value_is_not_named_by_an_article():
+    t = Table(asset_id="f", view="flags", name="flags", kind="structured", storage="", format="",
+              columns=[Column("flag", "VARCHAR", value_set={"a": 3, "b": 2}),
+                       Column("region", "VARCHAR", value_set={"North": 2})])
+    assert semantic._value_filters("How many days ago did I attend a networking event?", t) == []
+    assert semantic._value_filters("How many flags in the North?", t) == [("region", ["North"])]
 
 
 def test_a_question_using_no_word_of_a_table_is_not_about_it():

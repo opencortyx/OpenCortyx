@@ -107,6 +107,12 @@ async def publish(workspace_id, *, everything: bool = False) -> dict:
                     if name in by_name:
                         keys.append((by_name[name], key, nid))
             await repo.upsert_many(workspace_id, specs, date_link=False)
+            # a published record is in no asset's subtree, so no asset's embedding job reaches it
+            written = [x for x in await repo.get_many(workspace_id, [sp["node_id"] for sp in specs]) if x is not None]
+            pending = await repo.unembedded(workspace_id, written)
+            if pending:
+                from opencortyx.tasks.graph import embed_later
+                embed_later(workspace_id, [getattr(x, "id", x) for x in pending])
             by_asset: dict = {}
             for aid, key, nid in keys:
                 by_asset.setdefault(aid, []).append((key, t.name, nid))

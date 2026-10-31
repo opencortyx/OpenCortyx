@@ -55,6 +55,12 @@ class _Repo:
         self.edges.append((source_id, type, target_id, properties or {}))
         return True
 
+    async def find(self, workspace_id, *, types=None, limit=None, **kw):
+        return [n for n in self.nodes.values() if not types or n.type in types]
+
+    async def add_edges(self, *, workspace_id, edges, **kw):
+        self.edges += [(e["source_id"], e["type"], e["target_id"], e.get("properties") or {}) for e in edges]
+
 
 @pytest.mark.anyio
 async def test_what_is_read_is_written_once_mentioned_cited_and_linked(monkeypatch):
@@ -185,3 +191,9 @@ async def test_a_detected_link_joins_the_two_fields_in_every_pair_of_assets(monk
         (ids[("orders-1", "customer_id")], ids[("crm", "id")]), (ids[("orders-2", "customer_id")], ids[("crm", "id")])}
     assert all(e["type"] == "JOINS_TO" and e["properties"]["relationship_type"] == "INFERRED_REFERENCE"
                for e in Repo.edges)
+
+
+def test_an_extractor_and_the_reader_give_one_named_thing_one_id():
+    from opencortyx.ingest.extraction import templates
+    assert templates._named_id(WS, "Work_of_art", "The Nightingale") == tr.entity_id(WS, "Work_of_art", "The Nightingale")
+    assert templates._named_id(WS, "Work_of_art", "The Nightingale") != templates._named_id(WS, "Person", "The Nightingale")

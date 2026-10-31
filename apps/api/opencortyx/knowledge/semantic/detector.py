@@ -1,8 +1,11 @@
 """The Detector: the semantic layer proposed from the data itself.
 
     1. sources    every place records live: a table's rows; in a JSON / YAML / XML record, the
-                  record itself, an object inside it ("$.project") or each element of a list inside
-                  it ("$.customers[*]") - found by reading a sample of the records
+                  record itself, an object inside it ("$.project"), each element of a list inside
+                  it ("$.customers[*]"), each element of a list of lists ("$.sessions[*][*]") -
+                  found by reading a sample of the records. A list's element carries what places it:
+                  its position, the record's identifying fields, and the values of the lists beside
+                  it at the same position (session_ids[i] and dates[i] belong to sessions[i])
     2. groups     sources of one shape together (fifty licence files are one group of rows)
     3. profile    per field: how many values, how many distinct, how many empty, whether the values
                   read as numbers or dates, and - for a field with few values - its value set
@@ -97,6 +100,45 @@ def _fields_of(obj: dict) -> dict:
     return out
 
 
+def _words(v) -> int:
+    return len(str(v).split())
+
+
+def _record_fields(recs: list, top: dict) -> dict:
+    """The record's fields every list element carries, so it links back to its record: plain
+    top-level values that are filled and different in every record, and short."""
+    out = {}
+    for k in top:
+        if "." in top[k]:
+            continue
+        vals = [r.get(k) for r in recs]
+        if all(_scalar(v) and v not in (None, "") and _words(v) < PROSE_WORDS for v in vals) \
+                and len({str(v) for v in vals}) == len(vals) and len(vals) >= 2:
+            out[k] = f"^.{k}"
+    return out
+
+
+def _beside(recs: list, k: str, keys: set) -> list[str]:
+    """Lists of plain values that sit beside list `k`: as long as it in (nearly) every record, so
+    their i-th value belongs to its i-th element."""
+    out = []
+    for s in sorted(keys - {k}):
+        pairs = [(r.get(k), r.get(s)) for r in recs if isinstance(r.get(k), list) and r.get(k)]
+        if pairs and sum(isinstance(b, list) and len(b) == len(a) and all(_scalar(x) for x in b)
+                         for a, b in pairs) >= 0.9 * len(pairs):
+            out.append(s)
+    return out
+
+
+def _with(own: dict, extra: dict) -> dict:
+    """`own` fields, then `extra` ones under their names - or, when an own field has the name,
+    as "record_<name>"."""
+    out = dict(own)
+    for k, v in extra.items():
+        out[k if k not in out else f"record_{k}"] = v
+    return out
+
+
 def _semi_sources(asset_id, name, view, raws: list) -> list[Source]:
     recs = []
     for r in raws:
@@ -117,8 +159,12 @@ def _semi_sources(asset_id, name, view, raws: list) -> list[Source]:
     if top:
         out.append(Source(asset_id, name, "semistructured", view, "", top))
     keys = {k for r in recs for k in r}
+    record = _record_fields(recs, top)
+    lists = lambda v, test: isinstance(v, list) and bool(v) and all(test(e) for e in v)   # noqa: E731
+    used: set = set()
     for k in sorted(keys):
         vals = [r.get(k) for r in recs if k in r]
+        beside = {s: f"^.{s}[i]" for s in _beside(recs, k, keys)}
         if sum(isinstance(v, dict) for v in vals) >= half:
             f: dict = {}
             for v in vals:
@@ -126,14 +172,38 @@ def _semi_sources(asset_id, name, view, raws: list) -> list[Source]:
                     f.update(_fields_of(v))
             if f:
                 out.append(Source(asset_id, name, "semistructured", view, f"$.{k}", f))
-        elif sum(isinstance(v, list) and bool(v) and all(isinstance(e, dict) for e in v) for v in vals) >= half:
+        elif sum(lists(v, lambda e: isinstance(e, dict)) for v in vals) >= half:
             f = {}
             for v in vals:
                 for e in (v if isinstance(v, list) else []):
                     if isinstance(e, dict):
                         f.update(_fields_of(e))
             if f:
-                out.append(Source(asset_id, name, "semistructured", view, f"$.{k}[*]", f))
+                out.append(Source(asset_id, name, "semistructured", view, f"$.{k}[*]",
+                                  _with(f, {**beside, **record, "position": "#i"})))
+                used |= set(beside)
+        elif sum(lists(v, lambda e: lists(e, lambda x: isinstance(x, dict))) for v in vals) >= half:
+            # a list of lists of records (a conversation's sessions, each a list of turns): each
+            # inner list is one record placed by the lists beside it, each element of it another
+            f = {}
+            for v in vals:
+                for inner in (v if isinstance(v, list) else []):
+                    for e in (inner if isinstance(inner, list) else []):
+                        if isinstance(e, dict):
+                            f.update(_fields_of(e))
+            if beside:
+                out.append(Source(asset_id, name, "semistructured", view, f"$.{k}[*]",
+                                  _with(beside, {**record, "position": "#i"})))
+            if f:
+                out.append(Source(asset_id, name, "semistructured", view, f"$.{k}[*][*]",
+                                  _with(f, {**beside, **record, "position": "#j"})))
+            used |= set(beside)
+    # a list of plain values nothing else is beside: each value one record of the record it is in
+    for k in sorted(keys - used):
+        vals = [r.get(k) for r in recs if k in r]
+        if sum(lists(v, _scalar) for v in vals) >= half:
+            out.append(Source(asset_id, name, "semistructured", view, f"$.{k}[*]",
+                              _with({k: "#v"}, record)))
     return out
 
 
@@ -240,9 +310,10 @@ def _contained(small: set, big: set) -> float:
 
 
 def _unique(g: Group) -> list[str]:
-    """Fields never empty and never repeated within a file. A date is a moment, not an identity."""
+    """Fields never empty and never repeated within a file. A date is a moment and free text a
+    statement, not an identity."""
     return [p for p, s in g.stats.items() if g.rows >= 2 and s.filled == g.rows and s.repeats == 0
-            and s.data_type != "date"]
+            and s.data_type != "date" and s.words < PROSE_WORDS]
 
 
 _SHAPE = (re.compile(r"[A-Za-z]"), re.compile(r"\d"))
@@ -500,3 +571,57 @@ def summary(layer: Layer) -> dict:
 def describe(layer: Layer) -> Optional[str]:
     return "\n".join(f"{t.name} [{t.status} {t.confidence}] key={t.key or '-'} rows={t.rows} "
                      f"bindings={len(t.bindings)}" for t in layer.types) or None
+
+
+# ── the shape of a few assets, for the Mapper's editor ────────────────────────────────────────
+
+#: Rows the editor's preview shows per record source.
+PREVIEW_ROWS = 3
+
+
+async def shape(workspace_id, asset_ids) -> list[dict]:
+    """Every record source of `asset_ids` - a table's rows, an object or a list inside JSON records -
+    with its fields measured the way the Detector measures them (filled, repeats within each file,
+    data type, words per value) and a few rows, so the Mapper offers only choices the data supports:
+    an identifier must be filled and never repeat in a file; a name is a short, nearly unique text."""
+    import anyio
+
+    from opencortyx.core.dataplane import assets
+    from opencortyx.stores.data import Views, layout
+
+    wanted = {str(a) for a in asset_ids or ()}
+    refs = [r for r in await assets.refs(workspace_id, kinds=[layout.STRUCTURED, layout.SEMISTRUCTURED])
+            if r.asset_id in wanted]
+    if not refs:
+        return []
+
+    def read() -> list[dict]:
+        out = []
+        with Views(workspace_id, refs) as views:
+            sources, columns = _sources(views, refs)
+            for s in sources:
+                g = Group(kind=s.kind, path=s.path, sources=[s], fields=dict(s.fields))
+                try:
+                    _profile(views, g, columns)
+                    t = _group_type(g)
+                    rows = views.query(f"SELECT * EXCLUDE (_asset) FROM ({binding_sql(t, t.bindings[0], s.view, columns.get(s.view))}) "
+                                       f"LIMIT {PREVIEW_ROWS}").to_pylist()
+                except Exception as e:                        # noqa: BLE001 - an unreadable shape is reported
+                    out.append({"asset_id": s.asset_id, "asset_name": s.asset_name, "kind": s.kind,
+                                "path": s.path, "error": str(e)[:200], "fields": [], "rows": []})
+                    continue
+                out.append({
+                    "asset_id": s.asset_id, "asset_name": s.asset_name, "kind": s.kind, "path": s.path,
+                    "records": g.rows,
+                    "fields": [{"name": p, "source": s.fields[p], "data_type": st.data_type, "filled": st.filled,
+                                "distinct": st.distinct, "repeats": st.repeats, "words": round(st.words, 1),
+                                "identifier": g.rows >= 2 and st.filled == g.rows and st.repeats == 0
+                                              and st.data_type != "date" and st.words < PROSE_WORDS,
+                                "nameable": st.data_type == "text" and 0 < st.words < PROSE_WORDS
+                                        and (st.repeats == 0 or st.distinct >= LABEL_UNIQUE * max(1, st.filled))}
+                               for p, st in g.stats.items()],
+                    "rows": [{k: (v if isinstance(v, (str, int, float, bool)) or v is None else str(v))
+                              for k, v in r.items()} for r in rows],
+                })
+        return out
+    return await anyio.to_thread.run_sync(read)

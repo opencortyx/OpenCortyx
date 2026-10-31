@@ -20,7 +20,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-from opencortyx.retrieval.l2_data.schema import Schema, Table, score_tables, words
+from opencortyx.retrieval.l2_data.schema import Schema, Table, names_value, score_tables, words
 from opencortyx.retrieval.l2_graph import join_path
 
 _AGG = (
@@ -64,7 +64,7 @@ def _filters(question: str, tables: list[Table]) -> tuple[list[str], list[str]]:
     out, used = [], []
     for t in tables:
         for c in t.columns:
-            hits = [v for v in c.value_set if words(v) and f" {' '.join(words(v))} " in qtext]
+            hits = [v for v in c.value_set if names_value(qtext, v)]
             if not hits:
                 continue
             # The longest value wins ("in progress" over "progress"); several values of one column OR.

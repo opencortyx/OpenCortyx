@@ -432,7 +432,7 @@ class RetrievalWorkflow:
         plan.entities = resolved
         bound = [r for r in resolved if r.resolved]
         ambiguous = [r for r in bound if r.alternatives]
-        plan.ambiguous = routes_mod.ambiguous_bindings(bound)
+        plan.ambiguous = await self._told_apart(workspace_id, routes_mod.ambiguous_bindings(bound))
         if plan.ambiguous:
             plan.routes["CLARIFY"] = 1.0
         t.mark("L1", "resolve", n_in=len(plan.mentions), n_out=len(bound),
@@ -441,6 +441,21 @@ class RetrievalWorkflow:
                                for r in resolved) or "no mentions",
                ambiguous=[r.mention.text for r in ambiguous])
         return self.resolver.to_candidates(resolved)
+
+    async def _told_apart(self, workspace_id, choices: list) -> list:
+        """The ambiguous names that are really two things. A name is ambiguous between records
+        something else tells apart (two customers called John Smith, each with its own id); named
+        things whose name IS their identity (`__identity: entity`) - the same book read from text by
+        two readers - are one thing seen twice, not a question to ask back."""
+        if not choices:
+            return choices
+        ids = [uuid.UUID(str(c["node_id"])) for ch in choices for c in ch["candidates"]]
+        nodes = {str(n.id): n for n in await self.repo.get_many(workspace_id, ids) if n is not None}
+
+        def named(i) -> bool:
+            n = nodes.get(str(i))
+            return n is not None and (n.properties or {}).get("__identity") == "entity"
+        return [ch for ch in choices if not all(named(c["node_id"]) for c in ch["candidates"])]
 
     # ── L2 ───────────────────────────────────────────────────────────────────────────────────
     async def expand(self, workspace_id: uuid.UUID, plan: QueryPlan, graph: CandidateGraph,

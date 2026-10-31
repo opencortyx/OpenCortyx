@@ -1185,6 +1185,13 @@ export const contextV2Api = {
     apiClient.get(`/api/v2/schema-mappings/${id}/preview`, { params: { limit } }).then((r) => r.data as MappingPreview),
   mappingHistory: (id: string) =>
     apiClient.get(`/api/v2/schema-mappings/${id}/history`).then((r) => r.data as MappingHistory),
+  /** The workspace's tables and JSON files a mapping can describe. */
+  mappingAssets: () =>
+    apiClient.get<{ items: MappingAsset[] }>("/api/v2/schema-mappings/assets").then((r) => r.data.items),
+  /** What these assets hold, measured: each record source with its fields and a few rows. */
+  mappingShape: (assetIds: string[]) =>
+    apiClient.post<{ sources: ShapeSource[] }>("/api/v2/schema-mappings/shape", { asset_ids: assetIds })
+      .then((r) => r.data.sources),
   /** Re-detect one mapping: a new version from what the data shows now, choices kept. */
   redetectMapping: (id: string) =>
     apiClient.post<SchemaMappingRecord>(`/api/v2/schema-mappings/${id}/detect`).then((r) => r.data),
@@ -1540,6 +1547,34 @@ export interface SemanticLayer {
            confidence: number; rows: number; bindings: number; assets: string[];
            properties: { name: string; type: string; role: string }[] }[];
   links: { id: string; name: string; from: string; to: string; origin: string; coverage: number; status: string }[];
+}
+
+export interface MappingAsset { id: string; name: string; kind: "structured" | "semistructured" }
+
+/** One record source of an asset - a table's rows, an object or a list inside JSON - measured. */
+export interface ShapeSource {
+  asset_id: string;
+  asset_name: string;
+  kind: "structured" | "semistructured";
+  /** "" = each row / each record; "$.k" = an object in each record; "$.k[*]" = each item of a list */
+  path: string;
+  records?: number;
+  error?: string;
+  fields: {
+    name: string;
+    /** where the value is read from (a column, or a dotted path inside the record) */
+    source: string;
+    data_type: string;
+    filled: number;
+    distinct: number;
+    repeats: number;
+    words: number;
+    /** filled in every record and never repeated within a file */
+    identifier: boolean;
+    /** a short, nearly unique text a person would call a record by */
+    nameable: boolean;
+  }[];
+  rows: Record<string, any>[];
 }
 
 export interface MappingValidation {

@@ -15,10 +15,10 @@
  * smaller scale — and it hid the summary until after every decision had already been made.
  */
 
-import { SHOW_UPLOAD_INGESTIONS } from "@/lib/simple";
+import { FULL_UI, SHOW_DEFAULT_PIPELINES, SHOW_UPLOAD_INGESTIONS } from "@/lib/simple";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { contextV2Api, Pipeline, Connector, Ingestion, BrowseSchema, SchemaSelection, ProgressRun, IngestFormats } from "@/lib/api/contextV2";
+import { contextV2Api, Pipeline, Connector, Ingestion, BrowseSchema, SchemaSelection, ProgressRun, IngestFormats, SYSTEM_DEFAULT_PIPELINES_LIST } from "@/lib/api/contextV2";
 import {
   Database, AlertCircle, X, Plus, GitBranch, Activity, UploadCloud, FileText,
   CheckCircle2, Zap, Cable, Play, Trash2, Pencil, Table2, Eye, Search, Loader2, ChevronRight,
@@ -27,7 +27,7 @@ import {
 import PageHeader from "@/components/layout/PageHeader";
 import Button from "@/components/ui/Button";
 import TagInput from "@/components/ui/TagInput";
-import { ScheduleControl, MappingsEditor, cleanMappings, IngestMode, Mapping } from "./scheduling";
+import { ScheduleControl, MappingsEditor, cleanMappings, detectDefaultKind, IngestMode, Mapping } from "./scheduling";
 import AnchorRulesEditor from "./anchors";
 
 export type AnchorRule = {
@@ -100,7 +100,9 @@ export default function IngestPage() {
   const [mappings, setMappings] = useState<Mapping[]>([]);   // N:N connector → pipeline
   const [selConnector, setSelConnector] = useState("");      // mirrors mappings[0]: what browsing uses
   const [name, setName] = useState("");
-  const [enrich, setEnrich] = useState(true);
+  // Nothing extracts unless a pipeline names it: a new sync never asks for the default enrichment.
+  // A saved one keeps the value it was saved with.
+  const [enrich, setEnrich] = useState(false);
   const [mode, setMode] = useState<IngestMode>("on_demand");
   const [schedule, setSchedule] = useState("0 * * * *");     // cron (5-field) — used when mode=scheduled
   const [pipelineId, setPipelineId] = useState("");          // ingestion-level default (a mapping wins)
@@ -128,7 +130,8 @@ export default function IngestPage() {
       setMsg({ text: `Couldn't load saved ingestions: ${detail}`, type: "error" });
     }
     if (conR.status === "fulfilled") setConnectors(conR.value?.connectors || []);
-    if (plR.status === "fulfilled") setPipelines(plR.value?.items || []);
+    if (plR.status === "fulfilled") setPipelines((plR.value?.items || [])
+      .filter((p: Pipeline) => SHOW_DEFAULT_PIPELINES || !SYSTEM_DEFAULT_PIPELINES_LIST.some((d) => d.id === p.id)));
     setLoading(false);
   };
   useEffect(() => { refresh(); }, []);
@@ -176,7 +179,7 @@ export default function IngestPage() {
   };
 
   const resetForm = () => {
-    setEditId(""); setName(""); setEnrich(true); setPipelineId("");
+    setEditId(""); setName(""); setEnrich(false); setPipelineId("");
     setMode("on_demand"); setSchedule("0 * * * *");
     setAnchors([]); setUploadTags([]); setDocProgress(""); setMsg({ text: "", type: "" });
     setFilesByMap({});
@@ -333,6 +336,42 @@ export default function IngestPage() {
   // Section 2: Attach to existing nodes (anchors)
   // Section 3: Name & schedule
   const sections: { title: string; hint?: string; body: React.ReactNode }[] = [];
+  const [more, setMore] = useState(FULL_UI);
+  const first = mappings[0];
+  const firstConn = connectors.find((c) => c.id === first?.connector_id);
+  const setFirst = (patch: Partial<Mapping>) => onMappings([{ ...(first || { enabled: true } as Mapping), ...patch }, ...mappings.slice(1)]);
+  const field = "w-full border border-stone-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/20";
+  const short = (
+    <div className="space-y-4">
+      <div className="grid sm:grid-cols-2 gap-3">
+        <label className="text-xs font-semibold text-stone-500">Connection
+          <select className={`${field} mt-1`} value={first?.connector_id || ""}
+            onChange={(e) => setFirst({ connector_id: e.target.value,
+                                        kind: detectDefaultKind(connectors.find((c) => c.id === e.target.value)?.kind) as any })}>
+            {connectors.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </label>
+        <label className="text-xs font-semibold text-stone-500">Read with
+          <select className={`${field} mt-1`} value={first?.pipeline_id || ""} onChange={(e) => setFirst({ pipeline_id: e.target.value })}>
+            <option value="">Automatic (as Add data)</option>
+            {pipelines.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </label>
+      </div>
+      {FILE_CONN_KINDS.includes(firstConn?.kind || "") && (
+        <label className="block text-xs font-semibold text-stone-500">Folders
+          <input className={`${field} mt-1`} placeholder="all of it, or e.g. reports/2026, contracts"
+            value={(first?.directories || []).join(", ")}
+            onChange={(e) => setFirst({ directories: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} />
+        </label>
+      )}
+      <ScheduleControl mode={mode} schedule={schedule} onMode={setMode} onSchedule={setSchedule} accent="teal" />
+      <label className="block text-xs font-semibold text-stone-500">Name
+        <input className={`${field} mt-1`} value={name} onChange={(e) => setName(e.target.value)}
+          placeholder={firstConn ? `${firstConn.name} sync` : "e.g. Contracts, nightly"} />
+      </label>
+    </div>
+  );
 
   sections.push({
     title: "Sources & pipelines",
@@ -386,10 +425,6 @@ export default function IngestPage() {
             placeholder="e.g. Multi-Source Pipeline — nightly catalogue"
             className="w-full border border-stone-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500/20" />
         </div>
-        <label className="flex items-center gap-2 text-sm text-stone-600 cursor-pointer">
-          <input type="checkbox" checked={enrich} onChange={(e) => setEnrich(e.target.checked)} className="rounded border-stone-300 text-teal-600 focus:ring-teal-500/20" />
-          Run default enrichment (when a source has no pipeline)
-        </label>
         <ScheduleControl mode={mode} schedule={schedule} onMode={setMode} onSchedule={setSchedule} accent="teal" />
       </div>
     ),
@@ -399,25 +434,27 @@ export default function IngestPage() {
     <div className="max-w-7xl mx-auto space-y-6 pb-24">
       {/* Hero */}
       <PageHeader
-        title="Ingestion"
+        title={FULL_UI ? "Ingestion" : "Scheduled syncs"}
         icon={UploadCloud}
-        description="Create re-runnable ingestions for Structured, Semi-Structured, and Unstructured data: pick a connector, choose what to ingest, assign a pipeline, and run on-demand, on a schedule, or in real-time."
+        description={FULL_UI
+          ? "Create re-runnable ingestions for Structured, Semi-Structured, and Unstructured data: pick a connector, choose what to ingest, assign a pipeline, and run on-demand, on a schedule, or in real-time."
+          : "Read a connection again on demand, on a schedule or as it changes."}
         actions={
-          <Button variant="primary" icon={Plus} onClick={openNew}>New Ingestion</Button>
+          <Button variant="primary" icon={Plus} onClick={openNew}>{FULL_UI ? "New Ingestion" : "New sync"}</Button>
         }
       />
 
       {/* quick links */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      {FULL_UI && <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <QuickLink icon={<Cable size={18} className="text-teal-500" />} title="Connectors" sub={`${connectors.length} saved`} onClick={() => router.push("/dashboard/connectors")} />
         <QuickLink icon={<GitBranch size={18} className="text-emerald-500" />} title="Pipeline Studio" sub={`${pipelines.length} pipelines`} onClick={() => router.push("/dashboard/pipelines")} />
         <QuickLink icon={<Activity size={18} className="text-emerald-500" />} title="Progress" sub="Track every run" onClick={() => router.push("/dashboard/progress")} />
-      </div>
+      </div>}
 
       {/* SUPPORTED FILE TYPES — grouped by the pipeline that reads them, straight from the routing
           registry. The route is not cosmetic: a .jsonl is WALKED into nodes, never chunked, and a
           .csv is read as a table — which is why the grouping is the useful part, not the count. */}
-      {formats && (
+      {FULL_UI && formats && (
         <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-xl">
           <button onClick={() => setFormatsOpen((v) => !v)}
             className="w-full flex items-center gap-2 px-4 py-3 text-left">
@@ -460,14 +497,14 @@ export default function IngestPage() {
 
       {/* Saved ingestions */}
       <div>
-        <h2 className="text-xl font-bold text-stone-900 mb-4">Saved ingestions</h2>
+        {FULL_UI && <h2 className="text-xl font-bold text-stone-900 mb-4">Saved ingestions</h2>}
         {loading ? (
           <div className="text-stone-500 animate-pulse p-6">Loading…</div>
         ) : ingestions.length === 0 ? (
           <div className="bg-stone-50 border border-dashed border-stone-300 rounded-2xl p-12 text-center text-stone-500 flex flex-col items-center">
             <Database size={42} className="mb-4 text-stone-300" />
-            <h3 className="text-lg font-bold mb-2 text-stone-700">No ingestions yet</h3>
-            <p className="max-w-md">Create one above — pick what you&apos;re ingesting, choose a connector and a pipeline. It&apos;ll live here so you can run it on-demand, on a schedule, or in real-time.</p>
+            <h3 className="text-lg font-bold mb-2 text-stone-700">{FULL_UI ? "No ingestions yet" : "No syncs yet"}</h3>
+            {FULL_UI && <p className="max-w-md">Create one above — pick what you&apos;re ingesting, choose a connector and a pipeline. It&apos;ll live here so you can run it on-demand, on a schedule, or in real-time.</p>}
           </div>
         ) : (
           <div className="space-y-3">
@@ -637,13 +674,19 @@ export default function IngestPage() {
             <div className="px-6 py-4 border-b border-stone-100 flex items-center justify-between">
               <h2 className="font-bold text-stone-900 flex items-center gap-2">
                 <UploadCloud size={18} className="text-emerald-500" />
-                {editId ? "Edit ingestion" : "New ingestion"}
+                {FULL_UI ? (editId ? "Edit ingestion" : "New ingestion") : (editId ? "Edit sync" : "New sync")}
               </h2>
               <button onClick={() => setOpen(false)} className="p-1.5 text-stone-400 hover:bg-stone-100 rounded-md cursor-pointer"><X size={18} /></button>
             </div>
 
             <div className="p-6 flex-1 overflow-y-auto space-y-7">
-              {sections.map((s, i) => (
+              {!more && connectors.length > 0 && short}
+              {!FULL_UI && (
+                <button type="button" onClick={() => setMore((v) => !v)} className="text-sm text-stone-500 hover:text-stone-900">
+                  {more ? "Fewer options" : "More options"}
+                </button>
+              )}
+              {(more || connectors.length === 0) && sections.map((s, i) => (
                 <section key={s.title}>
                   <div className="flex items-center gap-2 mb-3">
                     <span className="w-5 h-5 rounded-full bg-stone-900 text-white text-[11px] font-bold flex items-center justify-center shrink-0">{i + 1}</span>

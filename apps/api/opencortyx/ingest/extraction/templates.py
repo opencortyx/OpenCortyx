@@ -140,9 +140,28 @@ def _dictionary_records(terms, text: str) -> list:
     return out
 
 
-async def _ner_records(text: str, model_spec: dict | None = None) -> list:
-    """spaCy NER if installed; otherwise the extraction's own registry model (`model_spec`)."""
+async def _ner_records(text: str, model_spec: dict | None = None, workspace_id=None) -> list:
+    """Named entities and how each sentence connects them, read by the workspace's Entities model
+    (spaCy, no LLM - ingest/extraction/text_reader.py): a record per entity {name, type}, then a
+    record per relationship {name, type, relation, object, object_type} - the subject's name and type,
+    so an edge can run from it to the object found by name. Without that model, spaCy's own package
+    (entities only), then the extraction's registry model."""
     global _SPACY
+    if workspace_id is not None:
+        try:
+            import anyio
+
+            from opencortyx.ingest.extraction import text_reader
+            spec = await text_reader.model(workspace_id)
+            if spec:
+                nlp = await anyio.to_thread.run_sync(text_reader.load, spec["model_id"])
+                found = (await anyio.to_thread.run_sync(text_reader.read, nlp, [text or ""]))[0]
+                ents = [{"name": t, "type": text_reader._type(label)} for t, label in found.entities]
+                rels = [{**ents[a], "relation": rel, "object": ents[b]["name"], "object_type": ents[b]["type"]}
+                        for a, rel, b, _ in found.relations if a < len(ents) and b < len(ents)]
+                return ents + rels
+        except Exception:                                    # noqa: BLE001 - the fallbacks below
+            pass
     try:
         import spacy  # type: ignore
         if _SPACY is None:
@@ -253,7 +272,7 @@ async def _produce_parsed(mech: dict, ctx: dict, text: str, model_spec: dict | N
             return _parse_json(raw)
         return {"records": _keywords(text, int(ctx.get("top_n") or mech.get("top_n", 8)))}
     if ref == "unstructured.ner":
-        return {"records": await _ner_records(text, model_spec)}
+        return {"records": await _ner_records(text, model_spec, workspace_id)}
     if ref == "unstructured.python":
         from opencortyx.ingest.extraction.pyextractor import run_python_extractor_async
         inputs = {**(ctx or {}), "text": text}
@@ -667,14 +686,20 @@ def _emit_edges(emit: dict) -> list:
 
 def _named_id(workspace_id, node_type: str, name: str, collection_id=None):
     """The id of the one node of `node_type` called `name` (per collection when given)."""
+    if not collection_id:
+        # the same id the text reader gives it (ingest/extraction/text_reader.py): a book an extractor
+        # names and the same book the reader finds in a sentence are one node, not two
+        from opencortyx.ingest.extraction.text_reader import entity_id
+        return entity_id(workspace_id, str(node_type), str(name))
     key = str(name).strip().lower()
-    return _det_id(workspace_id, str(node_type).lower(), f"{collection_id}:{key}" if collection_id else key)
+    return _det_id(workspace_id, str(node_type).lower(), f"{collection_id}:{key}")
 
 
 async def named_node(workspace_id, name: str, *, node_type: str = "Entity", entity_type=None, collection_id=None):
     """The node called `name`, created the first time. It has the id an emitted named node gets, so an
     edge endpoint and an emitted entity with the same name are one node. No lookup and no matching:
     which DIFFERENT names are the same thing is decided after the asset, by the resolution step."""
+    node_type = entity_type or node_type                   # a typed name ("Person") is a node of that type
     nid = _named_id(workspace_id, node_type, name, collection_id)
     if await _repo.get(workspace_id, nid) is None:
         await _repo.upsert_node(node_id=nid, workspace_id=workspace_id, type=node_type, label=str(name).strip()[:200],
@@ -1129,7 +1154,11 @@ async def _apply_emit_unit(db, workspace_id, tmpl, *, source_node, parsed, ctx, 
         order = list(enumerate(recs))
 
         for ri, rec in order:
-            label = _label_for(rec, ntype)
+            # a node type read from the record ("$type"): each record is written as the type it names
+            rtype = (str(_fill_field(ntype, rec) or "").strip() if ntype.startswith("$") else ntype)
+            if not rtype or (rtype != ntype and _node_off(rtype)):
+                continue
+            label = _label_for(rec, rtype)
             if spec.get("label"):                  # explicit label from a record field ($text, …)
                 label = (str(_fill_field(spec["label"], rec) or label))[:200]
             if overrides:                          # per-attribute prompt+model overrides (unchanged)
@@ -1150,9 +1179,9 @@ async def _apply_emit_unit(db, workspace_id, tmpl, *, source_node, parsed, ctx, 
             # every emitted node: a deterministic id, then an upsert
             key = label if resolve else spec.get("key") or (
                 (":".join(_s(rec.get(f)) for f in idfields) or label) if idfields else label)
-            nid = (_named_id(workspace_id, ntype, key, collection_id) if resolve
-                   else _det_id(workspace_id, ntype.lower(), key.strip().lower()) if is_global
-                   else _det_id(workspace_id, ntype.lower(),
+            nid = (_named_id(workspace_id, rtype, key, collection_id) if resolve
+                   else _det_id(workspace_id, rtype.lower(), key.strip().lower()) if is_global
+                   else _det_id(workspace_id, rtype.lower(),
                                 f"{source_node.id if source_node else 'global'}:{tmpl.name}:{key}"))
             rec_props = (rec if attrs is None else {k: v for k, v in rec.items() if k in attrs or k in idfields})
             props = {**rec_props, "__source": "enriched",
@@ -1172,7 +1201,7 @@ async def _apply_emit_unit(db, workspace_id, tmpl, *, source_node, parsed, ctx, 
                 inherited.append("created_date")
             if inherited:
                 props["__generated"] = inherited
-            node = await _repo.upsert_node(node_id=nid, workspace_id=workspace_id, type=ntype, label=label, properties=props,
+            node = await _repo.upsert_node(node_id=nid, workspace_id=workspace_id, type=rtype, label=label, properties=props,
                 entity_type=(etype or None),
                 source_ref=None if (is_global or resolve) else _parent_ref(source_node),
                 collection_id=collection_id, confidence=0.85)
@@ -1181,7 +1210,7 @@ async def _apply_emit_unit(db, workspace_id, tmpl, *, source_node, parsed, ctx, 
                 if per_record[ri] is None:
                     per_record[ri] = node
                 if ri < len(per_record_by_type):
-                    per_record_by_type[ri][ntype] = node
+                    per_record_by_type[ri][rtype] = node
                 counts["nodes"] += 1
                 _nt = node.type or "node"
                 counts["node_types"][_nt] = counts["node_types"].get(_nt, 0) + 1
@@ -1277,6 +1306,14 @@ async def _apply_emit_unit(db, workspace_id, tmpl, *, source_node, parsed, ctx, 
             for en in targets:
                 s_node = source_node if (frm == "source" and source_node) else en
                 t_node = en if to == "emitted" else (source_node if source_node else en)
+                # A record read from the data store is not a node: what links to it links to its
+                # document (as `_resolve_endpoints` does), the evidence ledger keeping the exact row.
+                if s_node is not None and _is_virtual(s_node):
+                    s_node = await _repo.get(workspace_id, s_node.source_ref) if s_node.source_ref else None
+                if t_node is not None and _is_virtual(t_node):
+                    t_node = await _repo.get(workspace_id, t_node.source_ref) if t_node.source_ref else None
+                if s_node is None or t_node is None:
+                    continue
                 ok, _r = await validate_edge(db, workspace_id, etype=etype, source_type=_vtype(s_node),
                                              target_type=_vtype(t_node))
                 if not ok:
@@ -1340,6 +1377,11 @@ async def _apply_emit_unit(db, workspace_id, tmpl, *, source_node, parsed, ctx, 
                 await _repo.save(node)
                 await _repo.link_date(workspace_id=workspace_id, node_id=node.id, created=False)
                 counts["attributes"] += len(resolved) + (1 if confidence is not None else 0)
+    if emitted:                                            # entities merged by name are in no asset's subtree
+        from opencortyx.resolution.names import link_similar
+        counts["near_names"] = await link_similar(workspace_id, emitted, _repo)
+        from opencortyx.tasks.graph import embed_later
+        embed_later(workspace_id, [n.id for n in emitted])
     return counts
 
 
@@ -1528,6 +1570,8 @@ async def preview_template(workspace_id: uuid.UUID, spec: dict, sample_text: str
             if not isinstance(spec_n, dict) or not spec_n.get("type"):
                 continue
             ntype = spec_n["type"]
+            if ntype.startswith("$"):                      # the type the record names
+                ntype = str(_fill_field(ntype, rec) or "").strip() or "Entity"
             declared = spec_n.get("attributes") or []
             label = _label_for(rec, ntype)
             if spec_n.get("label"):

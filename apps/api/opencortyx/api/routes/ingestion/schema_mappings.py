@@ -174,6 +174,26 @@ async def publish_knowledge(everything: bool = False, user: CurrentUser = Depend
     return res
 
 
+@router.get("/schema-mappings/assets")
+async def mapping_assets(user: CurrentUser = Depends(require_auth)):
+    """The workspace's tables and JSON files a mapping can describe."""
+    from opencortyx.core.dataplane import assets
+    from opencortyx.stores.data import layout
+    refs = await assets.refs(user.workspace_id, kinds=[layout.STRUCTURED, layout.SEMISTRUCTURED])
+    return {"items": sorted(({"id": r.asset_id, "name": r.name, "kind": r.kind} for r in refs),
+                            key=lambda a: a["name"].lower())}
+
+
+@router.post("/schema-mappings/shape")
+async def mapping_shape(body: dict, user: CurrentUser = Depends(require_auth)):
+    """What the given assets hold, measured: each record source (a table's rows, an object or a list
+    inside JSON) with its fields - filled, repeats within each file, type, words - and a few rows.
+    The Mapper builds its choices from this, so it offers only what the data supports."""
+    from opencortyx.knowledge.semantic import detector
+    ids = [str(a) for a in (body or {}).get("asset_ids") or [] if a][:20]
+    return {"sources": await detector.shape(user.workspace_id, ids)}
+
+
 @router.get("/schema-mappings/knowledge")
 async def knowledge_layer(user: CurrentUser = Depends(require_auth)):
     """Every entity type and relationship the workspace's mappings declare, merged across them."""
@@ -226,8 +246,11 @@ async def update_schema_mapping(mapping_id: str, patch: SchemaMappingPatch,
             m.paradigm = patch.paradigm
         if patch.source_type is not None:
             m.source_type = patch.source_type
+        was_live = m.status in ("active", "auto")
         if patch.status is not None:
             m.status = patch.status
+        # a mapping put in use, or taken out of it, changes what is published as much as its knowledge
+        went = (m.status in ("active", "auto")) != was_live
         linked: list[str] = []
         before = dict((m.payload or {}).get("knowledge") or {})
         if patch.payload is not None:
@@ -247,10 +270,10 @@ async def update_schema_mapping(mapping_id: str, patch: SchemaMappingPatch,
         await db.commit()
         await db.refresh(m)
     link_existing_later(user.workspace_id, linked)
-    if patch.payload is not None and (m.payload or {}).get("knowledge"):
+    if (patch.payload is not None or went) and (m.payload or {}).get("knowledge"):
         from opencortyx.knowledge.semantic.store import invalidate_views, publish_changed
         invalidate_views(user.workspace_id)                  # questions read the edited types from now on
-        if publish_changed(before, (m.payload or {}).get("knowledge") or {}):
+        if went or publish_changed(before, (m.payload or {}).get("knowledge") or {}):
             from opencortyx.tasks.maintenance import v2_apply_knowledge_choices
             v2_apply_knowledge_choices.delay(str(user.workspace_id), publish_first=True)
     return mapping_view(m)

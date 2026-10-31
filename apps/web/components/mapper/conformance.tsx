@@ -15,10 +15,10 @@
  * contain "chunk" — so it reported conformance over a graph that did not conform.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ShieldCheck, AlertTriangle, CheckCircle2, Loader2, Search } from "lucide-react";
 import Button from "@/components/ui/Button";
-import { contextV2Api, type MappingConformance } from "@/lib/api/contextV2";
+import { contextV2Api, type MappingAsset, type MappingConformance } from "@/lib/api/contextV2";
 
 const Names = ({ title, tone, nodes, edges, blurb }: {
   title: string; tone: "ok" | "warn" | "muted";
@@ -54,13 +54,16 @@ const Names = ({ title, tone, nodes, edges, blurb }: {
 
 export default function ConformancePanel({ mappingId }: { mappingId: string }) {
   const [assetId, setAssetId] = useState("");
+  const [files, setFiles] = useState<MappingAsset[]>([]);
+  useEffect(() => { contextV2Api.mappingAssets().then(setFiles).catch(() => setFiles([])); }, []);
   const [res, setRes] = useState<MappingConformance | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
   const run = async () => {
-    const id = assetId.trim();
-    if (!id) { setErr("Paste the id of an asset this mapping ingested."); return; }
+    const typed = assetId.trim();
+    const id = files.find((f) => f.name === typed)?.id || typed;
+    if (!id) { setErr("Choose a file this mapping read."); return; }
     setBusy(true); setErr(""); setRes(null);
     try {
       setRes(await contextV2Api.schemaMappingConformance(mappingId, id));
@@ -70,20 +73,17 @@ export default function ConformancePanel({ mappingId }: { mappingId: string }) {
   };
 
   return (
-    <div className="p-3.5">
-      <p className="text-[12.5px] text-stone-500 mb-3">
-        After a run, check the graph an asset actually produced against what this mapping declares —
-        exact names, in both directions.
-      </p>
+    <div>
       <div className="flex flex-wrap gap-2 items-center mb-3">
         <div className="relative flex-1 min-w-[280px]">
           <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-stone-400" />
           <input value={assetId} onChange={(e) => setAssetId(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") run(); }}
-            placeholder="asset id (a Source node id from the run)"
-            className="w-full pl-8 pr-3 py-2 rounded-lg border border-stone-200 bg-white font-mono text-[12.5px]
+            placeholder="file name or asset id" list="conformance-files"
+            className="w-full pl-8 pr-3 py-2 rounded-lg border border-stone-200 bg-white text-[12.5px]
                        focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40" />
         </div>
+        <datalist id="conformance-files">{files.map((f) => <option key={f.id} value={f.name} />)}</datalist>
         <Button variant="secondary" size="sm" icon={ShieldCheck} busy={busy} onClick={run}>Check</Button>
       </div>
 

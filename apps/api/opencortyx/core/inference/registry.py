@@ -131,6 +131,9 @@ async def ensure_role(workspace_id, role: str) -> bool:
 
 async def resolve_model(workspace_id, role: str = "generation", ref: str | None = None) -> dict | None:
     """The spec for (workspace, role, optional ref), or None when the workspace's registry has none."""
+    # Tasks pass the id as text; compared with a row's UUID it never matched, and every model looked
+    # up from a background task read as "none registered".
+    workspace_id = uuid.UUID(str(workspace_id))
     ck = f"{workspace_id}:{role}:{ref or '*'}"
     hit = _cache.get(ck)
     if hit is not None:

@@ -10,6 +10,7 @@ import {
   contextV2Api, type IngestOutcome, type OutcomeStep, type Pipeline, type SchemaMappingRecord, type UploadBatch,
 } from "@/lib/api/contextV2";
 import { uploadAll } from "@/lib/uploadQueue";
+import { buildStages, newStage, type PipelineKind } from "@/components/pipelines/model";
 
 /**
  * Add data — the only screen a new user needs: drop files, choose what goes into the knowledge
@@ -296,6 +297,28 @@ function CustomSection({ kinds, value, onChange }: {
   const set = Object.values(value.pipelines).filter(Boolean).length + value.mappings.length
     + value.extractors.length + (value.tags.length ? 1 : 0);
   const toggle = (list: string[], v: string) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
+  const [saved, setSaved] = useState("");
+  const saveSetup = async () => {
+    const name = prompt("Name this setup")?.trim();
+    if (!name) return;
+    const byKind: [PipelineKind, string[], string[]][] = [];
+    for (const k of ["structured", "semistructured"] as const) {
+      const ids = value.mappings.filter((id) => mappings?.find((m) => String(m.id) === id)?.paradigm === k);
+      if (ids.length) byKind.push([k, ids, []]);
+    }
+    if (value.extractors.length) byKind.push(["document", [], value.extractors]);
+    try {
+      for (const [kind, ids, steps] of byKind) {
+        await contextV2Api.createPipeline({
+          name: byKind.length > 1 ? `${name} (${kind === "document" ? "documents" : kind === "structured" ? "tables" : "JSON"})` : name,
+          kind, stages: buildStages(kind, ids.length ? { mapping_ids: ids } : {}, steps.map((s, i) => newStage(s, i + 1))),
+        });
+      }
+      setSaved(`Saved "${name}"`);
+    } catch (e: any) {
+      setSaved(e?.response?.data?.detail || e?.message || "Could not save");
+    }
+  };
   return (
     <div className="rounded-lg border border-stone-200 dark:border-stone-800 text-sm">
       <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
@@ -357,6 +380,12 @@ function CustomSection({ kinds, value, onChange }: {
             <TagInput id="add-tags" value={value.tags} onChange={(tags) => onChange({ ...value, tags })}
                       placeholder="Untagged, each file is filed under its type" />
           </div>
+          {(value.mappings.length > 0 || value.extractors.length > 0) && (
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={saveSetup} className="text-sm text-primary hover:underline">Save as setup</button>
+              {saved && <span className="text-xs text-stone-500">{saved}</span>}
+            </div>
+          )}
         </div>
       )}
     </div>

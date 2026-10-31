@@ -211,5 +211,9 @@ async def read_inputs(workspace_id, inputs: list[Input], *, by: str = "text_read
                                       source="discovered")
             await db.commit()
     counts["linked"] = await link_mentions(workspace_id, [n for n in written.values() if n is not None], repo=repo)
+    from opencortyx.resolution.names import link_similar   # near misses of a name: SAME_AS
+    counts["near_names"] = await link_similar(workspace_id, list(written.values()), repo)
+    from opencortyx.tasks.graph import embed_later         # merged by name: in no asset's subtree
+    embed_later(workspace_id, [n.id for n in written.values() if n is not None])
     log.info("text_reader.read", workspace_id=str(workspace_id), **counts)
     return counts

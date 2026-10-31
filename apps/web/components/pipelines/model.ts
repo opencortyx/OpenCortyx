@@ -38,20 +38,20 @@ export const KIND_META: Record<PipelineKind, {
 }> = {
   document: {
     label: "Unstructured", sub: "PDFs, docs, prose",
-    anchorTitle: "Reading rule",
-    anchorHint: "Bind a mapping, or let the default walker split each document into chunks.",
+    anchorTitle: "How it reads",
+    anchorHint: "With a mapping, or automatically: each document split into passages.",
     unit: "chunk",
   },
   structured: {
     label: "Structured", sub: "SQL tables, CSV, warehouses",
-    anchorTitle: "Reading rule",
-    anchorHint: "Bind a mapping, or let the default walker read every table.",
+    anchorTitle: "How it reads",
+    anchorHint: "With a mapping, or automatically: every table.",
     unit: "row",
   },
   semistructured: {
     label: "Semi-structured", sub: "JSON, APIs, events",
-    anchorTitle: "Reading rule",
-    anchorHint: "Bind a mapping, or let the default walker read the whole structure.",
+    anchorTitle: "How it reads",
+    anchorHint: "With a mapping, or automatically: the whole structure.",
     unit: "node",
   },
 };

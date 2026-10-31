@@ -10,6 +10,7 @@ input where it lives instead - nothing is copied into the graph first:
     {"asset": ..., "path": "$.contact.email"}        one JSON path inside each record
     {"type": "Customer"}                             each record of a semantic-layer entity type,
                                                      across every asset it is bound to
+    {"type": "Turn", "column": "content"}            one field of each record of a type
 
 Each input is a node-shaped record that is never written (core/dataplane/passages.VIRTUAL): its
 text is the value, its parent the asset, its evidence unit the row it came from - so what an
@@ -58,7 +59,7 @@ async def select(workspace_id, spec: dict, *, limit: int = 1000) -> list[Node]:
     from opencortyx.stores.data import Views, layout
     spec = spec or {}
     if spec.get("type"):
-        return await _of_type(workspace_id, str(spec["type"]), limit)
+        return await _of_type(workspace_id, str(spec["type"]), limit, spec.get("column"))
     a = await _asset(workspace_id, spec.get("asset") or "")
     if a is None:
         return []
@@ -83,8 +84,10 @@ async def select(workspace_id, spec: dict, *, limit: int = 1000) -> list[Node]:
     return await anyio.to_thread.run_sync(read)
 
 
-async def _of_type(workspace_id, type_name: str, limit: int) -> list[Node]:
-    """Each record of a semantic-layer entity type, as one input: its properties as text."""
+async def _of_type(workspace_id, type_name: str, limit: int, column: Optional[str] = None) -> list[Node]:
+    """Each record of a semantic-layer entity type, as one input: its properties as text - or, with
+    `column`, that one field. A record of a type with no identifier (an event) is named by its
+    content."""
     import anyio
 
     from opencortyx.knowledge.semantic import store
@@ -103,8 +106,11 @@ async def _of_type(workspace_id, type_name: str, limit: int) -> list[Node]:
             rows = v.query(f'SELECT * FROM "{table.view}" LIMIT {int(limit)}').to_pylist()
         out = []
         for r in rows:
-            key = "|".join(str(r.get(k)) for k in t.keys) or json.dumps(r, default=str)[:60]
-            text = "; ".join(f"{k}: {_text(v)}" for k, v in r.items() if v is not None and not k.startswith("_"))
-            out.append(_node(workspace_id, first or str(uuid.uuid5(_NS, type_name)), key, text, type_name))
+            key = "|".join(str(r.get(k)) for k in t.keys) or str(uuid.uuid5(_NS, json.dumps(r, default=str, sort_keys=True)))
+            text = (_text(r.get(column)) if column else
+                    "; ".join(f"{k}: {_text(v)}" for k, v in r.items() if v is not None and not k.startswith("_")))
+            if text.strip():
+                out.append(_node(workspace_id, first or str(uuid.uuid5(_NS, type_name)), key, text,
+                                 f"{type_name}.{column}" if column else type_name))
         return out
     return await anyio.to_thread.run_sync(read) if first else []

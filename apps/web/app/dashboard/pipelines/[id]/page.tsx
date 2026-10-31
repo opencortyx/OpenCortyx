@@ -231,7 +231,7 @@ function PipelineBuilder() {
       <PageHeader
         title={name || (isNew ? "New pipeline" : "Pipeline")}
         icon={GitBranch}
-        description={`${meta.label} — ${meta.sub}. One reading rule, then the steps that run over it.`}
+        description={`${meta.label} — ${meta.sub}.`}
         actions={
           <div className="flex items-center gap-2">
             <Link href="/dashboard/pipelines">
@@ -345,9 +345,6 @@ function PipelineBuilder() {
               </optgroup>
             ))}
           </select>
-          <span className="text-[11.5px] text-stone-500">
-            {stageChoices.length} extractor{stageChoices.length === 1 ? "" : "s"} available
-          </span>
         </div>
       </div>
     </div>

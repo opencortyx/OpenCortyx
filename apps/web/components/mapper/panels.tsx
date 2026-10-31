@@ -488,7 +488,7 @@ function Endpoint({ side, edge, types, existing, fieldsHere, targetFields, parad
           const note = typeof kinds[k] === "string" ? (kinds[k] as string) : undefined;
           return (
             <button key={k} type="button" disabled={!enabled || k === "context" || k === "position"}
-              title={note || (k === "context" || k === "position" ? "drawn on the node rule itself" : "")}
+              title={note || (k === "context" || k === "position" ? "drawn on the node rule itself" : KIND_BLURB[k])}
               aria-pressed={kind === k} onClick={() => setKind(k)}
               className={`text-[11px] font-semibold py-1.5 rounded-md border transition-colors
                           ${kind === k ? KIND_SOLID[k] : "bg-white text-stone-500 border-stone-200 hover:border-stone-300"}
