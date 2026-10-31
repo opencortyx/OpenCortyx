@@ -90,12 +90,28 @@ jobs:
           grep -E '^(FAILED|ERROR) ' /tmp/pytest.log | head -20 | sed 's/^/::error title=pytest::/'
           exit $status
       - name: Dependency audit
+        # Every package the lock pins, read from poetry.lock itself: `poetry export` cannot walk a
+        # dependency with a different constraint per Python version (fastembed's numpy). A package
+        # pinned at two versions (one per platform) goes in a second file: pip-audit takes one each.
         run: |
-          poetry export --with dev --without-hashes -f requirements.txt -o /tmp/requirements-audit.txt
+          python - <<'PY'
+          import tomllib
+          files = [{}]
+          for p in tomllib.load(open("poetry.lock", "rb"))["package"]:
+              f = next((f for f in files if p["name"] not in f), None)
+              if f is None:
+                  files.append(f := {})
+              f[p["name"]] = p["version"]
+          for i, f in enumerate(files):
+              with open(f"/tmp/requirements-audit-{i}.txt", "w") as out:
+                  out.writelines(f"{n}=={v}\n" for n, v in f.items())
+          PY
           pip install pip-audit
           # Accepted advisories, each with its reason and when to drop it: pip-audit-ignore.txt.
-          pip-audit -r /tmp/requirements-audit.txt --no-deps --disable-pip \
-            $(grep -vE '^\s*(#|$)' pip-audit-ignore.txt | sed 's/^/--ignore-vuln /')
+          ignore=$(grep -vE '^\s*(#|$)' pip-audit-ignore.txt | sed 's/^/--ignore-vuln /' || true)   # none: grep exits 1
+          for f in /tmp/requirements-audit-*.txt; do
+            pip-audit -r "$f" --no-deps --disable-pip $ignore
+          done
 
   mcp:
     runs-on: ubuntu-latest

@@ -196,6 +196,9 @@ own lake tables are read in place, never copied.
   phrase rather than a token (a name over an email), the model deciding only a tie.
 
 ### Fixed
+- **Security**: Pillow 13.0.0 (fastembed 0.9.1 now allows it), filelock 4.2.6, pyasn1 0.6.5 and
+  setuptools 84.2.1, each fixing advisories published since 0.1.0-beta.7. The dependency audit
+  accepts no advisory at all now, and reads every pin straight from `poetry.lock`.
 - The startup check warned on every install that `sentence-transformers` was missing and reranking
   would fall back to a model; the built-in cross-encoder runs on fastembed, which the image carries.
   It now warns only when neither library is there.

@@ -1,44 +1,5 @@
 # Advisories the dependency audit (CI `api` job) accepts, each with its reason. One ID per line;
 # comments and blank lines are ignored. Review every entry when its dependency can move.
 #
-# Pillow 12.3.0, fixed in 13.0.0 (accepted 2026-10-22; the 966xx IDs and GHSA-78g4-xqwv-q3g8 published later). fastembed, the in-process embedder, requires
-# Pillow < 13 in every release (0.8.0 and 0.9.0, the latest), so the fix cannot be installed yet.
-# No untrusted image reaches Pillow: uploaded images and PDFs are decoded by LiteParse (Rust);
-# fastembed uses Pillow only for image embeddings, which OpenCortyx does not use; python-pptx uses
-# it only when inserting pictures into slides, not when reading them.
-# Remove these lines when fastembed allows Pillow 13 and the lock moves to it.
-CVE-2026-112390
-CVE-2026-112391
-CVE-2026-112392
-CVE-2026-112393
-CVE-2026-112395
-CVE-2026-112396
-CVE-2026-112397
-CVE-2026-112399
-CVE-2026-112400
-CVE-2026-112401
-CVE-2026-112402
-CVE-2026-112404
-CVE-2026-112405
-CVE-2026-112406
-CVE-2026-112891
-CVE-2026-112892
-CVE-2026-112893
-CVE-2026-112894
-CVE-2026-112895
-CVE-2026-112896
-CVE-2026-112897
-CVE-2026-112899
-CVE-2026-112900
-CVE-2026-112901
-CVE-2026-96636
-CVE-2026-96637
-CVE-2026-96638
-CVE-2026-96639
-CVE-2026-96640
-CVE-2026-96641
-CVE-2026-96642
-CVE-2026-96643
-CVE-2026-96644
-CVE-2026-96778
-GHSA-78g4-xqwv-q3g8
+# None at present. (Pillow's 12.3.0 advisories left this list on 2026-10-31: fastembed 0.9.1 allows
+# Pillow 13 and the lock moved to 13.0.0.)
