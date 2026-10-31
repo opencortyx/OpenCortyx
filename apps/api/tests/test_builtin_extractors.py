@@ -333,7 +333,8 @@ def test_engine_can_merge_attributes_onto_a_non_source_node():
     """The primitive the judge needed: `on` accepts an endpoint, so a record can mark another node."""
     import inspect
     from opencortyx.ingest.extraction import templates as et
-    src = inspect.getsource(et._apply_emit)
+    # _apply_emit hands each unit to _apply_emit_unit, where the work is
+    src = inspect.getsource(et._apply_emit) + inspect.getsource(et._apply_emit_unit)
     assert '_resolve_endpoints(workspace_id, on, rec' in src, \
         "attribute merges must resolve `on` through the same endpoint vocabulary as edges"
     assert '__confidence' in src, "a reserved key must be able to set a node's confidence"

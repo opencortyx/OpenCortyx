@@ -108,8 +108,10 @@ async def choose(prompt: str, options: list[str], *, model_spec: Optional[dict],
         scores = await asyncio.to_thread(_score_local, mid, prompt, options, system)
         if baseline:
             key = (mid, baseline, system, tuple(options))
-            prior = _priors.get(key)
-            if prior is None:
+            cached = _priors.get(key)
+            if cached is not None:
+                prior = cached
+            else:
                 prior = await asyncio.to_thread(_score_local, mid, baseline, options, system)
                 if len(_priors) > 5000:
                     _priors.clear()

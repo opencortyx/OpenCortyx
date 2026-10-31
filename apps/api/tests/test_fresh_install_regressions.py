@@ -159,6 +159,8 @@ def fake_repo(monkeypatch):
     from opencortyx.ingest.semistructured import ingest as walker_module
     repo = _FakeRepo()
     monkeypatch.setattr(walker_module, "_repo", repo)
+    # the data store's path (a Delta workspace) writes the file's Attribute nodes with its own repo
+    monkeypatch.setattr("opencortyx.core.substrate.NodeRepo", lambda: repo)
     return repo
 
 
