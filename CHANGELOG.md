@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0-beta.2 - 2026-11-01
+
+### Fixed
+- `opencortyx doctor` failed on every fresh installation: the built-in generation model
+  (Qwen3-0.6B, run inside OpenCortyx since 0.1.0-beta.7) was checked as a hosted API whose key was
+  missing. It is now reported as an in-process model, downloaded or downloading on first use. Before
+  the admin exists, the embedding check warns "no workspace yet" instead of failing.
+
+### Upgrading
+- `opencortyx update`. Nothing else changes.
+
 ## 0.2.0-beta.1 - 2026-10-31
 
 Data and knowledge are stored apart ([ADR-006](docs/adr/006-data-and-knowledge-apart.md),
