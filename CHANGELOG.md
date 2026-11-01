@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.0-beta.3 - 2026-11-01
+
+### Fixed
+- **Extractors chosen in Add data now extract from a new table or JSON file.** They were queued the
+  moment the upload finished, before detection had read the file into records, so an extractor
+  built to read a type (for example people and places from each Turn's text) read the records that
+  existed before the upload and missed the new file's. They now wait for the detection pass that
+  publishes the file's records, then read that file's records only. A document's extractors still
+  run as soon as it is in.
+
+### Upgrading
+- `opencortyx update`. Nothing else changes.
+
 ## 0.2.0-beta.2 - 2026-11-01
 
 ### Fixed

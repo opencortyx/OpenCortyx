@@ -115,6 +115,10 @@ def schedule_kpi_computation(self, workspace_id: str):
 
 #: The extractors an upload chose, until its run finishes: [{"name", "inputs"}].
 _BOOKED = "v2:custom-extractors:{}"
+#: ...then, for a table or a JSON file, until detection has published its records: per asset, and the
+#: workspace's assets waiting.
+_BOOKED_ASSET = "v2:custom-extractors:asset:{}"
+_WAITING = "v2:custom-extractors:waiting:{}"
 
 
 def book_extractors(run_id, items: list) -> None:
@@ -134,22 +138,14 @@ def book_extractors(run_id, items: list) -> None:
         log.warning("custom_extractors.book_failed", error=str(e)[:200])
 
 
-def queue_booked_extractors(workspace_id, run_id, source_id, kind: str | None) -> int:
-    """Queue the extractors booked for this run over the asset it read: a table's or a JSON file's
-    columns or keys, a document's sections (none chosen: all of it). Returns how many were queued."""
-    if not run_id or not source_id:
-        return 0
-    try:
-        import json
+def _redis():
+    import redis as _r
 
-        import redis as _redis
+    from opencortyx.core.config import settings
+    return _r.Redis.from_url(settings.CELERY_BROKER_URL)
 
-        from opencortyx.core.config import settings
-        raw = _redis.Redis.from_url(settings.CELERY_BROKER_URL).getdel(_BOOKED.format(run_id))
-    except Exception as e:                                    # noqa: BLE001
-        log.warning("custom_extractors.take_failed", error=str(e)[:200])
-        return 0
-    items = json.loads(raw) if raw else []
+
+def _queue_over(workspace_id, source_id, kind: str | None, items: list) -> int:
     for it in items:
         inputs = [str(x) for x in (it.get("inputs") or []) if str(x).strip()]
         data = {"asset": str(source_id)}
@@ -157,6 +153,47 @@ def queue_booked_extractors(workspace_id, run_id, source_id, kind: str | None) -
             data["sections" if kind == "document" else "columns"] = inputs
         v2_run_extractor_over.delay(str(workspace_id), str(it.get("name") or ""), data)
     return len(items)
+
+
+def queue_booked_extractors(workspace_id, run_id, source_id, kind: str | None) -> int:
+    """The extractors booked for this run, over the asset it read. A document's are queued now (its
+    sections; none chosen: all of it). A table's or a JSON file's wait for the detection pass that
+    publishes its records (`queue_after_detection`): before it, the file has no records of any type
+    to read. Returns how many were queued or kept waiting."""
+    if not run_id or not source_id:
+        return 0
+    try:
+        import json
+        r = _redis()
+        raw = r.getdel(_BOOKED.format(run_id))
+        items = json.loads(raw) if raw else []
+        if items and kind != "document":
+            r.set(_BOOKED_ASSET.format(source_id), json.dumps(items), ex=7 * 24 * 3600)
+            r.sadd(_WAITING.format(workspace_id), str(source_id))
+            r.expire(_WAITING.format(workspace_id), 7 * 24 * 3600)
+            return len(items)
+    except Exception as e:                                    # noqa: BLE001
+        log.warning("custom_extractors.take_failed", error=str(e)[:200])
+        return 0
+    return _queue_over(workspace_id, source_id, kind, items)
+
+
+def queue_after_detection(workspace_id) -> int:
+    """After a detection pass has published: the extractors each waiting asset's upload chose, over
+    that asset's records. Returns how many were queued."""
+    try:
+        import json
+        r = _redis()
+        waiting = [m.decode() if isinstance(m, bytes) else str(m) for m in r.smembers(_WAITING.format(workspace_id))]
+        queued = 0
+        for asset_id in waiting:
+            r.srem(_WAITING.format(workspace_id), asset_id)
+            raw = r.getdel(_BOOKED_ASSET.format(asset_id))
+            queued += _queue_over(workspace_id, asset_id, None, json.loads(raw) if raw else [])
+        return queued
+    except Exception as e:                                    # noqa: BLE001
+        log.warning("custom_extractors.after_detection_failed", error=str(e)[:200])
+        return 0
 
 
 @celery_app.task(bind=True, queue="extraction", name="opencortyx.run_extractor_over", acks_late=True,
@@ -179,8 +216,14 @@ def v2_run_extractor_over(self, workspace_id: str, name: str, data: dict, done: 
                 return {"status": "not_found", "name": name}
             db.expunge(t)
         own = (t.source or {}).get("data") or {}
-        # no inputs chosen: it reads what it was built to read (a type's records), else the asset
-        reads = own if set(data) == {"asset"} and own.get("type") else data
+        # built to read a type's records: this file's records of it (a chosen input is the field);
+        # otherwise the file itself - its columns, keys or sections
+        if own.get("type") and data.get("asset"):
+            reads = {**own, "asset": data["asset"]}
+            if data.get("columns"):
+                reads["column"] = data["columns"][0]
+        else:
+            reads = data
         t.source = {**(t.source or {}), "select": "*", "data": reads}   # this run only; never saved
         return await run_template(oid, t, deadline=_deadline(), done=done)
 

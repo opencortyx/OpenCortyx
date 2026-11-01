@@ -329,6 +329,8 @@ def v2_detect_knowledge(self, workspace_id: str):
         chosen = await store.choose(workspace_id, asset_ids=asked, materialize=True) if asked else []
         published = await publish.publish(workspace_id, everything=_rc.knowledge_publish())
         _done_after_detection(workspace_id, asked)        # its records are in: no longer pending
+        from opencortyx.tasks.enrich import queue_after_detection
+        queue_after_detection(workspace_id)               # the extractors their uploads chose
         await publish.link_schema(workspace_id, layer)    # the detected links between columns / keys
         return {"types": len(layer.types), "links": len(layer.links), "published": published,
                 "chosen_for_graph": chosen}

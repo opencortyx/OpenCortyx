@@ -61,7 +61,7 @@ async def select(workspace_id, spec: dict, *, limit: int = 1000) -> list[Node]:
     from opencortyx.stores.data import Views, layout
     spec = spec or {}
     if spec.get("type"):
-        return await _of_type(workspace_id, str(spec["type"]), limit, spec.get("column"))
+        return await _of_type(workspace_id, str(spec["type"]), limit, spec.get("column"), spec.get("asset"))
     a = await _asset(workspace_id, spec.get("asset") or "")
     if a is None:
         return []
@@ -99,10 +99,12 @@ async def select(workspace_id, spec: dict, *, limit: int = 1000) -> list[Node]:
     return await anyio.to_thread.run_sync(read)
 
 
-async def _of_type(workspace_id, type_name: str, limit: int, column: Optional[str] = None) -> list[Node]:
+async def _of_type(workspace_id, type_name: str, limit: int, column: Optional[str] = None,
+                   asset: Optional[str] = None) -> list[Node]:
     """Each record of a semantic-layer entity type, as one input: its properties as text - or, with
     `column`, that one field. A record of a type with no identifier (an event) is named by its
-    content."""
+    content. With `asset` (an asset id), only the records read from that file - none when the file
+    holds no record of the type."""
     import anyio
 
     from opencortyx.knowledge.semantic import store
@@ -115,10 +117,20 @@ async def _of_type(workspace_id, type_name: str, limit: int, column: Optional[st
     if t is None or table is None:
         return []
     first: Optional[str] = t.bindings[0].asset_id if t.bindings else None
+    where = ""
+    if asset:
+        name = next((b.asset_name for b in t.bindings if b.asset_id == str(asset)), None)
+        if name is None:
+            return []
+        first = str(asset)
+        lit = "'" + name.replace("'", "''") + "'"
+        # an event's row names its file (_asset); an identified record every file it was read from
+        where = (f" WHERE list_contains(string_split(_assets, ', '), {lit})" if t.keys
+                 else f" WHERE _asset = {lit}")
 
     def read() -> list[Node]:
         with Views(workspace_id, lock=True, **schema.needs([table.view])) as v:
-            rows = v.query(f'SELECT * FROM "{table.view}" LIMIT {int(limit)}').to_pylist()
+            rows = v.query(f'SELECT * FROM "{table.view}"{where} LIMIT {int(limit)}').to_pylist()
         out = []
         for r in rows:
             key = "|".join(str(r.get(k)) for k in t.keys) or str(uuid.uuid5(_NS, json.dumps(r, default=str, sort_keys=True)))

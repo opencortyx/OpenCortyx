@@ -258,7 +258,40 @@ def test_a_booked_extractor_reads_the_inputs_chosen_or_what_it_was_built_to_read
     enrich.v2_run_extractor_over.run(str(uuid.uuid4()), "x", {"asset": "a1"})
     tmpl = NS(source={"data": {"type": "Turn", "column": "content"}})
     enrich.v2_run_extractor_over.run(str(uuid.uuid4()), "x", {"asset": "a1", "columns": ["notes"]})
-    assert ran == [{"type": "Turn", "column": "content"}, {"asset": "a1", "columns": ["notes"]}]
+    tmpl = NS(source={"data": {}})
+    enrich.v2_run_extractor_over.run(str(uuid.uuid4()), "x", {"asset": "a1", "sections": ["Risks"]})
+    assert ran == [{"type": "Turn", "column": "content", "asset": "a1"},      # this file's turns only
+                   {"type": "Turn", "column": "notes", "asset": "a1"},        # the field chosen
+                   {"asset": "a1", "sections": ["Risks"]}], "a text extractor reads the file itself"
+
+
+def test_a_booked_extractor_waits_for_the_records_detection_publishes(monkeypatch):
+    """A document's extractors run when its upload finishes. A JSON file's cannot: its records are
+    of no type until detection has read it, so they wait, and detection queues them over the file."""
+    from opencortyx.tasks import enrich
+
+    class _R:
+        def __init__(self): self.kv, self.sets = {}, {}
+        def getdel(self, k): return self.kv.pop(k, None)
+        def set(self, k, v, ex=None): self.kv[k] = v
+        def sadd(self, k, v): self.sets.setdefault(k, set()).add(v)
+        def expire(self, *a): pass
+        def smembers(self, k): return set(self.sets.get(k, set()))
+        def srem(self, k, v): self.sets.get(k, set()).discard(v)
+    r, queued = _R(), []
+    monkeypatch.setattr(enrich, "_redis", lambda: r)
+    monkeypatch.setattr(enrich.v2_run_extractor_over, "delay", lambda ws, name, data: queued.append((name, data)))
+
+    r.set(enrich._BOOKED.format("run-doc"), '[{"name": "summary", "inputs": ["Risks"]}]')
+    assert enrich.queue_booked_extractors("ws", "run-doc", "doc-1", "document") == 1
+    assert queued == [("summary", {"asset": "doc-1", "sections": ["Risks"]})], "a document: at once"
+
+    r.set(enrich._BOOKED.format("run-json"), '[{"name": "conversation_entities", "inputs": []}]')
+    assert enrich.queue_booked_extractors("ws", "run-json", "json-1", "semistructured") == 1
+    assert len(queued) == 1, "a JSON file waits for detection"
+    assert enrich.queue_after_detection("ws") == 1
+    assert queued[-1] == ("conversation_entities", {"asset": "json-1"})
+    assert enrich.queue_after_detection("ws") == 0, "queued once"
 
 
 def test_a_long_run_stops_at_its_deadline_and_the_next_task_reads_only_the_rest(monkeypatch):
