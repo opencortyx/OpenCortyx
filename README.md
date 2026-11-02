@@ -6,13 +6,16 @@
 
 <img src="docs/assets/wordmark.svg" alt="OpenCortyx" height="48" />
 
-### The Knowledge Layer for AI
+### Open Knowledge Infrastructure for AI
 
-Connect your data, documents, systems, and relationships into one intelligent knowledge layer
+Connect your data, and relationships into one intelligent knowledge
 that gives AI agents the context they need to understand, reason, and act.
 
+### Own Your AI
+
 Every answer shows exactly where it came from, or says "I don't know." Self-hosted, so your data
-never leaves your machine.
+never leaves your machine. No vendor lock-in, no black boxes — you control the models, the data,
+and the infrastructure.
 
 [Website](https://www.opencortyx.com) ·
 [Documentation](docs/README.md) ·
