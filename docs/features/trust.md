@@ -43,50 +43,37 @@ The page has two tabs.
 - Entries are embedded when you save them, so they show up in search and answers at once.
 - **Recent edits** lists what changed lately, so you can review what others added.
 
-## Nodes & Relationships
+## Kinds of thing in your data
 
-This page shows every node type and relationship type in your workspace, built-in or discovered,
-in one place.
-
-![Nodes and relationships](../assets/screenshots/nodes-relationships.png)
-
-### How to use it
-
-1. Type in **Search types...** to find a type.
-2. Click the switch on a type to turn it off. A type that is off is hidden from the graph and is not
-   extracted any more. Click it again to turn it back on.
-3. Click the pencil to edit a type's description. The model reads these descriptions during
-   extraction, so a precise description gives better results.
-4. Use **Enable all** or **Disable all** to change every type at once.
+Every kind of thing in your workspace, and how it connects, is checked in one place: the
+[Mapper](integration.md#mapper). A file's kinds (Customer, Order…) are named, identified and
+connected there, and **Found by extractors** lists the kinds extractors found in documents and in
+the text of records (Person, Product…), each with a switch: a kind that is off is hidden from the
+graph and is not extracted any more.
 
 ### Match the same record across files (Resolution)
 
-Each record you ingest becomes its own node, even when another file has a record with the same id.
-Resolution is how you tell OpenCortyx when two records are the same thing, for example the same
-employee in two files. Nothing is matched until you set it, and it is set per node type.
+A thing's identifier already makes the same id the same node. Resolution goes further: it says when
+two records are the same thing even when they come from different files or are spelled
+differently, for example the same employee in two HR exports. It is set per kind.
 
-1. Click the pencil on a node type, for example `Lead`. Its editor opens at the top of the page.
-2. Scroll to **Resolution**. The fields listed are the ones real records of this type carry.
-3. Under **Identified by**, click the field (or fields) that identify a record, for example
+1. Open the [Mapper](integration.md#mapper), pick a file, and on the kind's card open **Same thing
+   across files**. (For a kind an extractor creates, use that extractor's **Resolution** section.)
+2. Under **Identified by**, click the field (or fields) that identify a record, for example
    `employee_id`. Pick two fields, such as `name` and `country`, when only both together are unique.
-4. Pick a **Scorer**:
+3. Pick a **Scorer**:
    - **Exact (same values)**: the values must be equal once tidied up. A match is linked
      automatically.
    - **Similar (close spellings)**: "Acme Corp" can match "Acme Corporation". Set **Apply
      automatically at** and **Send for review at**. A match above the first is linked on its own,
      one between the two waits in the [Review Queue](#review-queue).
-5. Under **Never compare**, click any field whose differences do not matter, such as notes.
-6. Press **Save resolution**. From now on, every new asset is matched after it is ingested.
-7. Press **Re-check existing data** to match the records that are already in as well.
+4. Under **Never compare**, click any field whose differences do not matter, such as notes.
+5. Press **Save resolution**. From now on, every new asset is matched after it is ingested.
+6. Press **Re-check existing data** to match the records that are already in as well.
 
 When two records match, they are linked as the same thing, values one is missing are added from the
 other, and different values are kept on both and flagged in the Review Queue. Nothing is
-overwritten. A type with resolution set shows a small link icon next to its name.
-
-### Good to know
-
-- The counter at the top shows how many types are on out of the total.
-- A new type needs no database change: properties are stored as JSON.
+overwritten. Renaming a kind in the Mapper keeps its Resolution.
 
 ## Review Queue
 

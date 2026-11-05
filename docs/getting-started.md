@@ -23,7 +23,8 @@ Progress is shown under *Runs*. Extraction continues in the background after upl
 ## 4. Shape the knowledge
 
 - *Mapper* defines how JSON, tables and documents become nodes and edges.
-- *Custom Extractors* holds extractors and relationship rules; a pipeline names the ones that run.
+- *Custom Extractors* holds your extractors: what to find in files, its fields and how it connects.
+  Add data, the Mapper and saved setups name the ones that run.
 - *Review Queue* lists facts proposed by agents and extractors that need approval.
 
 ## 5. Ask questions

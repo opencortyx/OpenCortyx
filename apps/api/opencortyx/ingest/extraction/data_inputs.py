@@ -46,6 +46,19 @@ def _node(workspace_id, asset_id: str, unit: str, text: str, field: str, collect
                 collection_id=collection_id, source_ref=uuid.UUID(asset_id))
 
 
+def with_own_fields(data: dict, source: dict | None) -> dict:
+    """What a run over one file reads: the columns, keys or sections the upload chose, else those the
+    extractor names itself (`source.only`) - a column for a table or JSON file, a heading for a
+    document, a JSON path (`$.a.b`) for each record."""
+    only = [str(x).strip() for x in ((source or {}).get("only") or []) if str(x).strip()]
+    if not only or data.get("columns") or data.get("sections") or data.get("path"):
+        return data
+    paths = [x for x in only if x.startswith("$")]
+    if paths:
+        return {**data, "path": paths[0]}
+    return {**data, "columns": only, "sections": only}
+
+
 async def _asset(workspace_id, ref: str):
     from opencortyx.core.dataplane import assets
     for a in await assets.refs(workspace_id):
@@ -81,6 +94,13 @@ async def select(workspace_id, spec: dict, *, limit: int = 1000) -> list[Node]:
                     rows = [r for r in rows if any(s in str(r.get("section_path") or "").lower() for s in sections)]
                 return [passage(workspace_id, r) for r in rows[:int(limit)]]
             unit = "_row_key" if a.kind == layout.STRUCTURED else "record_id"
+            if columns and a.kind == layout.STRUCTURED:
+                # an extractor names the fields it reads for every file; a table without one of them
+                # has nothing of it to read (a missing JSON key reads as nothing on its own)
+                have = {c.lower(): c for c in v.query(f"SELECT * FROM {view} LIMIT 0").column_names}
+                columns[:] = [have[c.lower()] for c in columns if c.lower() in have]
+                if not columns:
+                    return []
             if path:
                 reads = [(f"json_extract_string(raw, {_lit(str(path))})", str(path))]
             elif columns:

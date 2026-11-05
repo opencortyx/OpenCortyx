@@ -1,5 +1,47 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- **One Mapper page.** Pick a table or a JSON file and see, on one page, the kinds of thing
+  detection found in it (each a node type: its name, what identifies a record, what it is shown as,
+  the attributes its nodes carry), how they connect, and a drawing of how it looks in the graph.
+  Correct anything and save once; changes on several files are saved together. It replaces the
+  Mapper list and its four editor views, Nodes & Relationships (and Review > Types), the old JSON
+  page, and the mapping pickers in Add data and Pipelines: nothing is mapped before an upload any
+  more, detection reads the file and the Mapper corrects it. **Found by extractors** lists the kinds
+  extractors found, each with a switch, and each thing's **Same thing across files** holds its
+  Resolution. Rule mappings stay with the full interface (`FULL_UI=1`).
+- **Documents are in the Mapper too.** Picking one shows how its layout was read (its elements,
+  its sections, its first passages) and what extractors found in it. The size at which long
+  paragraphs are split into passages (800 characters) can be changed there, and the document read
+  again with it from the file the server still keeps. Any file can have an extractor run over it
+  from the Mapper.
+- **One extractor editor.** Customize > Extractors is one form: what it reads (whatever it is
+  given - document passages, table rows, JSON records - records of a type, or nodes in the graph),
+  how it finds things (Model, Pattern or Python), what it creates, and how that connects. Every
+  kind, every set of fields and every relationship is **yours to name or the model's**, and wherever
+  the model decides, your instruction is what it is given - so an RDF-style extractor (the model
+  names subject, predicate and object) and a "Contract with these fields" extractor are the same
+  form. Connections reach the input, each other, and nodes you already have. **Try it** runs the
+  unsaved extractor on pasted text or a file in the workspace. It replaces the Extractor Studio,
+  its short form, the Relationships tab and editor; Built-in lists only what an upload can use, each
+  tunable and resettable. Extractors saved before keep running and open in the new form.
+
+### Fixed
+- Saving a new extractor under a taken name replaced that extractor, and renaming one left the
+  old one behind. A new name that is taken is refused; a rename keeps one extractor.
+- The model's answer to an extractor was lost whenever it dropped one closing brace (often, with
+  the small built-in model); brackets are now put right before it is read.
+- A connection to an existing node that found none (an organisation with no Vendor of its name) was
+  filed as an error in Review > Not read; it is now counted and skipped.
+- Renaming a kind left its relationship under the old name (`SESSIONS_HAYSTACK_SESSION_IDS` after
+  Sessions became Conversation). A relationship named after a kind now follows its rename, a rename
+  reaches every file that has the kind, and a renamed relationship replaces its edges in the graph
+  instead of sitting beside them. A renamed kind keeps its Resolution.
+- A file opened in the Mapper while it was still being read showed no fields; it is measured again
+  once it is read.
+
 ## 0.2.0-beta.3 - 2026-11-01
 
 ### Fixed

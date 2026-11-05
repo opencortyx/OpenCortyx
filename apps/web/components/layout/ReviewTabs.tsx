@@ -5,13 +5,12 @@ import { usePathname } from "next/navigation";
 import { FULL_UI } from "@/lib/simple";
 
 /**
- * Review, as one place: what needs a decision, the types in the data, hand edits, and what could not
- * be read. In the simple product (lib/simple.ts) only Review is in the sidebar; these tabs reach the
+ * Review, as one place: what needs a decision, hand edits, and what could not be read. (The kinds of
+ * thing in the data are checked in the Mapper.) In the simple product (lib/simple.ts) only Review is in the sidebar; these tabs reach the
  * other three. With the full UI each is its own sidebar entry, and this renders nothing.
  */
 const TABS = [
   { href: "/dashboard/review", label: "Decisions" },
-  { href: "/dashboard/schema", label: "Types" },
   { href: "/dashboard/curate", label: "Hand edits" },
   { href: "/dashboard/quarantine", label: "Not read" },
 ];

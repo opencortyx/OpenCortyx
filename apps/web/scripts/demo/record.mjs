@@ -276,15 +276,11 @@ async function record() {
     await d.fastForward(page.getByText(/^(Found |Read the file|Finished)/), 10, 600_000);
     await d.hold(1600);
 
-    // 4 · What detection found is a mapping, editable
-    await d.say(4, "Detection's reading is a mapping you can correct", "The identifier, the name, the fields each record carries");
-    await d.click(nav("Customize"));
-    await d.click(page.getByText("Open mappings"));
-    const mapping = page.locator('a[href^="/dashboard/mapper/"]').filter({ hasText: /^Project/ }).first();
-    await d.fastForward(mapping, 6, 600_000);          // detection runs once the upload settles
-    await d.hold(900);
-    await d.click(mapping);
-    await page.waitForURL(/\/dashboard\/mapper\/.+/);
+    // 4 · What the file holds, corrected in one place
+    await d.say(4, "Check what was found, in one place", "Names, identifiers, attributes and how they connect");
+    await d.click(nav("Mapper"));
+    const kinds = page.getByRole("heading", { name: /^What's in / });
+    await d.fastForward(kinds, 6, 600_000);            // detection runs once the upload settles
     await page.waitForLoadState("networkidle");
     await d.hold(1300);
     await d.glide(W * 0.55, H * 0.55, 600);

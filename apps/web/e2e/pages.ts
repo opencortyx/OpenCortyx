@@ -5,7 +5,6 @@ const PAGES = [
   { section: "Discover", name: "Assets", path: "/dashboard/catalogue", slug: "assets" },
   { section: "Discover", name: "Lineage", path: "/dashboard/graph", slug: "lineage" },
   { section: "Trust", name: "Curation", path: "/dashboard/curate", slug: "curation" },
-  { section: "Trust", name: "Nodes & Relationships", path: "/dashboard/schema", slug: "nodes-relationships" },
   { section: "Trust", name: "Review Queue", path: "/dashboard/review", slug: "review-queue" },
   { section: "Trust", name: "Evaluations", path: "/dashboard/eval", slug: "evaluations" },
   { section: "Trust", name: "Quarantine", path: "/dashboard/quarantine", slug: "quarantine" },

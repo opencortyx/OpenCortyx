@@ -172,9 +172,10 @@ workspace, sources, tags, assets, and the records and entities each one holds.
 <tr>
 <td valign="top">
 
-**[Mapper](docs/features/integration.md#mapper)**: what detection found in your tables and JSON,
-in sentences you can correct: what each record is, what identifies and names it, the fields it
-carries into the graph and what it links to.
+**[Mapper](docs/features/integration.md#mapper)**: one page for what each table and JSON file
+holds. Pick a file and see the kinds of thing detection found, what identifies and names them, the
+attributes their nodes carry and how they connect, drawn as the graph will be. Correct any of it,
+once, and save.
 
 <img src="docs/assets/screenshots/mapper.png" alt="Mapper" />
 </td>
@@ -204,15 +205,15 @@ database, worker and models, with suggested fixes.
 </tr>
 </table>
 
-The sidebar shows the pages used every day: Assistant, Add data, Connections, Customize, Runs,
-Assets, Graph and Review. The rest are a click away inside them (Customize holds Mappings,
-Extractors, Saved setups and Scheduled syncs; Settings holds Users, Models and System health), or
-all in the sidebar with `FULL_UI=1`.
+The sidebar shows the pages used every day: Assistant, Add data, Connections, Mapper, Customize,
+Runs, Assets, Graph and Review. The rest are a click away inside them (Customize holds Extractors,
+Saved setups and Scheduled syncs; Settings holds Users, Models and System health), or all in the
+sidebar with `FULL_UI=1`.
 
 | Area | What you get | Guide |
 |---|---|---|
 | Discover | Assets, Lineage | [discover.md](docs/features/discover.md) |
-| Trust | Curation, Nodes & Relationships, Review Queue, Evaluations, Quarantine | [trust.md](docs/features/trust.md) |
+| Trust | Curation, Resolution, Review Queue, Evaluations, Quarantine | [trust.md](docs/features/trust.md) |
 | Integration | Add data, Connections, Ingestion, Mapper, Custom Extractors, Pipelines, Runs | [integration.md](docs/features/integration.md) |
 | Intelligence | AI Assistant, Conversations, MCP tools | [intelligence.md](docs/features/intelligence.md) |
 | Administration | Users & Access, Models, System Health, Settings | [administration.md](docs/features/administration.md) |

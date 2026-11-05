@@ -14,10 +14,9 @@ const when = <T,>(simple: T, full: T): T => (FULL_UI ? full : simple);
 /** Sidebar entries reached from elsewhere instead (Settings, Review, Add data), not from the sidebar. */
 export const HIDDEN_NAV: ReadonlySet<string> = new Set(when([
   "/dashboard/curate",          // Review > Curation
-  "/dashboard/schema",          // Review > Types
+  "/dashboard/schema",          // Mapper (kinds of thing in files, and found by extractors)
   "/dashboard/quarantine",      // Review > Not read
   "/dashboard/eval",            // Settings > Quality checks
-  "/dashboard/mapper",          // Customize
   "/dashboard/custom-assets",   // Customize
   "/dashboard/pipelines",       // Customize
   "/dashboard/ingest",          // Customize, and Connections > Scheduled syncs

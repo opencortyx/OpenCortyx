@@ -1185,13 +1185,36 @@ export const contextV2Api = {
     apiClient.get(`/api/v2/schema-mappings/${id}/preview`, { params: { limit } }).then((r) => r.data as MappingPreview),
   mappingHistory: (id: string) =>
     apiClient.get(`/api/v2/schema-mappings/${id}/history`).then((r) => r.data as MappingHistory),
-  /** The workspace's tables and JSON files a mapping can describe. */
-  mappingAssets: () =>
-    apiClient.get<{ items: MappingAsset[] }>("/api/v2/schema-mappings/assets").then((r) => r.data.items),
+  /** The workspace's tables and JSON files a mapping can describe; with `documents`, its documents too. */
+  mappingAssets: (documents = false) =>
+    apiClient.get<{ items: MappingAsset[] }>("/api/v2/schema-mappings/assets", { params: documents ? { documents: 1 } : {} })
+      .then((r) => r.data.items),
+  /** How a document was read by its layout, and what extractors found in it. */
+  documentReading: (assetId: string) =>
+    apiClient.get<DocumentReading>(`/api/v2/schema-mappings/documents/${assetId}`).then((r) => r.data),
+  /** Read a document again from the file it was read from (the Chunk size as it is now). */
+  readDocumentAgain: (assetId: string) =>
+    apiClient.post<{ task_id: string; run_id: string | null }>(`/api/v2/schema-mappings/documents/${assetId}/read-again`)
+      .then((r) => r.data),
+  /** The kinds of thing extractors found in one file, with how many of each. */
+  fileFound: (assetId: string) =>
+    apiClient.get<{ found: FoundKind[] }>(`/api/v2/schema-mappings/files/${assetId}/found`).then((r) => r.data.found),
+  /** Run one extractor over one file now. */
+  extractFromFile: (assetId: string, extractor: string) =>
+    apiClient.post<{ task_id: string }>(`/api/v2/schema-mappings/files/${assetId}/extract`, { extractor }).then((r) => r.data),
   /** What these assets hold, measured: each record source with its fields and a few rows. */
   mappingShape: (assetIds: string[]) =>
     apiClient.post<{ sources: ShapeSource[] }>("/api/v2/schema-mappings/shape", { asset_ids: assetIds })
       .then((r) => r.data.sources),
+  /** Every mapping with what its file means (`knowledge`), without its rules or history: the Mapper page. */
+  listMappingKnowledge: () =>
+    apiClient.get<{ items: MappingWithKnowledge[] }>("/api/v2/schema-mappings", { params: { light: 1, knowledge: 1 } })
+      .then((r) => r.data.items),
+  /** Save one mapping's knowledge (a new, curated version); the rest of its payload is kept. A draft
+   *  saved with `status: "active"` is put in use. */
+  saveMappingKnowledge: (id: string, knowledge: MappingKnowledge, status?: string) =>
+    apiClient.put<SchemaMappingRecord>(`/api/v2/schema-mappings/${id}/knowledge`, { knowledge, ...(status ? { status } : {}) })
+      .then((r) => r.data),
   /** Re-detect one mapping: a new version from what the data shows now, choices kept. */
   redetectMapping: (id: string) =>
     apiClient.post<SchemaMappingRecord>(`/api/v2/schema-mappings/${id}/detect`).then((r) => r.data),
@@ -1296,13 +1319,18 @@ export const contextV2Api = {
         .sort((a: any, b: any) => a.label.localeCompare(b.label)),
     };
   },
-  createExtractionTemplate: (spec: { name: string; source: any; mechanism: any; emit: any }) => 
+  /** Save an extractor. `id`: the one being edited (a new name renames it); `new`: refuse a taken name
+   *  instead of replacing that extractor. */
+  createExtractionTemplate: (spec: { name: string; source: any; mechanism: any; emit: any; id?: string; new?: boolean }) =>
     apiClient.post("/api/v2/extraction-templates", spec).then(r => r.data),
   deleteExtractionTemplate: (id: string) =>
     apiClient.delete(`/api/v2/extraction-templates/${id}`).then(r => r.data),
-  // Live preview — dry-run an UNSAVED extractor over sample text; returns the nodes/edges/
-  // attributes it would emit (each with mechanism, model, weight, value). No DB writes.
-  previewExtractionTemplate: (spec: { name?: string; source?: any; mechanism: any; emit: any; sample_text: string }) =>
+  /** Put an edited built-in back to its catalog definition. */
+  resetExtractionTemplate: (id: string) =>
+    apiClient.post(`/api/v2/extraction-templates/${id}/reset`).then(r => r.data),
+  // Live preview — dry-run an UNSAVED extractor over sample text, or over the first input of a file
+  // (`sample_asset`); returns the nodes/edges/attributes it would emit. No DB writes.
+  previewExtractionTemplate: (spec: { name?: string; source?: any; mechanism: any; emit: any; sample_text: string; sample_asset?: string }) =>
     apiClient.post("/api/v2/extraction-templates/preview", spec).then(r => r.data),
   // Enable/disable an extractor — disabled templates are skipped by the engine everywhere.
   setExtractorStatus: (id: string, status: "active" | "disabled") =>
@@ -1555,7 +1583,33 @@ export interface SemanticLayer {
   links: { id: string; name: string; from: string; to: string; origin: string; coverage: number; status: string }[];
 }
 
-export interface MappingAsset { id: string; name: string; kind: "structured" | "semistructured" }
+export interface MappingAsset { id: string; name: string; kind: "structured" | "semistructured" | "unstructured" }
+
+/** A kind of thing extractors found in a file, and how many. */
+export interface FoundKind { type: string; count: number }
+
+/** How a document was read by its layout (ingest/unstructured/reading.py). */
+export interface DocumentReading {
+  id: string; name: string; format: string; filename: string;
+  elements: { type: string; count: number }[];
+  sections: { title: string; level: number; items: number }[];
+  outside_sections: number;
+  /** prose elements: paragraphs, list items, captions... after splitting */
+  passages: number; longest: number; average: number;
+  /** paragraphs longer than this many characters are split at sentence ends */
+  split_at: number;
+  samples: string[];
+  found: FoundKind[];
+  /** the server still keeps the file, so it can be read again */
+  can_read_again: boolean;
+}
+
+/** A mapping as the Mapper page lists it: no rules, its knowledge only. */
+export interface MappingWithKnowledge {
+  id: string; name: string; paradigm: MappingParadigm; source_type: string;
+  status: "active" | "draft" | "paused" | "auto"; updated_at?: string | null;
+  knowledge?: MappingKnowledge | null;
+}
 
 /** One record source of an asset - a table's rows, an object or a list inside JSON - measured. */
 export interface ShapeSource {

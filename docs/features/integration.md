@@ -1,12 +1,12 @@
 # Integration
 
-Bring data in and decide what it becomes. **Add data** and **Connections** are in the sidebar;
-Mappings, Extractors, Saved setups (pipelines) and Scheduled syncs (ingestions) are under
+Bring data in and decide what it becomes. **Add data**, **Connections** and the **Mapper** are in
+the sidebar; Extractors, Saved setups (pipelines) and Scheduled syncs (ingestions) are under
 **Customize**, and **Runs** has the sidebar entry of its own.
 
-If you only want to add a file, start with [Add data](#add-data). The other pages are for data you
-add again and again: saved connections, scheduled ingestions, and the mappings and pipelines that
-read them.
+If you only want to add a file, start with [Add data](#add-data), then check what was found in it in
+the [Mapper](#mapper). The other pages are for data you add again and again: saved connections,
+scheduled ingestions, and the pipelines that read them.
 
 ## Add data
 
@@ -34,13 +34,14 @@ Or drop several files at once and add them together.
      nodes. It already holds every record, so it is never combined with Extract knowledge. Large
      files make large graphs.
 3. Open **Custom** only if you want more. There you can add **Tags** (the graph groups assets by
-   tag), choose a [pipeline](#pipelines) per kind of file, a [mapping](#mapper), and
-   [extractors](#custom-extractors) to run over the file once it is in. Each extractor can be given
+   tag), choose a [pipeline](#pipelines) per kind of file and
+   [extractors](#custom-extractors) to run over the file once it is in. Nothing has to be mapped
+   before an upload: detection reads the file, and you correct what it found in the [Mapper](#mapper). Each extractor can be given
    the columns or keys (tables, JSON) or the sections (documents) it should read; leave it empty and
    it reads all of it.
 4. Press **Add** and wait for the result card. It lists what was created, for example *Found 1
-   Programme, 3 Projects, 3 Risks*. Detection runs once the file is in, and its reading appears
-   under **Customize > Mappings** a minute or two later.
+   Programme, 3 Projects, 3 Risks*. Detection runs once the file is in, and what it found appears in
+   the [Mapper](#mapper) a minute or two later.
 
 ### Several files at once
 
@@ -140,71 +141,107 @@ The running server reports the same list at `GET /api/v2/ingest/formats`.
 
 ## Mapper
 
-A mapping says exactly what a source becomes: which node types, which relationships, and which
-fields are kept as attributes. One editor covers JSON, tables and documents.
+The Mapper is the one place to check and correct what a table or a JSON file means: the kinds of
+thing in it, their names, what identifies each record, the attributes their graph nodes carry, and
+how they connect. Detection fills it in after each upload; you only change what it got wrong.
 
 ![Mapper](../assets/screenshots/mapper.png)
 
 ### How to use it
 
-1. Open **Customize > Mappings**. The list shows every mapping, its kind, the shape of graph it produces and its
-   status.
-2. Press **Semi-structured**, **Structured** or **Unstructured** to start a new mapping, or click
-   an existing one to edit it. A mapping saved from Add data is already here.
-3. Load a sample of your data. It appears under **Source sample** (for a document, **Parsed
-   document**). For documents you can upload a PDF, Word, PowerPoint or HTML file as well as
-   Markdown or text: it is read the way ingestion reads it, so the preview shows its title, its
-   sections nested by level, each paragraph, list item and table under its section, and the running
-   page headers and footers of every page.
-4. Under **Rules**, each node rule turns one path of the sample into one node type. Click a rule to
-   edit it on the right:
-   - **Node label** is the type it creates, such as `Project`.
-   - **Source path** is where it reads from. `[]` means every element of that list.
-   - **Attributes** are the fields kept on the node. Click a field to keep or drop it.
-5. Add edge rules to connect node types. An edge can join by **This row**, **In context** (the
-   nearest enclosing node), **By value** (a value matched against a field of the other type) or
-   **By position** (the same index in a sibling list).
-6. Press **Run sample** to preview the graph the mapping produces.
-7. Press **Save**. Until you save, nothing changes.
+1. Open **Mapper** and pick a file on the left. Each file shows its format (TABLE, JSON or DOC) and
+   the kinds of thing found in it. A file still being read says so, and fills in on its own. A
+   document has no fields to map: see [Documents](#documents-in-the-mapper) below.
+2. **How it looks in the graph** draws the file's kinds as circles and their relationships as
+   arrows. It changes as you edit. A kind read from another file that a relationship reaches is
+   drawn dashed.
+3. Under **What's in** the file, each kind is a card:
+   - **Name**: click it to rename the kind. A rename is made once and reaches every file that has
+     the kind.
+   - **Identified by**: the field that identifies a record, offered only when the data shows it is
+     filled and unique in every file. With an identifier the kind is a *thing* (the same id is the
+     same node, whichever file it comes from); with **Nothing** each record is an *event*, such as a
+     message or a transaction.
+   - **Shown as**: the field a record is called by in the graph and in answers.
+   - **Attributes**: the fields its graph nodes carry. The others stay in the data store, and
+     questions still read them.
+   - **In the graph** puts its records in the knowledge graph; **Use this kind** off says it is not a
+     kind of thing at all.
+   - **Same thing across files** says when two records, from any files, are the same thing: see
+     [Resolution](trust.md#match-the-same-record-across-files-resolution).
+4. Under **How they connect**, each line is a relationship, such as `Order ─CUSTOMER▶ Customer`
+   through `customer_id`. Rename it, or untick it to drop it. A name marked **auto** is taken from
+   the kind it points to and follows that kind's rename. **Add a relationship** connects a kind to
+   any kind with an identifier, through one of its fields, for links the data does not show on its
+   own (a file too small to be sure, for example).
+5. Press **Save**. Changes on several files are saved together, the graph is updated, and files of
+   the same shape read later are read the same way. **Undo changes** drops them all.
+6. **What extractors found in it**, at the bottom, lists the kinds of thing extractors found in the
+   text of this file's records, with how many of each. **Run an extractor on this file** runs one
+   over this file now.
+7. **Found by extractors**, below the files, lists every kind extractors found, in all files, each
+   with a switch: turn off a kind you do not want.
+
+### Documents in the Mapper
+
+A document is read by its layout: its title, section headings, paragraphs, list items and tables,
+in reading order. Pick a document (DOC) to see:
+
+- **How it looks in the graph**: the document and the kinds of thing extractors found mentioned in it.
+- **How it was read**: how many of each element, its sections with how much each holds (a plain
+  text file has none), and its first passages.
+- **Long paragraphs**: a paragraph longer than the split size (800 characters unless you change it)
+  is split at sentence ends into passages of at most that size, so each is found and cited on its
+  own. Tables, code and headings are never split. Change the size and press **Save and read this
+  document again**; the size applies to every document read from now on. The server keeps an
+  uploaded file for a week (`UPLOAD_RETENTION_HOURS`); after that, add the file again to read it
+  with a new size.
+- **What extractors found in it**, and **Run an extractor on this file**.
 
 ### Good to know
 
-- A new source whose [schema signature](discover.md#schema-signatures) matches a mapping is read
-  through it automatically.
-- A pipeline option decides what happens to a source the mapping does not match: it is read with
-  the defaults while **Accept newly detected shapes** is on, and skipped while it is off.
-- For JSON, ids are ordinary attributes. Tables keep their primary key, which identifies a row
-  within its own table.
-- A document preview reads the first 5 pages. See
-  [How a document is read](../how-it-works.md#how-a-document-is-read) for the node types it
-  produces.
-- **Conformance** checks that what an asset produced matches its mapping. **Usage** shows which
-  pipelines and ingestions use a mapping before you change it.
+- What you change is kept: detecting the file again never overwrites it. **Advanced** on the
+  **What's in** section shows where in the file each kind is read from, and **Detect again** reads
+  the data again and takes what detection finds now (earlier versions are kept).
+- Documents are read by their layout and by extractors, not mapped: see
+  [How a document is read](../how-it-works.md#how-a-document-is-read).
+- Rule mappings, which shape the graph with node and edge rules written by hand, stay available
+  with the full interface (`FULL_UI=1`, see
+  [Troubleshooting](../installation/troubleshooting.md)).
 
 ## Custom Extractors
 
-Extractors turn what you already have into new nodes, relationships and attributes, for example
-the people and organisations named in a document. You define them here, without code.
+Extractors pull what you need out of documents and records: kinds of thing, their fields, and how
+they connect. You define them here, without code (or with it, if you want to).
 
 ![Custom Extractors](../assets/screenshots/custom-extractors.png)
 
 ### How to use it
 
-1. Open **Customize > Extractors**. The three tabs are:
-   - **Your extractors**: the ones you created.
-   - **Relationships**: rules that connect nodes into typed relationships.
-   - **Built-in**: the extractors that ship with OpenCortyx, grouped by what they read (structured
-     tables, documents and text, and more).
-2. To create one, press **New extractor** and say:
-   - which node types it reads (for example `Chunk`),
-   - how it works (an AI prompt, code, or a rule),
-   - what it produces: the node types, relationships and attributes.
+1. Open **Customize > Extractors**. **Yours** lists the extractors you made; **Built-in** the ones
+   that ship with OpenCortyx, whose prompt, code or model you can tune and reset.
+2. Press **New extractor**, or start from an example. One form, top to bottom:
+   - **What it reads**: whatever it is given (attach it to any upload, sync or file: document
+     passages, table rows and JSON records alike; optionally only some columns, keys, JSON paths or
+     headings), the records of a type across every file, or nodes already in the graph.
+   - **How it finds things**: the **Model**, a **Pattern** (regular expressions or a word list), or
+     **Python**.
+   - **What it creates**: kinds of thing, each with fields, and fields written onto the input
+     itself. For each kind and each set of fields you choose **You name it** (`Contract` with
+     `start_date`, `term`) or **The model names it** (Person, Organization, Jurisdiction… whatever
+     fits). Wherever the model decides, say what to look for: that instruction is what the model
+     is given.
+   - **Connections**: how what it creates links to the input, to each other, and to nodes you
+     already have (`SAME_AS` an existing Vendor of that name). Between things it creates, the
+     relationship can be yours (`HAS_PARTY`) or the model's to name (`SIGNED_FOR`), made always or
+     when the model decides, again with your instruction.
+   - **When the model names something**: reuse the workspace's names, any name, or only names the
+     workspace already has.
+3. **Try it** on pasted text or on a file in the workspace before saving. Nothing is written.
 
-   For people, places, organisations and how they connect, choose **Find with: people, places,
-   things and how they connect (the model)**. Your extraction model reads the text and returns each
-   named thing with its type, and each relationship a sentence states between two of them, named by
-   its verb (`WORKS_AT`, `MET`). Each thing becomes a node of the type the model gave it, linked from
-   the text it was found in, and the same name found again is the same node.
+An extractor where the model names every kind, field and relationship is an RDF-style extractor:
+subject, predicate and object, all in the model's words but steered by your instructions. A named
+thing is one node by its type and name, whichever file or extractor finds it again.
 3. Preview it on a few sample nodes, then save.
 4. Press **Run** on any extractor to run it over the workspace now, or add it as a step in a
    [pipeline](#pipelines) so it runs on every new asset.
@@ -215,8 +252,8 @@ the people and organisations named in a document. You define them here, without 
 An extractor's **Resolution** section says when two nodes it creates are the same thing: the fields
 they are **identified by**, the **Scorer** (exact or similar), and when a match is applied
 automatically or sent for review. It is the same setting, per node type, that you find on
-[Nodes & Relationships](trust.md#match-the-same-record-across-files-resolution), which works for
-every type, including the record types of a JSON mapping.
+[Resolution](trust.md#match-the-same-record-across-files-resolution), which you set for a file's
+kinds in the Mapper under **Same thing across files**.
 
 ## Pipelines
 
@@ -231,8 +268,9 @@ of ingestions.
    documents. Pipelines drafted from Add data appear here too.
 2. Press **New Pipeline**, or the pencil on a card to edit one. The copy icon duplicates a pipeline
    so you can change it safely.
-3. Step 1, the **reading rule**, is the same for every kind: bind a [mapping](#mapper), or leave it
-   empty to read the source with the defaults.
+3. Step 1, the **reading rule**, is the same for every kind: the source is read with the defaults,
+   and what detection finds is corrected in the [Mapper](#mapper). (A rule mapping can be bound
+   here with the full interface.)
 4. Set the two options of the reading rule:
 
    | Option | Documents | Tables | JSON and other records |

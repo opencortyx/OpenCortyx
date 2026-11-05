@@ -298,10 +298,10 @@ export default function CataloguePage() {
                   const kind = m.kind || "document";
                   const schemaDef =
                     kind === "structured"
-                      ? { label: "Schema · auto · editable", href: "/dashboard/mapper", tone: "blue" }
+                      ? { label: "Schema · auto · editable", href: `/dashboard/mapper?asset=${m.id}`, tone: "blue" }
                       : kind === "semistructured"
-                        ? { label: "Keys (auto)", href: "/dashboard/mapper", tone: "purple" }
-                        : { label: "Document mapping", href: "/dashboard/mapper", tone: "stone" };
+                        ? { label: "Keys (auto)", href: `/dashboard/mapper?asset=${m.id}`, tone: "purple" }
+                        : { label: "Found by extractors", href: "/dashboard/mapper?asset=documents", tone: "stone" };
                   const KindIcon = kind === "structured" ? Table2 : kind === "semistructured" ? Braces : FileText;
                   const kindTone =
                     kind === "structured"

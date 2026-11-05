@@ -198,6 +198,7 @@ async def publish(workspace_id, *, everything: bool = False) -> dict:
         for i in range(0, len(edges), BATCH):
             await repo.add_edges(workspace_id=workspace_id, edges=edges[i:i + BATCH], _quarantine=False)
         n_edges += len(edges)
+        await _retire_renamed(repo, workspace_id, lk, edges)
     removed = await _retire(workspace_id, {t.name for t in types}, kept)
     conflicts = await _flag_conflicts(workspace_id, types, data["conflicts"], by_name)
     log.info("semantic_layer.published", types=len(types), nodes=n_nodes, edges=n_edges, removed=removed,
@@ -241,6 +242,25 @@ async def _flag_conflicts(workspace_id, types, found: dict, by_name: dict) -> in
             await db.execute(insert(ResolutionDecision).values(rows).on_conflict_do_nothing())
             await db.commit()
     return len(rows)
+
+
+def renamed_edges(lk, written: list, existing) -> list:
+    """Of `existing` edges, those an earlier publish wrote for link `lk` under another name: the same
+    two records, read through the same fields, with a type other than the link's name now. A person
+    renamed the relationship, and the old edges would otherwise stay beside the new ones."""
+    via = f"{lk.source_prop}->{lk.target_prop}"
+    pairs = {(str(e["source_id"]), str(e["target_id"])) for e in written}
+    return [e for e in existing
+            if e.type != lk.name and (str(e.source_id), str(e.target_id)) in pairs
+            and (e.properties or {}).get("via") == via and "origin" in (e.properties or {})]
+
+
+async def _retire_renamed(repo, workspace_id, lk, written: list) -> int:
+    sources = sorted({str(e["source_id"]) for e in written})
+    old: list = []
+    for i in range(0, len(sources), BATCH):
+        old += renamed_edges(lk, written, await repo.edges(workspace_id, source_ids=sources[i:i + BATCH]))
+    return await repo.delete_edges(workspace_id, old) if old else 0
 
 
 async def _retire(workspace_id, current: set, kept: dict | None = None) -> int:

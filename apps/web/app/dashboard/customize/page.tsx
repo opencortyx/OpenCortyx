@@ -10,11 +10,11 @@ import PageHeader from "@/components/layout/PageHeader";
  * without it. Each card opens the page that does the work.
  */
 const CARDS = [
-  { href: "/dashboard/mapper", icon: Workflow, title: "Mappings",
-    text: "What your data means, found after each upload. Correct an identifier, a link or a name, or shape the graph yourself.",
-    action: "Open mappings" },
+  { href: "/dashboard/mapper", icon: Workflow, title: "Mapper",
+    text: "What each file holds, found after each upload: the kinds of thing, their names and attributes, and how they connect. Correct anything in one place.",
+    action: "Open the Mapper" },
   { href: "/dashboard/pipelines", icon: GitBranch, title: "Saved setups",
-    text: "Mappings and extractors saved together from Add data, to reuse in scheduled syncs.",
+    text: "Extractors and options saved together from Add data, to reuse in scheduled syncs.",
     action: "Open saved setups" },
   { href: "/dashboard/custom-assets", icon: SlidersHorizontal, title: "Extractors",
     text: "Your own extractors: what to pull out of documents and records, with a model, a pattern or a list.",

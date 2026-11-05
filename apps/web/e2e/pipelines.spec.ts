@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
-/** Step 1 of the pipeline builder is the same reading rule for every kind: a mapping and two options. */
+/** Step 1 of the pipeline builder is the same for every kind: two options. What a file means is
+ *  detected and corrected in the Mapper, so the simple product binds no mapping here. */
 const KINDS = [
   { kind: "document", label: "Unstructured" },
   { kind: "structured", label: "Structured" },
@@ -8,13 +9,13 @@ const KINDS = [
 ];
 
 for (const { kind, label } of KINDS) {
-  test(`${label} pipeline: step 1 is a mapping and two options`, async ({ page }) => {
+  test(`${label} pipeline: step 1 is two options, no mapping`, async ({ page }) => {
     await page.goto(`/dashboard/pipelines/new?kind=${kind}`);
     await expect(page.getByRole("heading", { name: "How it reads" })).toBeVisible();
     // By role, not by text: during hydration the server-rendered copy and the client one are both
     // briefly in the DOM, and a strict text locator fails on the two matches rather than waiting.
-    await expect(page.getByRole("heading", { name: "Mapping", exact: true }).first()).toBeVisible();
     await expect(page.getByRole("heading", { name: "Options" }).first()).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Mapping", exact: true })).toHaveCount(0);
 
     const accept = page.getByRole("checkbox", { name: /Read new kinds of file automatically/ });
     const extractOnly = page.getByRole("checkbox", { name: /Keep only what is extracted/ });

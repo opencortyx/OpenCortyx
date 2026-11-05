@@ -27,7 +27,7 @@ router = APIRouter()
 
 
 @router.get("/schema-mappings")
-async def list_schema_mappings(paradigm: Optional[str] = None, light: bool = False,
+async def list_schema_mappings(paradigm: Optional[str] = None, light: bool = False, knowledge: bool = False,
                                user: CurrentUser = Depends(require_auth)):
     """List saved schema mappings (optionally by paradigm) for the engines + hub + pipeline binding.
 
@@ -36,6 +36,9 @@ async def list_schema_mappings(paradigm: Optional[str] = None, light: bool = Fal
     browser then has to download and parse before anything renders. A hub only needs the name, the
     paradigm and the shape counts, so it asks for those; anything that genuinely reads rules still
     gets the whole payload by default, and nothing that exists today changes.
+
+    `knowledge=1` (with `light`) adds each mapping's `knowledge` section - what its file means, the
+    one part the Mapper page edits - still without the rules or the history.
     """
     async with V2Session() as db:
         q = select(SchemaMapping).where(SchemaMapping.workspace_id == user.workspace_id)
@@ -57,6 +60,7 @@ async def list_schema_mappings(paradigm: Optional[str] = None, light: bool = Fal
             # enough for the hub's badges without shipping the rules themselves
             "authored": bool(ed),
             "structures": len(p.get("structures") or []) or None,
+            **({"knowledge": p.get("knowledge") or None} if knowledge else {}),
         })
     return {"items": items}
 
@@ -175,13 +179,94 @@ async def publish_knowledge(everything: bool = False, user: CurrentUser = Depend
 
 
 @router.get("/schema-mappings/assets")
-async def mapping_assets(user: CurrentUser = Depends(require_auth)):
-    """The workspace's tables and JSON files a mapping can describe."""
+async def mapping_assets(documents: bool = False, user: CurrentUser = Depends(require_auth)):
+    """The workspace's tables and JSON files a mapping can describe; with `documents`, its documents
+    too (the Mapper lists every file: a document has no fields to map, but shows how it was read)."""
     from opencortyx.core.dataplane import assets
     from opencortyx.stores.data import layout
-    refs = await assets.refs(user.workspace_id, kinds=[layout.STRUCTURED, layout.SEMISTRUCTURED])
+    kinds = [layout.STRUCTURED, layout.SEMISTRUCTURED] + ([layout.UNSTRUCTURED] if documents else [])
+    refs = await assets.refs(user.workspace_id, kinds=kinds)
     return {"items": sorted(({"id": r.asset_id, "name": r.name, "kind": r.kind} for r in refs),
                             key=lambda a: a["name"].lower())}
+
+
+async def _document(user, asset_id: str):
+    from opencortyx.core.dataplane import assets
+    from opencortyx.stores.data import layout
+    try:
+        row = await assets.get(user.workspace_id, uuid.UUID(asset_id))
+    except ValueError:
+        row = None
+    if row is None or row.kind != layout.UNSTRUCTURED:
+        raise HTTPException(status_code=404, detail="document not found")
+    return row
+
+
+@router.get("/schema-mappings/documents/{asset_id}")
+async def document_reading(asset_id: str, user: CurrentUser = Depends(require_auth)):
+    """How a document was read by its layout - its elements, sections and passages, and where long
+    paragraphs were split - and the kinds of thing extractors found in it."""
+    from opencortyx.ingest.unstructured import reading
+    row = await _document(user, asset_id)
+    meta = row.metadata_ or {}
+    return {"id": str(row.id), "name": row.name, "format": row.format, "filename": meta.get("filename") or row.name,
+            **await reading.reading(user.workspace_id, row),
+            "found": await reading.found(user.workspace_id, row.id),
+            "can_read_again": reading.upload_ref(row) is not None}
+
+
+@router.get("/schema-mappings/files/{asset_id}/found")
+async def file_found(asset_id: str, user: CurrentUser = Depends(require_auth)):
+    """The kinds of thing extractors found in any file (a document, or the text of a table's or a
+    JSON file's records), with how many of each."""
+    from opencortyx.ingest.unstructured import reading
+    try:
+        return {"found": await reading.found(user.workspace_id, uuid.UUID(asset_id))}
+    except ValueError:
+        raise HTTPException(status_code=404, detail="file not found") from None
+
+
+@router.post("/schema-mappings/documents/{asset_id}/read-again")
+async def document_read_again(asset_id: str, user: CurrentUser = Depends(require_write)):
+    """Read a document again from the file it was read from - with the Chunk size as it is now - when
+    the server still keeps that file. Its extractors' results stay; run them again to read the new
+    passages."""
+    from opencortyx.ingest.runs.progress import create_run, dispatch, record_device_upload
+    from opencortyx.ingest.unstructured import reading
+    from opencortyx.tasks.ingest import v2_ingest_document
+    row = await _document(user, asset_id)
+    ref = reading.upload_ref(row)
+    if ref is None:
+        raise HTTPException(status_code=409, detail="The server no longer keeps this file. Add it again to read it again.")
+    meta = row.metadata_ or {}
+    fname = str(meta.get("filename") or row.name or "document")
+    run_id = await create_run(user.workspace_id, "document", fname)
+    await record_device_upload(user.workspace_id, "unstructured", fname, run_id, None, None)
+    task = await dispatch(run_id, v2_ingest_document, str(user.workspace_id), ref, fname,
+                          str(meta.get("mime") or "text/plain"), meta.get("collection_id"), None,
+                          str(run_id) if run_id else None, None, None, fname, replace=True)
+    await audit(user.workspace_id, user.user_id, "document/read_again", meta={"asset": asset_id})
+    return {"task_id": task.id, "run_id": str(run_id) if run_id else None}
+
+
+@router.post("/schema-mappings/files/{asset_id}/extract")
+async def file_extract(asset_id: str, body: dict, user: CurrentUser = Depends(require_write)):
+    """Run one extractor over one file now: a document's passages, or a table's or JSON file's
+    records (an extractor built to read a kind reads that file's records of it)."""
+    from opencortyx.core.dataplane import assets
+    from opencortyx.tasks.enrich import v2_run_extractor_over
+    name = str((body or {}).get("extractor") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="extractor required")
+    try:
+        row = await assets.get(user.workspace_id, uuid.UUID(asset_id))
+    except ValueError:
+        row = None
+    if row is None:
+        raise HTTPException(status_code=404, detail="file not found")
+    task = v2_run_extractor_over.delay(str(user.workspace_id), name, {"asset": str(row.id)})
+    await audit(user.workspace_id, user.user_id, "extractor/run_over_file", meta={"asset": asset_id, "extractor": name})
+    return {"task_id": task.id}
 
 
 @router.post("/schema-mappings/shape")
@@ -277,6 +362,20 @@ async def update_schema_mapping(mapping_id: str, patch: SchemaMappingPatch,
             from opencortyx.tasks.maintenance import v2_apply_knowledge_choices
             v2_apply_knowledge_choices.delay(str(user.workspace_id), publish_first=True)
     return mapping_view(m)
+
+
+@router.put("/schema-mappings/{mapping_id}/knowledge")
+async def update_mapping_knowledge(mapping_id: str, body: dict, user: CurrentUser = Depends(require_write)):
+    """The Mapper page's save: this mapping's `knowledge` replaced (a new version, curated), the rest of
+    its payload kept as stored. `status` optional: a draft a person saves is put in use."""
+    m = await _mapping(user, mapping_id)
+    knowledge = (body or {}).get("knowledge")
+    if not isinstance(knowledge, dict):
+        raise HTTPException(status_code=400, detail="knowledge required")
+    payload = {k: v for k, v in (m.payload or {}).items() if k != "history"}
+    payload["knowledge"] = knowledge
+    return await update_schema_mapping(mapping_id, SchemaMappingPatch(payload=payload, status=(body or {}).get("status")),
+                                       user)
 
 
 @router.get("/schema-mappings/{mapping_id}/usage")

@@ -11,7 +11,7 @@
 | Area | Pages |
 |---|---|
 | [Discover](features/discover.md) | Assets, Lineage |
-| [Trust](features/trust.md) | Curation, Nodes & Relationships, Review Queue, Evaluations, Quarantine |
+| [Trust](features/trust.md) | Curation, Resolution, Review Queue, Evaluations, Quarantine |
 | [Integration](features/integration.md) | Add data, Connections, Ingestion, Mapper, Pipelines, Runs |
 | [Intelligence](features/intelligence.md) | AI Assistant, Conversations, MCP tools |
 | [Administration](features/administration.md) | Users & Access, Models, System Health, Settings |

@@ -10,6 +10,7 @@ import {
   contextV2Api, type IngestOutcome, type OutcomeStep, type Pipeline, type SchemaMappingRecord, type UploadBatch,
 } from "@/lib/api/contextV2";
 import { uploadAll } from "@/lib/uploadQueue";
+import { FULL_UI } from "@/lib/simple";
 import { buildStages, newStage, type PipelineKind } from "@/components/pipelines/model";
 
 /**
@@ -269,7 +270,7 @@ function GraphOptionsChoice({ kinds, value, onChange }: {
       <legend className="px-1 text-xs text-stone-500 dark:text-stone-400">Knowledge graph</legend>
       {option("shape", records ? "Structure only" : "Summary only", `The data is kept and searchable; the graph gets ${shape}.`)}
       {records && option("knowledge", "Extract knowledge",
-        "Each record becomes a node of its kind (Customer, Account…) with its identifier, name, text and dates. Change the fields in Customize → Mappings.")}
+        "Each record becomes a node of its kind (Customer, Account…) with its identifier, name, text and dates. Correct what was found in the Mapper.")}
       {option("whole", "Add the whole data", [records && "Every row, key and value", documents && "every heading, paragraph and table"]
         .filter(Boolean).join("; ") + " as nodes. Large files make large graphs.")}
     </fieldset>
@@ -277,9 +278,10 @@ function GraphOptionsChoice({ kinds, value, onChange }: {
 }
 
 /**
- * Custom — folded, for people who already know they want it: a pipeline per kind of file, mappings
- * that shape the graph for tables and JSON, extractors that read documents, tags. Everything here is
- * optional; empty means the defaults.
+ * Custom — folded, for people who already know they want it: a pipeline per kind of file, extractors,
+ * tags. Everything here is optional; empty means the defaults. Nothing is mapped before an upload:
+ * detection reads the file, and the Mapper corrects what it found. Rule mappings chosen up front stay
+ * with the full UI (lib/simple.ts).
  */
 function CustomSection({ kinds, files, value, onChange }: {
   kinds: FileKind[]; files: File[]; value: CustomOptions; onChange: (v: CustomOptions) => void;
@@ -293,7 +295,7 @@ function CustomSection({ kinds, files, value, onChange }: {
   const documents = kinds.includes("unstructured");
   useEffect(() => {
     if (!open) return;
-    if (records.length && mappings === null) {
+    if (FULL_UI && records.length && mappings === null) {
       contextV2Api.listSchemaMappings(undefined, true)
         .then((r) => setMappings((r.items || []).filter((m) => (records as string[]).includes(String(m.paradigm)))))
         .catch(() => setMappings([]));
@@ -343,18 +345,18 @@ function CustomSection({ kinds, files, value, onChange }: {
               className="w-full flex items-center gap-1.5 px-3 py-2 text-left text-stone-700 dark:text-stone-300">
         <ChevronRight size={14} className={`transition-transform ${open ? "rotate-90" : ""}`} />
         <span className="font-medium">Custom</span>
-        <span className="text-xs text-stone-400">{set ? `${set} set` : "optional - pipeline, mapping, extractors, tags"}</span>
+        <span className="text-xs text-stone-400">{set ? `${set} set` : `optional - pipeline, ${FULL_UI ? "mapping, " : ""}extractors, tags`}</span>
       </button>
       {open && (
         <div className="space-y-4 px-3 pb-3">
           <PipelinePicker kinds={kinds} value={value.pipelines} onChange={(pipelines) => onChange({ ...value, pipelines })} />
 
-          {records.length > 0 && (
+          {FULL_UI && records.length > 0 && (
             <div>
               <p className="text-sm font-medium text-stone-800 dark:text-stone-200">Shape the graph with a mapping</p>
               <p className="text-xs text-stone-500 dark:text-stone-400 mb-1">
                 The nodes and edges a mapping declares, instead of what detection finds.{" "}
-                <Link href="/dashboard/mapper" className="text-primary hover:underline">Create or edit mappings</Link>
+                <Link href="/dashboard/mapper/rules" className="text-primary hover:underline">Create or edit rule mappings</Link>
               </p>
               {mappings === null && <Loader2 className="animate-spin text-stone-400" size={14} />}
               {mappings?.length === 0 && <p className="text-xs text-stone-400">No mappings for tables or JSON yet.</p>}
