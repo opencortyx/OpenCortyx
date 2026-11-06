@@ -1,6 +1,10 @@
 # Changelog
 
-## 0.2.0-beta.5 - 2026-11-06
+## 0.2.0-beta.6 - 2026-11-07
+
+0.2.0-beta.5 was tagged but never published: a test of the citation check failed in the release
+build and its tag was withdrawn. This is that release, with the fix: a sentence's supporting
+sources are now always listed in block order.
 
 ### Added
 - **Cost & usage.** Every model call is metered in one place - answers, each extractor, summaries,

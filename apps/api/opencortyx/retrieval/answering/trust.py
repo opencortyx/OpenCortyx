@@ -566,7 +566,9 @@ async def verify_citations(answer: str, citations: list, texts: dict, links=(), 
             s.update({"supported": False, "check": "nli" if use_nli else "words+similarity",
                       "reason": why or "no source supports it"})
         else:
-            s.update({"supported_by": found[0], "check": found[1], "reason": why})
+            # In block order: the order blocks were tried in follows similarity scores, which can tie
+            # and differ in the last digit from run to run; the answer must not.
+            s.update({"supported_by": sorted(found[0]), "check": found[1], "reason": why})
     judged = [s for s in sentences if s["judge"]]
     return {"sentences": [{k: s[k] for k in ("text", "cited", "supported_by", "supported", "check", "reason")}
                           for s in sentences],

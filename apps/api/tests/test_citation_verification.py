@@ -8,6 +8,7 @@ verification model is a stand-in that reads negation.
 import asyncio
 import re
 import uuid
+import zlib
 
 import pytest
 
@@ -15,12 +16,13 @@ from opencortyx.retrieval.answering import trust
 
 
 async def _embed(texts):
-    """A deterministic bag-of-words vector: similar wording, similar vector."""
+    """A deterministic bag-of-words vector: similar wording, similar vector. crc32, not hash(): a
+    str's hash() changes with every process, and with it which words collide."""
     out = []
     for t in texts:
         v = [0.0] * 64
         for w in re.findall(r"[a-z0-9]+", (t or "").lower()):
-            v[hash(w) % 64] += 1.0
+            v[zlib.crc32(w.encode()) % 64] += 1.0
         out.append(v)
     return out
 
@@ -64,6 +66,22 @@ def test_facts_joined_across_records_the_graph_links_are_supported():
     assert r["supported"] and r["sentences"][0]["supported_by"] == [1, 2]
     unlinked = _check("John Doe ordered a Keyboard.", cites)
     assert not unlinked["supported"], "without the link the join is a guess"
+
+
+def test_the_sources_of_a_joined_fact_are_listed_in_block_order_whichever_was_tried_first():
+    """The search starts from the most similar block, and similarity can tie and differ in its last
+    digit from run to run (CI caught [2, 1]). The answer lists its sources in block order."""
+    customer = "Customer C-1: John Doe, based in Oslo."
+    order = "Order DBO-1 was placed by customer C-1 and contains one Keyboard."
+    cites = _cites(customer, order)
+
+    async def order_first(texts):                      # the second block is the closest to everything
+        return [[1.0, 0.0] if t == order else [1.0, 1.0] if t == customer else [1.0, 0.1] for t in texts]
+    for embed in (_embed, order_first):
+        r = asyncio.run(trust.verify_citations("John Doe ordered a Keyboard.", cites,
+                                               {c["node_id"]: c["text"] for c in cites},
+                                               [(cites[0]["node_id"], cites[1]["node_id"])], embed=embed))
+        assert r["supported"] and r["sentences"][0]["supported_by"] == [1, 2]
 
 
 def test_a_wrong_citation_is_reported_and_the_sentence_reattributed_to_the_source_that_says_it():
