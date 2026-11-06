@@ -76,12 +76,16 @@ def main() -> int:
     a = argparse.ArgumentParser()
     a.add_argument("--api", default="http://127.0.0.1:8000")
     a.add_argument("--dir", required=True)
-    a.add_argument("--bench", required=True)
+    a.add_argument("--bench", default="", help="the 1000-file bench kit (the 300 profile reads its RFC/PEP files)")
     a.add_argument("--container", default="opencortyx-test-api-1")
     a.add_argument("--out", default="results/e2e300")
     a.add_argument("--skip-upload", action="store_true")
     a.add_argument("--batch", default="", help="with --skip-upload: the batch already uploaded")
+    a.add_argument("--profile", default="300", choices=("300", "mixed"),
+                   help="mixed: 10 CSV + 10 JSON + 100 documents as one connected graph (corpus.write_mixed)")
     args = a.parse_args()
+    if args.profile == "mixed":
+        return main_mixed(args)
     root = Path(args.dir)
     exp = corpus.write(str(root), args.bench) if not (root / "expected.json").exists() else json.loads(
         (root / "expected.json").read_text(encoding="utf-8"))
@@ -228,6 +232,195 @@ def main() -> int:
     lic = api.call("POST", "/context", json={"query": "Which customer holds licence LIC-1057?"}) or {}
     check("a published entity is found with its link", "C-152" in (lic.get("context") or ""),
           f"graph nodes before={graph_before} route={lic.get('route')}")
+
+    (out / "results.json").write_text(json.dumps(RESULTS, indent=1), encoding="utf-8")
+    failed = [r for r in RESULTS if not r["ok"]]
+    print(f"\n{len(RESULTS) - len(failed)} passed, {len(failed)} failed")
+    return 1 if failed else 0
+
+
+# ── the mixed profile: 10 CSV + 10 JSON + 100 documents as ONE connected graph ─────────────────────
+
+def _upload(api: Api, files: list, batch: str, **data) -> dict:
+    runs = {}
+    for kind, p in files:
+        with open(p, "rb") as fh:
+            out = api.call("POST", "/sources/upload", files={"file": (p.name, fh)},
+                           data={"batch_id": batch, "replace": "true", **data})
+        runs[p.name] = (kind, (out or {}).get("run_id"), (out or {}).get("routing"))
+    return runs
+
+
+def _key_type(layer: dict, key: str) -> str:
+    """The detected entity type whose identifier is `key` (customer_id -> Customer)."""
+    for t in layer.get("types") or []:
+        if key in (t.get("keys") or []):
+            return t["name"]
+    return ""
+
+
+def _answer(api: Api, q: str, **extra) -> dict:
+    return api.call("POST", "/answer", json={"query": q, "save_chat": False, **extra}) or {}
+
+
+def main_mixed(args) -> int:
+    root = Path(args.dir)
+    exp = corpus.write_mixed(str(root))
+    api = Api(args.api)
+    me = api.call("GET", "/auth/me") or {}
+    ws = me.get("workspace_id")
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    cfg = api.call("GET", "/config") or {}
+    check("workspace on the data store", (cfg.get("tunable") or {}).get("data_store") == "delta",
+          (cfg.get("tunable") or {}).get("data_store"))
+
+    # 1. tables and records first: one licence file goes into a restricted collection
+    coll = api.call("POST", "/collections", json={"name": f"finance-{int(time.time())}"})
+    data_files = [(k, p) for k in ("structured", "semistructured") for p in sorted((root / k).iterdir())]
+    restricted = root / "structured" / "licences-09.csv"
+    t0 = time.time()
+    batch = f"mixed-data-{int(t0)}"
+    runs = _upload(api, [x for x in data_files if x[1] != restricted], batch)
+    runs.update(_upload(api, [("structured", restricted)], batch, collection_id=coll["id"]))
+    check("20 data files accepted", sum(1 for r in runs.values() if r[1]) == 20, f"{sum(1 for r in runs.values() if r[1])} runs")
+    st = wait_batch(api, batch, 20)
+    check("every data run finished, none failed", not st.get("failed") and int(st.get("done") or 0) >= 20,
+          json.dumps({"counts": st.get("counts"), "failed": (st.get("failed") or [])[:5]}))
+    layer: dict = {}
+    for _ in range(40):                      # the semantic layer is detected once the batch settles
+        time.sleep(15)
+        layer = api.call("GET", "/schema-mappings/knowledge") or {}
+        if _key_type(layer, "customer_id") and _key_type(layer, "licence_id"):
+            break
+    customer_t, licence_t = _key_type(layer, "customer_id"), _key_type(layer, "licence_id")
+    check("customers and licences detected as types", bool(customer_t and licence_t), f"{customer_t} / {licence_t}")
+    pub = api.call("POST", "/schema-mappings/publish?everything=true") or {}
+    check("published: one node per entity, linked", (pub.get("nodes") or 0) > 0 and (pub.get("edges") or 0) > 0, json.dumps(pub))
+
+    # 2. documents, read with a Pattern extractor that links each to the records it names
+    pattern = r"(?P<customer>\bC-\d{3}\b)|(?P<licence>\bLIC-\d{4}\b)"
+    template = {"name": "Account ids", "new": True, "source": None,
+                "mechanism": {"ref": "unstructured.regex", "category": "unstructured", "pattern": pattern, "lines": [pattern]},
+                "emit": {"nodes": [], "attributes": [], "edges": [
+                    {"from": "source", "to": {"match": customer_t, "on": {"customer_id": "$customer"}}, "type": "MENTIONS"},
+                    {"from": "source", "to": {"match": licence_t, "on": {"licence_id": "$licence"}}, "type": "MENTIONS"}]}}
+    sample = next(n for n in exp["facts"]["notes"] if n["file"].startswith("account-"))
+    prev = api.call("POST", "/extraction-templates/preview", json={**template, "sample_text": (root / "unstructured" / sample["file"]).read_text(encoding="utf-8")}) or {}
+    check("the extractor's preview links a note to its customer", "MENTIONS" in json.dumps(prev), json.dumps(prev)[:300])
+    api.call("POST", "/extraction-templates", json={**template, "new": False})   # a rerun updates it
+    docs = [("unstructured", p) for p in sorted((root / "unstructured").iterdir())]
+    batch2 = f"mixed-docs-{int(time.time())}"
+    runs.update(_upload(api, docs, batch2, extractors=json.dumps(["Account ids"])))
+    st = wait_batch(api, batch2, 100)
+    check("every document run finished, none failed", not st.get("failed") and int(st.get("done") or 0) >= 100,
+          json.dumps({"counts": st.get("counts"), "failed": (st.get("failed") or [])[:5]}))
+    print(f"    read 120 files in {time.time() - t0:.0f} s", flush=True)
+    time.sleep(90)                           # embeddings, resolution and the extractor's queued work
+    (out / "runs.json").write_text(json.dumps(runs), encoding="utf-8")
+
+    # 3. the stores, and the graph being ONE graph
+    tmp = Path(os.environ.get("TEMP", "/tmp")) / "expected-mixed.json"
+    tmp.write_text(json.dumps(exp), encoding="utf-8")
+    env = {**os.environ, "MSYS_NO_PATHCONV": "1"}
+    subprocess.run(["docker", "cp", str(tmp), f"{args.container}:/tmp/expected.json"], check=True, env=env)
+    r = subprocess.run(["docker", "exec", args.container, "python", "-m", "tests.goldset.stack_checks",
+                        str(ws), "/tmp/expected.json"], capture_output=True, text=True, env=env)
+    print(r.stdout[-8000:], r.stderr[-2000:])
+    check("store and connection checks inside the stack", r.returncode == 0, f"exit {r.returncode}")
+
+    # 4. answers, each with its sentences checked against the sources they cite
+    a = _answer(api, "What does the licensing policy say about early termination?")
+    check("policy answered from the policy document", exp["facts"]["policy_key"] in json.dumps(a).lower(),
+          (a.get("answer") or "")[:200])
+    check("every answer sentence is checked against its sources", bool((a.get("verification") or {}).get("sentences")),
+          json.dumps(a.get("verification"))[:300])
+    ctx = api.call("POST", "/context", json={"query": "How many licences are EXPIRED?"}) or {}
+    got = ((ctx.get("data") or {}).get("rows") or [[None]])[0][0]
+    check("a count across the ten CSV files, by SQL", str(got) == str(exp["facts"]["expired_total"]),
+          f"got={got} want={exp['facts']['expired_total']} sql={(ctx.get('data') or {}).get('sql')}")
+    note = next(n for n in exp["facts"]["notes"] if n["file"].startswith("account-") and len(n["licences"]) >= 2)
+    ctx = api.call("POST", "/context", json={"query": f"Which licences does {note['name']} hold?"}) or {}
+    hits = [x for x in note["licences"] if x in json.dumps(ctx)]
+    check("a customer's licences found across JSON, CSV and its note", len(hits) >= max(1, len(note["licences"]) // 2),
+          f"{len(hits)} of {len(note['licences'])}")
+    a = _answer(api, f"What is the credit score of {note['name']}?")
+    check("an attribute no source has is UNKNOWN", a.get("abstained") is True, a.get("outcome"))
+
+    # 5. cost: every model call measured and attributed
+    cost = api.call("GET", "/cost") or {}
+    use = api.call("GET", "/cost/usage?days=1") or {}
+    purposes = {p["purpose"] for p in use.get("by_purpose") or []}
+    check("model calls are metered", (cost.get("calls") or 0) > 0 and "answer" in purposes, json.dumps(sorted(purposes)))
+    check("the in-process model's tokens are measured, not estimated", (cost.get("measured_share") or 0) >= 0.99,
+          cost.get("measured_share"))
+
+    # 6. resolution quality on the duplicated customers
+    pairs = []
+    by_id: dict = {}
+    for p in sorted((root / "semistructured").glob("crm-*.json")):
+        for c in json.loads(p.read_text(encoding="utf-8"))["customers"]:
+            by_id.setdefault(c["customer_id"], []).append({"label": c["name"], "properties": {"customer_id": c["customer_id"], "name": c["name"]}})
+    for p in sorted((root / "semistructured").glob("billing-*.json")):
+        for c in json.loads(p.read_text(encoding="utf-8")):
+            by_id.setdefault(c["customer_id"], []).append({"label": c["name"], "properties": {"customer_id": c["customer_id"], "name": c["name"], "billing_currency": c["billing_currency"]}})
+    for cid, recs in by_id.items():
+        if len(recs) >= 2:
+            pairs.append({"node_type": customer_t, "a": recs[0], "b": recs[1], "same": True})
+    smiths = [recs[0] for recs in by_id.values() if recs[0]["label"] == exp["facts"]["ambiguous"]]
+    if len(smiths) == 2:
+        pairs.append({"node_type": customer_t, "a": smiths[0], "b": smiths[1], "same": False})
+    imp = api.call("POST", "/resolution/labels/import", json={"items": pairs}) or {}
+    ev = api.call("POST", "/resolution/quality/evaluate", json={"node_type": customer_t}) or {}
+    cur = ev.get("current") or {}
+    check("labelled pairs imported", (imp.get("imported") or 0) >= len(pairs) - 1, json.dumps(imp))
+    check("no false merge on the labelled customers (two different 'Smith Media' stay apart)",
+          cur.get("false_merges") == 0, json.dumps({k: cur.get(k) for k in ("precision", "recall", "false_merges", "missed")}))
+
+    # 7. access: a person reads only what their group is given
+    uid = int(time.time())
+    viewer = api.call("POST", "/users", json={"email": f"viewer{uid}@opencortyx.local", "password": "viewer-pass-1", "role": "viewer"})
+    pol2 = api.call("POST", "/access/policies", json={"group": "finance", "collection_id": coll["id"], "max_sensitivity": "normal"})
+    try:
+        v = Api.__new__(Api)
+        import httpx
+        v.http = httpx.Client(base_url=args.api.rstrip("/") + "/api/v2", timeout=600)
+        tok = v.http.post("/auth/token", json={"username": f"viewer{uid}@opencortyx.local", "password": "viewer-pass-1"}).json()["access_token"]
+        v.http.headers["Authorization"] = f"Bearer {tok}"
+        rid = runs["licences-09.csv"][1]
+        aid = ((api.call("GET", f"/progress/{rid}") or {}).get("result") or {}).get("source_id")
+        check("a person outside the group cannot open the restricted file", v.http.get(f"/assets/{aid}/data").status_code in (404, 200)
+              and not (v.http.get(f"/assets/{aid}/data").json() or {}).get("rows"), aid)
+        lic9 = next(csv.DictReader(open(restricted, encoding="utf-8")))["licence_id"]
+        ctx = v.http.post("/context", json={"query": f"What is the status of licence {lic9}?"}).json()
+        check("their questions never read the restricted file", lic9 not in json.dumps(ctx.get("citations") or []), lic9)
+        api.call("PATCH", f"/users/{viewer['id']}", json={"groups": ["finance"]})
+        time.sleep(31)                       # policies and groups are cached for 30 s per process
+        ctx = v.http.post("/context", json={"query": f"What is the status of licence {lic9}?"}).json()
+        check("with the group, the same question reads it", lic9 in json.dumps(ctx), lic9)
+        other = next(csv.DictReader(open(root / "structured" / "licences-00.csv", encoding="utf-8")))["licence_id"]
+        api.call("PATCH", f"/users/{viewer['id']}", json={"groups": []})
+        time.sleep(31)
+        ctx = v.http.post("/context", json={"query": f"What is the status of licence {other}?"}).json()
+        check("files in no collection stay readable to everyone", other in json.dumps(ctx), other)
+    finally:
+        api.call("DELETE", f"/access/policies/{pol2['id']}")
+        api.call("DELETE", f"/users/{viewer['id']}")
+
+    # 8. forgetting a customer, with the note about them
+    gone = next(n for n in exp["facts"]["notes"] if n["file"].startswith("account-") and n["name"] != note["name"])
+    cust = next((c for c in (api.call("GET", f"/search?q={gone['name']}&types={customer_t}") or {}).get("results") or []), None)
+    note_asset = ((api.call("GET", f"/progress/{runs[gone['file']][1]}") or {}).get("result") or {}).get("source_id")
+    if cust:
+        prev = api.call("GET", f"/forget/subject/{cust['id']}/preview") or {}
+        check("forget preview lists the note that mentions them",
+              any(d["asset_id"] == note_asset for d in prev.get("documents_mentioning") or []), json.dumps(prev)[:300])
+        job = api.call("POST", "/forget/subject", json={"node_id": cust["id"], "confirm": cust["label"], "also_assets": [note_asset]}) or {}
+        check("forgetting a customer finishes, proven", job.get("status") == "done", json.dumps(job.get("proof"))[:300])
+        ctx = api.call("POST", "/context", json={"query": f"Who is the licensing contact of {gone['name']}?"}) or {}
+        check("after forgetting, no answer cites them", gone["file"] not in json.dumps(ctx) and note_asset not in json.dumps(ctx.get("citations") or []), "")
+    else:
+        check("forgetting a customer", False, f"{gone['name']} not found by search")
 
     (out / "results.json").write_text(json.dumps(RESULTS, indent=1), encoding="utf-8")
     failed = [r for r in RESULTS if not r["ok"]]

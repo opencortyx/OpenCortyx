@@ -32,6 +32,7 @@ async def main(ws: uuid.UUID, exp: dict) -> int:
     from opencortyx.stores.vector import VectorFilter, get_vector_store
 
     repo, store = NodeRepo(), DataStore(ws)
+    mixed = exp.get("profile") == "mixed"       # 10 CSV + 10 JSON + 100 documents (corpus.write_mixed)
     check("workspace on the data store", await mode.data_store(ws) == "delta", await mode.data_store(ws))
 
     async with V2Session() as db:
@@ -95,9 +96,9 @@ async def main(ws: uuid.UUID, exp: dict) -> int:
     from opencortyx.knowledge.semantic import store as semantic
     layer = await semantic.load(ws)
     entities = [t for t in layer.types if t.kind == "entity" and t.keys]
-    check("entity types detected with identifiers", len(entities) >= 5,
+    check("entity types detected with identifiers", len(entities) >= (2 if mixed else 5),
           ", ".join(f"{t.name}({'+'.join(t.keys)})" for t in layer.types))
-    check("links detected between types", len(layer.links) >= 4,
+    check("links detected between types", len(layer.links) >= (1 if mixed else 4),
           ", ".join(f"{lk.source}.{lk.source_prop}->{lk.target}" for lk in layer.links))
     merged = [t for t in entities if len({(b.kind, b.path) for b in t.bindings}) > 1]
     check("the same entity from two sources is one type", bool(merged),
@@ -124,10 +125,13 @@ async def main(ws: uuid.UUID, exp: dict) -> int:
     check("duplicate customers resolve to one record each", n_cust == exp["facts"]["customers"],
           f"{cust.name if cust else 'no customer type'}: {n_cust} records for {exp['facts']['customers']} customers")
 
-    # resolution engine: document links
-    links = {t: len(await repo.edges(ws, types=[t], limit=100000))
-             for t in ("OBSOLETES", "REPLACES", "REQUIRES", "SUPERSEDED_BY", "UPDATES")}
-    check("documents linked by their headers", sum(links.values()) > 0, json.dumps(links))
+    if not mixed:
+        # resolution engine: document links
+        links = {t: len(await repo.edges(ws, types=[t], limit=100000))
+                 for t in ("OBSOLETES", "REPLACES", "REQUIRES", "SUPERSEDED_BY", "UPDATES")}
+        check("documents linked by their headers", sum(links.values()) > 0, json.dumps(links))
+    else:
+        await _connected(ws, exp, repo)
 
     # search index: passages, embedded
     vs_store = get_vector_store()
@@ -140,6 +144,40 @@ async def main(ws: uuid.UUID, exp: dict) -> int:
     failed = [r for r in RESULTS if not r["ok"]]
     print(json.dumps({"checks": len(RESULTS), "failed": len(failed), "failures": failed}, indent=1))
     return 1 if failed else 0
+
+
+async def _connected(ws, exp: dict, repo) -> None:
+    """The mixed corpus is ONE graph: each customer (JSON) holds its licences (CSV), and each account
+    note or renewal notice (document) is linked to the customer and licences it names."""
+    customers = await repo.find(ws, types=["Customer"], limit=20000)
+    licences = await repo.find(ws, types=["Licence", "License"], limit=20000)
+    check("customers published as one node each", len({(c.properties or {}).get("customer_id") for c in customers})
+          == exp["facts"]["customers"], f"{len(customers)} Customer node(s) for {exp['facts']['customers']} customers")
+    check("licences published", len(licences) >= exp["facts"]["licences_total"] - 30,
+          f"{len(licences)} of {exp['facts']['licences_total']} (one file is deleted by the run)")
+    by_cid = {(c.properties or {}).get("customer_id"): c for c in customers}
+    lic_ids = {l.id for l in licences}
+    held = 0
+    for c in list(by_cid.values())[:20]:
+        hops = await repo.neighbors(ws, [c.id], direction="both", limit=500)
+        held += any(n.id in lic_ids for _, n in hops)
+    check("a customer is linked to its licences", held >= 15, f"{held} of 20 customers sampled")
+    from opencortyx.domain.data import DataAsset
+    from opencortyx.core.db import V2Session
+    from sqlalchemy import select
+    async with V2Session() as db:
+        docs = {(a.metadata_ or {}).get("filename"): a.id for a in (await db.execute(select(DataAsset).where(
+            DataAsset.workspace_id == ws, DataAsset.kind == "unstructured"))).scalars().all()}
+    linked = 0
+    sample = [n for n in exp["facts"]["notes"] if n["file"] in docs][:30]
+    for note in sample:
+        target = by_cid.get(note["customer_id"])
+        if target is None:
+            continue
+        hops = await repo.neighbors(ws, [docs[note["file"]]], direction="both", limit=500)
+        linked += any(n.id == target.id for _, n in hops)
+    check("a document is linked to the customer it names", sample and linked >= int(0.9 * len(sample)),
+          f"{linked} of {len(sample)} documents sampled")
 
 
 if __name__ == "__main__":

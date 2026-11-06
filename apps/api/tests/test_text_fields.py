@@ -347,3 +347,31 @@ def test_a_long_run_stops_at_its_deadline_and_the_next_task_reads_only_the_rest(
     assert read == [n.id for n in nodes], "every record once"
     enrich.continue_run(NS(apply_async=lambda kwargs: queued.append(kwargs)), second)
     assert len(queued) == 1, "a finished run is not queued again"
+
+
+def test_renaming_a_link_is_a_publish_change():
+    """The Mapper renames a relationship: the edges already written carry the old name."""
+    link = {"name": "SESSIONS_HAYSTACK_SESSION_IDS", "from_type": "Question", "from_field": "ids",
+            "to_type": "Conversation", "to_field": "id", "status": "accepted"}
+    before = {"entities": [], "relationships": [link]}
+    assert store.publish_changed(before, {"entities": [], "relationships": [{**link, "name": "HAS_CONVERSATION"}]})
+    assert not store.publish_changed(before, {"entities": [], "relationships": [dict(link)]})
+
+
+def test_a_renamed_links_old_edges_are_found_and_nothing_else():
+    from opencortyx.knowledge.semantic.publish import renamed_edges
+    from opencortyx.knowledge.semantic.store import LinkType
+    lk = LinkType(name="HAS_CONVERSATION", source="Question", source_prop="ids", target="Conversation",
+                  target_prop="id")
+    written = [{"source_id": "q1", "target_id": "c1", "type": lk.name}]
+    via = {"origin": "inferred", "via": "ids->id"}
+    edge = lambda t, s="q1", d="c1", p=via: SimpleNamespace(type=t, source_id=s, target_id=d, properties=p)  # noqa: E731
+    old = edge("SESSIONS_HAYSTACK_SESSION_IDS")
+    found = renamed_edges(lk, written, [
+        old,
+        edge("HAS_CONVERSATION"),                                   # the new edge itself
+        edge("MENTIONS", p={"by": "extractor"}),                    # another writer's edge
+        edge("OTHER", p={"origin": "inferred", "via": "owner->id"}),  # another link between them
+        edge("SESSIONS_HAYSTACK_SESSION_IDS", d="c2"),              # a pair this link does not have
+    ])
+    assert found == [old]

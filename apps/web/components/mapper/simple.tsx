@@ -19,6 +19,7 @@ import {
   contextV2Api, KnowledgeEntity, KnowledgeRelationship, MappingAsset, MappingKnowledge, MappingValidation,
   SemanticLayer, ShapeSource,
 } from "@/lib/api/contextV2";
+import { carriedFields, identifierChoices, measure, normPath, recordLabel, relationName, savedEntity } from "@/lib/mapper/knowledge";
 
 const select = "rounded-md border border-stone-300 bg-white px-2 py-1 text-sm font-medium text-stone-900 " +
   "focus:outline-none focus:ring-2 focus:ring-primary/30";
@@ -27,88 +28,7 @@ function errorText(e: any): string {
   return e?.response?.data?.detail || e?.message || "Failed";
 }
 
-/** How a record source reads in a sentence. */
-function recordLabel(s: ShapeSource): string {
-  if (!s.path) return s.kind === "structured" ? "each row" : "each record";
-  const key = s.path.replace(/^\$\./, "").replace(/(\[\*\])+$/, "");
-  if (s.path.endsWith("[*][*]")) return `each item of each list in "${key}"`;
-  const [outer, inner] = key.split("[*].");    // a list inside each element: a project's risks
-  if (inner) return `each item in "${inner}" of each item in "${outer}"`;
-  return s.path.endsWith("[*]") ? `each item in "${key}"` : `the "${key}" object in each record`;
-}
-
-/** "rows", "$" and "" all mean each record of the file. */
-const normPath = (p?: string) => (["rows", "row", "$"].includes((p || "").trim().toLowerCase()) ? "" : (p || "").trim());
-
-type Field = ShapeSource["fields"][number];
-
-/** What a type's files hold at its record path, judged across all of them: a field identifies only if
- *  it identifies in every file, and names only if it names in every file that has it. */
-interface Measured {
-  loading: boolean;
-  paths: ShapeSource[];          // the record sources on offer (one per path, from the first file that has it)
-  fields: Field[];
-  records: number;
-  rows: Record<string, any>[];
-  errors: string[];
-  perAsset: Record<string, ShapeSource>;
-}
-
-function measure(e: KnowledgeEntity, shapes: Record<string, ShapeSource[]>): Measured {
-  const path = normPath(e.path);
-  const ids = (e.assets || []).map((a) => a.id).filter(Boolean);
-  const paths: ShapeSource[] = [];
-  const perAsset: Record<string, ShapeSource> = {};
-  for (const a of ids) {
-    for (const s of shapes[a] || []) {
-      if (!paths.some((p) => p.path === s.path)) paths.push(s);
-      if (s.path === path) perAsset[a] = s;
-    }
-  }
-  const srcs = Object.values(perAsset);
-  const byName = new Map<string, Field>();
-  for (const s of srcs) {
-    for (const f of s.fields) {
-      const cur = byName.get(f.name);
-      byName.set(f.name, cur ? { ...cur, filled: cur.filled + f.filled, distinct: cur.distinct + f.distinct,
-        repeats: cur.repeats + f.repeats, words: Math.max(cur.words, f.words),
-        identifier: cur.identifier && f.identifier, nameable: cur.nameable && f.nameable } : { ...f });
-    }
-  }
-  // a field missing from some file cannot identify those files' records
-  const fields = Array.from(byName.values()).map((f) =>
-    srcs.every((s) => s.fields.some((x) => x.name === f.name)) ? f : { ...f, identifier: false });
-  return {
-    loading: ids.some((a) => !(a in shapes)),
-    paths, fields, perAsset,
-    records: srcs.reduce((n, s) => n + (s.records || 0), 0),
-    rows: srcs.flatMap((s) => s.rows).slice(0, 3),
-    errors: srcs.filter((s) => s.error).map((s) => `${s.asset_name}: ${s.error}`),
-  };
-}
-
 const FILES_SHOWN = 6;
-
-/** A field's role from what was measured: the choices made here, then the data. */
-/** The roles that make a field knowledge: what a published record carries by default (the rest stays
- *  in the data store). The same rule as the server's `store.KNOWLEDGE_ROLES`. */
-const KNOWLEDGE_ROLES = ["key", "text", "prose", "time", "reference"];
-
-/** A field's role: a person's choice (identifier, link) first, then what detection measured, then a guess. */
-function roleFor(f: Field, e: KnowledgeEntity, key: string, refs: Set<string>): string {
-  if (f.name === key) return "key";
-  if (refs.has(f.name)) return "reference";
-  return (e.properties || []).find((p) => p.name === f.name)?.role || roleOf(f, key, refs);
-}
-
-function roleOf(f: Field, key: string, refs: Set<string>): string {
-  if (f.name === key) return "key";
-  if (refs.has(f.name)) return "reference";
-  if (f.data_type === "date") return "time";
-  if (f.data_type === "number") return "measure";
-  if (f.words >= 8) return "prose";
-  return "text";
-}
 
 export default function SimpleMapping({ mappingId, paradigm, payload, status, onSaved }: {
   mappingId: string;
@@ -187,33 +107,12 @@ export default function SimpleMapping({ mappingId, paradigm, payload, status, on
       ]);
       const relink = (rs: KnowledgeRelationship[]) => rs.map((r) => {
         const to = rn(r.to_type);
-        return { ...r, from_type: rn(r.from_type), to_type: to, to_field: keyOf.get(to) || r.to_field };
+        // a name the link took from its target follows the target's new name; a name a person gave stays
+        const name = r.name === relationName(r.to_type) ? relationName(to) : r.name;
+        return { ...r, name, from_type: rn(r.from_type), to_type: to, to_field: keyOf.get(to) || r.to_field };
       });
       const knowledge: MappingKnowledge = {
-        entities: entities.filter((e) => e.type.trim()).map((e) => {
-          const m = measure(e, shapes);
-          const key = e.keys[0] || "";
-          const refs = new Set(rels.filter((r) => r.from_type === e.type).map((r) => r.from_field));
-          const read = !m.loading && m.fields.length > 0;
-          return {
-            ...e,
-            type: e.type.trim(),
-            path: normPath(e.path),
-            kind: key ? "entity" : "event",
-            // saving here is a person's decision: what is not ignored is accepted
-            status: e.status === "rejected" ? "rejected" : "accepted",
-            materialize: e.materialize,                        // one row one node, identified or not
-            assets: (e.assets || []).map((a) => {
-              const s = m.perAsset[a.id];
-              return s ? { ...a, fields: Object.fromEntries(s.fields.map((f) => [f.name, f.source])) } : a;
-            }),
-            properties: read ? m.fields.map((f) => ({ name: f.name, data_type: f.data_type, role: roleFor(f, e, key, refs),
-                                                      distinct: f.distinct, words: f.words }))
-                             : e.properties,
-            rows: read ? m.records : e.rows,
-            confidence: 1,
-          };
-        }),
+        entities: entities.filter((e) => e.type.trim()).map((e) => savedEntity(e, measure(e, shapes), rels)),
         relationships: relink(rels),
       };
       const rec = await contextV2Api.updateSchemaMapping(mappingId, {
@@ -278,10 +177,10 @@ export default function SimpleMapping({ mappingId, paradigm, payload, status, on
         const has = files.length > 0;
         const m = measure(e, shapes);
         const path = normPath(e.path);
-        const ids = m.fields.filter((f) => f.identifier);
         // one record cannot show a field is unique (detection needs two); a person may still say it is
-        const unchecked = m.records < 2 ? m.fields.filter((f) => !f.identifier && f.filled > 0 && !f.repeats
-          && !/^#|^\^(?!.*\[i\]$)/.test(String(f.source || ""))) : [];   // a position or the parent's value never identifies
+        const choices = identifierChoices(m);
+        const ids = choices.filter((c) => c.checked).map((c) => c.field);
+        const unchecked = choices.filter((c) => !c.checked).map((c) => c.field);
         const names = m.fields.filter((f) => f.nameable);
         const key = e.keys[0] || "";
         const ignored = e.status === "rejected";
@@ -289,9 +188,7 @@ export default function SimpleMapping({ mappingId, paradigm, payload, status, on
         const myRels = rels.filter((r) => r.from_type === e.type);
         const refsOf = new Set(myRels.map((r) => r.from_field));
         // the fields a published record carries: a person's choice, else its knowledge columns
-        const carried = (e.attributes?.length ? e.attributes
-          : m.fields.filter((f) => KNOWLEDGE_ROLES.includes(roleFor(f, e, key, refsOf))).map((f) => f.name)
-            .concat(e.label ? [e.label] : [])).filter((x, k, a) => a.indexOf(x) === k);
+        const carried = carriedFields(e, m, refsOf);
         const open = !!showAll[i];
         const addable = assets.filter((a) => !files.some((f) => f.id === a.id));
         const addFile = (id: string) => {
@@ -441,7 +338,7 @@ export default function SimpleMapping({ mappingId, paradigm, payload, status, on
                   onAdd={(field, target) => {
                     const t = otherTypes.find((x) => x.name === target);
                     if (!t) return;
-                    setRels((rs) => [...rs, { name: target.toUpperCase().replace(/[^A-Z0-9]+/g, "_"), from_type: e.type,
+                    setRels((rs) => [...rs, { name: relationName(target), from_type: e.type,
                       from_field: field, to_type: target, to_field: t.keys[0], origin: "declared", coverage: 0, status: "accepted" }]);
                     setDirty(true);
                   }} />

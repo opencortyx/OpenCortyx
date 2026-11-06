@@ -1,48 +1,48 @@
 # Example data
 
-Sample inputs to exercise **auto mode**, **auto + schema mapping**, and **bound mapping** across all
-three paradigms, then view the result in the **Lineage Graph** (dashboard → Graph).
+Small files to try the three kinds of data: tables, JSON and documents. Add them in **Add data**,
+check what was found in the **Mapper**, and see the result in **Graph**.
 
 ## Files
-| Path | Paradigm | Use for |
+| Path | Kind | Use for |
 |---|---|---|
-| `json/orders.json` | Semi-structured | flat records → Order nodes; `customer_id`/`product_id` → REFERENCES |
-| `json/sessions.json` | Semi-structured | nested `turns[]` → Session→Turn chain (auto), or a bound mapping |
-| `json/devices.json` | Semi-structured | different shape again (nested `specs`, `tags[]`) — proves auto handles new schemas |
-| `csv/customers.csv` | Structured (file) | rows → Customer nodes (auto column roles) |
-| `sql/schema.sql` | Structured (DBMS) | orders/customers/products + FKs → nodes + FK edges (load into Postgres/MySQL, connect it) |
-| `docs/onboarding.md` | Unstructured | 2 headings → 2 Chunk nodes → extractors |
-| `text/*.txt` | Unstructured | short articles for document ingestion and Q&A |
-| `json/benchmark_deep.json`, `json/benchmark_deep_2.json` | Semi-structured | deeply nested payloads for mapping and walker stress tests |
+| `csv/customers.csv` | Table | rows → Customer records, identified by `id`, shown as `full_name` |
+| `json/orders.json` | JSON | flat records → Order records; `customer_id` names a customer in `customers.csv` |
+| `json/sessions.json` | JSON | nested `turns[]` → Session and Turn, each turn linked to its session |
+| `json/devices.json` | JSON | another shape (nested `specs`, `tags[]`): detection reads new shapes too |
+| `json/benchmark_deep.json`, `json/benchmark_deep_2.json` | JSON | deeply nested payloads |
+| `sql/schema.sql` | Database | orders, customers, products and their foreign keys (load it into Postgres or MySQL and add a Connection) |
+| `docs/onboarding.md` | Document | two headings → two sections, for extractors |
+| `text/*.txt` | Document | short articles for document reading and questions |
 
-## A. Pure AUTO (no mapping) — the zero-config path
-1. Dashboard → **Pipelines** → pick/create a semi-structured pipeline; leave **Schema mapping = none**, Auto-accept ON.
-2. **Ingestion Hub** → upload `json/sessions.json` → assign the pipeline → run.
-3. It auto-detects the shape, builds the graph, AND saves an **`Auto — …` mapping** (see it in
-   Schema Mappings hub, status `auto`).
-4. Repeat with `json/devices.json` — a *different* schema — confirm it makes its own auto mapping + nodes.
-5. **Graph** tab → see Session/Turn/Device nodes and edges.
+## A. A table and a JSON file that refer to each other
+1. **Add data** → choose `csv/customers.csv` and `json/orders.json` together → **Extract knowledge**
+   → **Add 2 files**.
+2. **Mapper** → pick `customers`: one kind, Customer (detection may call it *Customers*: click the
+   name to rename it), identified by `id`, shown as `full_name`.
+3. Pick `orders.json`: one kind, Order, identified by `order_id`. Three orders are too few for
+   detection to be sure `customer_id` names a customer, so add it: **Add a relationship** → each
+   *Order* refers to a *Customer* through `customer_id` → **Add**.
+4. **Save**. **Graph** now holds 3 Customer and 3 Order nodes, each order linked to its customer.
 
-## B. AUTO + SCHEMA MAPPING (author, then bind)
-1. **Schema Mappings → Semi-Structured engine** → paste `json/orders.json` (or a record) → Detect keys →
-   set roles (e.g. `review_text` = text → extract; `customer_id` = id) → **Save**. It appears in the hub.
-2. **Pipelines → semi-structured builder** → Step 1 **Schema mapping (starting point)** → pick your saved
-   mapping. Inline authoring hides; add an extractor step (its nodes come from the mapping).
-3. **Ingestion Hub** → `json/orders.json` → assign this pipeline → run.
-4. **Graph** → Order nodes with the exact shape you defined; claims extracted from `review_text`.
+## B. Nested JSON
+1. **Add data** → `json/sessions.json` → **Extract knowledge** → **Add**.
+2. **Mapper** → `sessions.json`: Session (identified by `session_id`) and Turns (events: each turn
+   is new), with a relationship from each turn to the Session it sits in. Rename *Turns* to *Turn*
+   if you like: the relationship follows. **Advanced** shows where each is read from (`$.turns[*]`).
 
-## C. Structured (CSV / DBMS)
-- **CSV**: Structured engine → upload `csv/customers.csv` → columns auto-detected → Save → bind in the
-  structured pipeline builder → ingest the CSV.
-- **DBMS**: load `sql/schema.sql` into a Postgres/MySQL, add a **Connector** (Connections tab), then in
-  the Structured engine introspect it (source connectivity — see note), map `orders` (FKs → edges), Save,
-  bind, ingest.
+## C. Documents
+1. **Add data** → `docs/onboarding.md` and `text/mars-exploration.txt` → **Add 2 files**.
+2. **Mapper** → `onboarding.md`: read by its layout into two sections, Onboarding and Benefits, one
+   paragraph each. `mars-exploration.txt` is plain text, so it has no headings: five paragraphs.
+3. On `mars-exploration.txt`, set **Split paragraphs longer than** to 300 and press **Save and read
+   this document again**: its three longest paragraphs become two passages each (eight in all). Set
+   it back to 800 the same way.
+4. **Customize → Extractors** → create an extractor that finds people, places and things (the model).
+   Back in the Mapper, on the document, **Run an extractor on this file** → choose it → **Run**. A
+   few minutes later (Refresh) the document shows what it found, for example Product, Place,
+   Organisation, Person, and **Found by extractors** lists those kinds with a switch each.
 
-## D. Unstructured
-- Document engine/pipeline → `docs/onboarding.md` → 2 Chunk nodes → add an entity/claim extractor →
-  ingest → Graph shows Chunks + extracted entities.
-
-## What to verify in the Lineage Graph
-- Auto and mapping-bound runs both produce nodes/edges.
-- A **new/different** JSON schema under auto mode creates a fresh `auto` mapping (hub) — not a failure.
-- A **bound** mapping produces the exact node/edge types you declared (renames, FK/REFERENCES edges, zips).
+## D. A database
+Load `sql/schema.sql` into Postgres or MySQL, add it under **Connections**, and read it. Its tables
+appear in the Mapper like files.

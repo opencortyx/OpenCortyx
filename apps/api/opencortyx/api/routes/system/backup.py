@@ -131,11 +131,18 @@ async def import_graph(spec: ImportSpec, user: CurrentUser = Depends(require_wri
         await repo.clear_org(org)
 
     nodes = [n for n in (_node_from(org, raw) for raw in d.get("nodes") or []) if n is not None]
+    # What was forgotten after the backup was made stays forgotten (knowledge/forget.py).
+    from opencortyx.knowledge.forget import restorable
+    nodes, res["forgotten_left_out"] = await restorable(org, nodes)
+    kept_ids = {str(n.id) for n in nodes}
     for start in range(0, len(nodes), _IMPORT_BATCH):
         res["nodes"] += len(await repo.save_many(org, nodes[start:start + _IMPORT_BATCH]))
 
+    dropped = {str(raw.get("id")) for raw in d.get("nodes") or [] if isinstance(raw, dict)} - kept_ids
     edges = []
     for e in d.get("edges") or []:
+        if dropped and (str(e.get("source_id")) in dropped or str(e.get("target_id")) in dropped):
+            continue                                     # it touched something forgotten
         try:
             edges.append({"source_id": uuid.UUID(e["source_id"]), "target_id": uuid.UUID(e["target_id"]),
                           "type": e.get("type") or "REL", "weight": e.get("weight", 1.0),

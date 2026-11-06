@@ -243,10 +243,12 @@ export default function SettingsPage() {
 
       {/* What left the sidebar in the simple product (lib/simple.ts), one click from here. */}
       {!FULL_UI && (
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {[
             { href: "/dashboard/models", title: "Models", text: "The models answers and reading use" },
             { href: "/dashboard/users", title: "Users & access", text: "Who can see and change what" },
+            { href: "/dashboard/cost", title: "Cost & usage", text: "What the models cost, and the monthly budget" },
+            { href: "/dashboard/forget", title: "Data deletion", text: "Forget a person or a record everywhere (admins)" },
             { href: "/dashboard/eval", title: "Quality checks", text: "Questions with known answers, run on demand" },
             { href: "/dashboard/health", title: "System health", text: "Is every part up" },
           ].map((c) => (

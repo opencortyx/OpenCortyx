@@ -132,7 +132,7 @@ export default function ProgressPage() {
 
       {/* summary cards */}
       {summary && (
-        <div className="flex flex-wrap gap-3 mb-6">
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 mb-6">
           <SummaryCard label="Total" value={summary.total} tone="text-stone-900" />
           <SummaryCard label="Queued" value={summary.queued} tone="text-stone-500" />
           <SummaryCard label="In progress" value={summary.running} tone="text-teal-600" />

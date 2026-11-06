@@ -52,4 +52,30 @@ class ResolutionDecision(V2Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
-__all__ = ["ResolutionDecision", "ResolutionKey"]
+class ResolutionLabel(V2Base):
+    """A person's answer to "are these two the same thing?", kept so resolution can be MEASURED.
+
+    Keyed by what the two records say (their identity values and the asset each came from), not by
+    node id: node ids change when a file is read again, and a label must still apply afterwards.
+    `pair_hash` is order-free (a,b == b,a), so the same pair is labelled once. Labels come from
+    Review decisions, from checking automatic merges, from splits and merges a person made, and
+    from an imported benchmark (`origin`). A label holds identity values, which can be personal
+    data, so forgetting a subject removes its labels too."""
+    __tablename__ = "resolution_label"
+    __table_args__ = (Index("ix_v2_resolution_label_pair", "workspace_id", "node_type", "pair_hash", unique=True),
+                      {"schema": V2_SCHEMA})
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    node_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    pair_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: {"label": ..., "properties": {...}, "asset_id": ...} - what each record said when labelled
+    a: Mapped[dict] = mapped_column(JSONB, default=dict)
+    b: Mapped[dict] = mapped_column(JSONB, default=dict)
+    same: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    origin: Mapped[str] = mapped_column(String(20), default="manual")   # review|audit|split|merge|manual|import
+    author: Mapped[str | None] = mapped_column(String(120))
+    note: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+__all__ = ["ResolutionDecision", "ResolutionKey", "ResolutionLabel"]

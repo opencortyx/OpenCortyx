@@ -1,5 +1,5 @@
 """Request and response models: grounded context retrieval and cited answers."""
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from datetime import date, datetime
 
@@ -22,6 +22,9 @@ class ContextQuery(BaseModel):
     # WHAT to search — "knowledge" (your ingested data, the default), "conversations" (this app's own
     # Sessions/Turns/Decisions/Facts), or "all". See RetrieveContext.scope.
     scope: Optional[str] = None
+    # What happens to a sentence none of its sources supports: "flag" it, or "strict" (remove it,
+    # abstain when nothing is left). None: the workspace setting (stricter for API keys and agents).
+    citation_policy: Optional[Literal["flag", "strict"]] = None
     # Chat history (the Assistant sidebar). `save_chat` records this turn in the caller's history —
     # in `chat_id` when they own it, else in a new chat whose id comes back with the answer. A saved
     # chat is also the conversation follow-ups are resolved against ("what about the other one?").

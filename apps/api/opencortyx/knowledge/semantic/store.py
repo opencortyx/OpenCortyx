@@ -441,14 +441,15 @@ def redetected(mapping, layer: Layer) -> dict | None:
 def publish_changed(before: dict, after: dict) -> bool:
     """Whether what a mapping puts in the graph changed between two versions of its knowledge: which
     types are published, and for each published type its name, identifier, name field, record path
-    and status and the fields its records carry - or the links. Renaming a published type, naming
-    its records by another field or carrying other fields changes nodes already written."""
+    and status and the fields its records carry - or the links, their names included. Renaming a
+    published type or a link, naming its records by another field or carrying other fields changes
+    nodes and edges already written."""
     def published(k: dict):
         ents = sorted((str(e.get("type")), tuple(e.get("keys") or []), str(e.get("label") or ""),
                        str(e.get("path") or ""), str(e.get("status") or ""), tuple(e.get("attributes") or []))
                       for e in (k or {}).get("entities") or [] if e.get("materialize"))
-        links = sorted((str(r.get("from_type")), str(r.get("from_field")), str(r.get("to_type")),
-                        str(r.get("to_field")), str(r.get("status") or ""))
+        links = sorted((str(r.get("name") or ""), str(r.get("from_type")), str(r.get("from_field")),
+                        str(r.get("to_type")), str(r.get("to_field")), str(r.get("status") or ""))
                        for r in (k or {}).get("relationships") or [])
         return ents, links
     return published(before) != published(after)

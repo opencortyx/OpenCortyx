@@ -30,16 +30,10 @@ const PREPARE: Record<string, (p: Page) => Promise<unknown>> = {
     await p.getByText("Extract knowledge", { exact: true }).click({ timeout: 60_000 });
   },
   mapper: async (p) => {
-    const project = p.locator('a[href^="/dashboard/mapper/"]').filter({ hasText: /^Project/ }).first();
-    await (await project.count() ? project : p.locator('a[href^="/dashboard/mapper/"]').first()).click({ timeout: 15_000 });
-    await p.waitForURL(/\/dashboard\/mapper\/.+/);
+    // the uploaded file opens on its own; its kinds are measured, then drawn
+    await p.getByRole("heading", { name: /^What's in / }).waitFor({ timeout: 30_000 });
+    await p.getByRole("article").first().waitFor({ timeout: 30_000 });
     await p.waitForLoadState("networkidle");
-  },
-  "nodes-relationships": async (p) => {
-    await p.getByRole("button", { name: "Edit Project" }).click({ timeout: 15_000 });
-    const panel = p.getByText(/When are two Project records the same thing\?/);
-    await panel.waitFor({ timeout: 15_000 });
-    await panel.scrollIntoViewIfNeeded();
   },
   "review-queue": (p) => p.getByRole("button", { name: /^Ontology/ }).click({ timeout: 15_000 }),
   evaluations: async (p) => {

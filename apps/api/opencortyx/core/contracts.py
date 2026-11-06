@@ -26,7 +26,10 @@ class TokenBudget:
 @dataclass
 class RetrieveContext:
     workspace_id: uuid.UUID
-    collection_ids: Optional[list] = None     # access scope
+    collection_ids: Optional[list] = None     # the collections a question is NARROWED to (asked for)
+    #: the collections the caller may read (access policies); None: every one. Records in no
+    #: collection stay readable - core/security/scope.py.
+    access_collections: Optional[list] = None
     max_sensitivity: str = "normal"
     conversation_id: Optional[uuid.UUID] = None   # scope to one conversation (memory mode)
     # ── per-query overrides (the Chat UI sets these to steer retrieval) ──
@@ -44,6 +47,8 @@ class RetrieveContext:
     decompose: Optional[bool] = None          # search chains/comparisons step by step; None = the setting
     scope: str = "knowledge"
     explain_retriever: bool = False
+    # ── how an answer treats a sentence no source supports: flag | strict (None: the setting) ──
+    citation_policy: Optional[str] = None
 
 
 @dataclass

@@ -10,6 +10,10 @@ type Msg = {
   meta?: {
     abstained?: boolean; grounded?: boolean; confidence?: number;
     retrievers?: string[]; citations?: Citation[]; caveats?: string[]; unsupported?: string[];
+    removed?: string[];
+    /** Each sentence against the sources it cites (answering/trust.verify_citations). */
+    verification?: { sentences: { text: string; cited: number[]; supported_by: number[]; supported: boolean; check: string; reason: string | null }[];
+                     citation_precision: number | null; citations_checked: number; citations_supporting: number; checked_with: string };
     trust_score?: number; crag?: { verdict?: string; score?: number; threshold?: number; reason?: string };
     trace?: any[]; retrieved_context?: string;
     stage_trace?: { stage: string; detail?: string; degraded?: boolean; [k: string]: any }[];
@@ -107,8 +111,11 @@ export default function ChatPage() {
   };
 
   useEffect(() => {
-    const id = new URL(window.location.href).searchParams.get("chat");
+    const params = new URL(window.location.href).searchParams;
+    const id = params.get("chat");
     if (id) openChat(id);
+    // the header search's "Ask the Assistant": the question is filled in, ready to send
+    else if (params.get("q")) setInput(params.get("q") || "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -196,7 +203,8 @@ export default function ChatPage() {
               meta: {
                 abstained: d.abstained, grounded: d.grounded, confidence: d.confidence,
                 retrievers: d.retrievers, citations: d.citations, caveats: d.caveats,
-                unsupported: d.unsupported_sentences, trust_score: d.trust_score, crag: d.crag,
+                unsupported: d.unsupported_sentences, removed: d.removed_sentences, verification: d.verification,
+                trust_score: d.trust_score, crag: d.crag,
                 trace: d.trace, retrieved_context: d.retrieved_context, stage_trace: d.stage_trace,
                 generation: d.generation, outcome: d.outcome, unknown_reason: d.unknown_reason,
                 route: d.route, data: d.data
@@ -525,7 +533,15 @@ function AssistantMeta({ meta }: { meta: NonNullable<Msg["meta"]> }) {
       <div className="flex flex-wrap items-center gap-2">
         {meta.abstained
           ? <span className="inline-flex items-center gap-1 font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded"><AlertTriangle size={12} /> Abstained</span>
-          : <span className="inline-flex items-center gap-1 font-medium text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded"><ShieldCheck size={12} /> Grounded</span>}
+          : meta.unsupported?.length
+          ? <span className="inline-flex items-center gap-1 font-medium text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded"><AlertTriangle size={12} /> Partly supported</span>
+          : <span className="inline-flex items-center gap-1 font-medium text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded"><ShieldCheck size={12} /> Every sentence supported</span>}
+        {meta.verification && meta.verification.citations_checked > 0 && (
+          <span className="font-medium bg-stone-100 px-1.5 py-0.5 rounded text-stone-600"
+                title={`Checked with ${meta.verification.checked_with === "nli" ? "the citation-check model" : "numbers, names, words and similarity"}`}>
+            {meta.verification.citations_supporting} of {meta.verification.citations_checked} citations support their sentence
+          </span>
+        )}
         {typeof meta.confidence === "number" && <span className="font-medium bg-stone-100 px-1.5 py-0.5 rounded text-stone-600">conf {meta.confidence.toFixed(2)}</span>}
         {typeof meta.trust_score === "number" && <span className="font-medium bg-stone-100 px-1.5 py-0.5 rounded text-stone-600">CRAG {meta.trust_score.toFixed(2)}</span>}
         {!!meta.citations?.length && <span className="font-medium bg-teal-50 text-teal-600 px-1.5 py-0.5 rounded">{meta.citations.length} citations</span>}
@@ -540,7 +556,18 @@ function AssistantMeta({ meta }: { meta: NonNullable<Msg["meta"]> }) {
         </div>
       )}
       {!!meta.caveats?.length && meta.caveats.map((c, j) => <div key={j} className="text-amber-600 font-medium mt-1">⚠ {c}</div>)}
-      {!!meta.unsupported?.length && <div className="text-rose-500 font-medium mt-1">⚠ {meta.unsupported.length} sentence(s) not fully grounded.</div>}
+      {!!meta.unsupported?.length && (
+        <div className="text-rose-600 mt-1">
+          <div className="font-medium">⚠ No source supports {meta.unsupported.length === 1 ? "this sentence" : `these ${meta.unsupported.length} sentences`}:</div>
+          <ul className="list-disc ml-5">{meta.unsupported.map((u, j) => {
+            const why = meta.verification?.sentences.find((s) => s.text === u)?.reason;
+            return <li key={j}>{u}{why ? <span className="text-stone-500"> — {why}</span> : null}</li>;
+          })}</ul>
+        </div>
+      )}
+      {!!meta.verification?.sentences?.some((s) => s.supported && s.reason) && (
+        <div className="text-stone-500 mt-1">Some citations were wrong and point to another source now: {meta.verification.sentences.filter((s) => s.supported && s.reason).length} sentence(s).</div>
+      )}
 
       {open && (
         <div className="mt-2 space-y-3 bg-stone-50 rounded-lg p-3 border border-stone-100">

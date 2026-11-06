@@ -161,7 +161,7 @@ class Views:
 
     def __init__(self, workspace_id, assets: Iterable[AssetRef], *, root: Optional[str] = None,
                  lock: bool = False, logical: Iterable[tuple] = (), view_names: Optional[dict] = None,
-                 **conn_kwargs):
+                 hidden: Optional[dict] = None, **conn_kwargs):
         self.workspace_id = workspace_id
         self.root = root or _settings().DATA_ROOT
         assets = list(assets)
@@ -177,6 +177,8 @@ class Views:
         #: asset_id -> the view name to give it (a caller that opens a few of a workspace's assets keeps
         #: the names the whole workspace would give them, so SQL written for the workspace still runs)
         self._fixed = dict(view_names or {})
+        #: asset_id -> columns left out of its view (the caller may not read them)
+        self._hidden = {str(k): [str(c) for c in v] for k, v in (hidden or {}).items() if v}
         self._attached = 0
         for a in assets:
             self.add(a)
@@ -208,7 +210,15 @@ class Views:
             if source is None:
                 return None
         view = self._view_name(ref)
-        self.con.execute(f'CREATE VIEW "{view}" AS SELECT * FROM {source}')
+        hide = self._hidden.get(str(ref.asset_id))
+        if hide:
+            present = {r[0] for r in self.con.execute(f"DESCRIBE SELECT * FROM {source}").fetchall()}
+            hide = [c for c in hide if c in present]
+        if hide:
+            cols = ", ".join('"' + c.replace('"', '""') + '"' for c in hide)
+            self.con.execute(f'CREATE VIEW "{view}" AS SELECT * EXCLUDE ({cols}) FROM {source}')
+        else:
+            self.con.execute(f'CREATE VIEW "{view}" AS SELECT * FROM {source}')
         self.names[view] = ref.asset_id
         return view
 
@@ -220,6 +230,9 @@ class Views:
         cap = int(_settings().DATA_ADAPTER_MAX_ROWS)
         batches = list(adapter.scan(source, filters=ref.options.get("filters"), limit=cap))
         table = pa.Table.from_batches(batches) if batches else pa.table({})
+        hide = [c for c in self._hidden.get(str(ref.asset_id), []) if c in table.column_names]
+        if hide:
+            table = table.drop_columns(hide)
         view = self._view_name(ref)
         self.con.register(view, table)
         self.names[view] = ref.asset_id

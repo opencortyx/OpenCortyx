@@ -48,11 +48,23 @@ const ROLES = [
   { id: "utility", label: "Utility / Judge", icon: Brain, tier: "recommended", wired: true,
     purpose: "The relevance check (CRAG) and the grounding / entailment judge that enforce abstention.",
     hint: "Give this a capable model to make strict (entailment) abstention reliable — a weak judge over-rejects. With none set, the Generation model is used." },
+  { id: "verification", label: "Citation check", icon: ShieldCheck, tier: "useful", wired: true,
+    purpose: "Reads each answer sentence with the source it cites and says whether the source states it, or contradicts it.",
+    hint: "A natural-language-inference model from Hugging Face (an MNLI cross-encoder), downloaded here with the provider 'Downloaded to OpenCortyx'. It catches \"did not approve\" against \"approved\", which word and number checks cannot. Without one, citations are checked by numbers, names, words and similarity." },
 ];
 
-const EMPTY: ModelSpecInput & { id?: string } = {
+/** The model a role suggests, filled in with one click; it runs in OpenCortyx after its Download. */
+const RECOMMENDED: Record<string, { repo: string; name: string; note: string }> = {
+  verification: { repo: "cross-encoder/nli-deberta-v3-xsmall", name: "nli-deberta-v3-xsmall",
+                  note: "about 290 MB, Apache-2.0, fast on a CPU" },
+};
+
+/** Providers billed per token: the form asks for their price, which Cost & usage uses. */
+const PAID = new Set(["openai", "anthropic", "groq", "together", "azure", "huggingface", "hf"]);
+
+const EMPTY: ModelSpecInput & { id?: string; params: Record<string, any> } = {
   id: "", name: "", role: "generation", provider: "openai_compatible", model_id: "",
-  base_url: "http://host.docker.internal:11434/v1", api_key: "", is_default: true,
+  base_url: "http://host.docker.internal:11434/v1", api_key: "", is_default: true, params: {},
 };
 
 export default function ModelRegistryPage() {
@@ -95,9 +107,15 @@ export default function ModelRegistryPage() {
     setForm({ ...EMPTY, role, ...(local ? { provider: "fastembed", base_url: "" } : {}) });
     setMsg({ text: "", type: "" }); resetPicker(); setModal(true);
   };
+  const openRecommended = (role: string) => {
+    const r = RECOMMENDED[role];
+    setForm({ ...EMPTY, role, provider: "transformers", base_url: "", model_id: r.repo, name: r.name, is_default: true });
+    setMsg({ text: "", type: "" }); resetPicker(); setModal(true);
+  };
   const openEdit = (m: ModelEntry) => {
+    // its params (temperature, dimensions, prices...) are kept: saving sends them back
     setForm({ id: m.id, name: m.name, role: m.role, provider: m.provider, model_id: m.model_id,
-      base_url: m.base_url || "", api_key: "", is_default: m.is_default });
+      base_url: m.base_url || "", api_key: "", is_default: m.is_default, params: { ...(m.params || {}) } });
     setMsg({ text: "", type: "" }); resetPicker(); setModal(true);
   };
 
@@ -124,6 +142,7 @@ export default function ModelRegistryPage() {
       const spec: ModelSpecInput = {
         name: form.name, role: form.role, provider: form.provider, model_id: form.model_id,
         base_url: form.base_url || undefined, api_key: form.api_key || undefined, is_default: form.is_default,
+        params: form.params || {},
       };
       if (form.id) await contextV2Api.updateModel(form.id, spec);
       else await contextV2Api.createModel(spec);
@@ -193,6 +212,14 @@ export default function ModelRegistryPage() {
         {rows.length === 0 ? (
           <div className="bg-stone-50 border border-dashed border-stone-200 rounded-xl p-5 text-sm text-stone-400">
             No {role.label.toLowerCase()} model set yet. Add one and mark it default — it&apos;s saved (encrypted) and used for {role.label.toLowerCase()} wherever this capability runs.
+            {RECOMMENDED[role.id] && (
+              <div className="mt-2">
+                <button type="button" onClick={() => openRecommended(role.id)} className="text-primary font-medium hover:underline">
+                  Use the recommended {RECOMMENDED[role.id].repo}
+                </button>
+                <span className="text-stone-400"> ({RECOMMENDED[role.id].note}): then press Download in the form.</span>
+              </div>
+            )}
           </div>
         ) : (
           <div className="space-y-2">
@@ -338,6 +365,19 @@ export default function ModelRegistryPage() {
                   A server on this computer is <span className="font-mono">host.docker.internal</span>, not <span className="font-mono">localhost</span>.
                   Ollama: <span className="font-mono">:11434/v1</span> · LM Studio: <span className="font-mono">:1234/v1</span>.
                 </p>
+              )}
+              {PAID.has(form.provider) && (
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Price per 1M input tokens (USD)">
+                    <input type="number" min={0} step={0.01} value={form.params?.price_in_per_1m ?? ""} placeholder="e.g. 3.00"
+                      onChange={(e) => setForm({ ...form, params: { ...form.params, price_in_per_1m: e.target.value === "" ? undefined : Math.max(0, Number(e.target.value)) } })} className={inp} />
+                  </Field>
+                  <Field label="Price per 1M output tokens (USD)">
+                    <input type="number" min={0} step={0.01} value={form.params?.price_out_per_1m ?? ""} placeholder="e.g. 15.00"
+                      onChange={(e) => setForm({ ...form, params: { ...form.params, price_out_per_1m: e.target.value === "" ? undefined : Math.max(0, Number(e.target.value)) } })} className={inp} />
+                  </Field>
+                  <p className="col-span-2 text-[11px] text-stone-400 -mt-2">From the provider&apos;s price list. Cost &amp; usage multiplies the measured tokens by these.</p>
+                </div>
               )}
               {(needsKey || form.provider === "openai_compatible") && (
                 <Field label={needsKey ? "API Key" : "API Key (if the server needs one)"}><input type="password" value={form.api_key} onChange={(e) => setForm({ ...form, api_key: e.target.value })} className={inp} placeholder={form.id ? "•••••• (leave blank to keep)" : needsKey ? "sk-… / hf_…" : "optional"} /></Field>

@@ -330,7 +330,7 @@ async def discover_models(body: ModelDiscover, user: CurrentUser = Depends(requi
         import anyio
 
         from opencortyx.core.inference import hf_hub
-        items = await anyio.to_thread.run_sync(hf_hub.downloaded)
+        items = await anyio.to_thread.run_sync(hf_hub.downloaded, body.role or "generation")
         return {"items": items, "source": "model cache", "provider": provider,
                 "note": None if items else ("Nothing downloaded yet. Type a Hugging Face model as "
                                             "the Model ID and press Download.")}
@@ -384,7 +384,7 @@ async def hf_model_info(body: HFDownload, user: CurrentUser = Depends(require_ad
 
     from opencortyx.core.inference import hf_hub
     try:
-        return await anyio.to_thread.run_sync(hf_hub.info, body.repo.strip(), body.token)
+        return await anyio.to_thread.run_sync(hf_hub.info, body.repo.strip(), body.token, body.role)
     except Exception as e:
         raise _hf_error(e)
 
@@ -396,7 +396,7 @@ async def hf_download(body: HFDownload, user: CurrentUser = Depends(require_admi
 
     from opencortyx.core.inference import hf_hub
     try:
-        return await anyio.to_thread.run_sync(hf_hub.start, body.repo.strip(), body.token)
+        return await anyio.to_thread.run_sync(hf_hub.start, body.repo.strip(), body.token, body.role)
     except Exception as e:
         raise _hf_error(e)
 
@@ -410,12 +410,12 @@ async def hf_download_status(repo: str, user: CurrentUser = Depends(require_admi
 
 
 @router.get("/models/hf/local")
-async def hf_local_models(user: CurrentUser = Depends(require_admin)):
-    """The text-generation models downloaded into the model cache."""
+async def hf_local_models(role: str = "generation", user: CurrentUser = Depends(require_admin)):
+    """The models downloaded into the model cache that can serve `role`."""
     import anyio
 
     from opencortyx.core.inference import hf_hub
-    return {"items": await anyio.to_thread.run_sync(hf_hub.downloaded)}
+    return {"items": await anyio.to_thread.run_sync(hf_hub.downloaded, role)}
 
 
 @router.delete("/models/hf/local")

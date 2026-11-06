@@ -5,10 +5,12 @@ import Button from "@/components/ui/Button";
 import { contextV2Api, AssetDeletePreview, AssetDeleteResult } from "@/lib/api/contextV2";
 
 /**
- * Permanent asset deletion — the asset node plus everything derived from it (chunks, properties,
- * rows, entities, claims, summaries, comments), every edge that touches them, its progress runs and
- * its sync-manifest entry. There is no undo, so the dialog first asks the API what WOULD be removed
- * (dry run) and makes the user type DELETE before the button arms.
+ * Permanent asset deletion from every store (knowledge/forget.py): the asset and everything derived
+ * from it, its search points, its table rows (vacuumed at once), evidence, cached extraction answers,
+ * the stored upload, chat citations, runs and sync-manifest entry; merged records are rebuilt without
+ * it. The dialog first asks what WOULD be removed and makes the user type DELETE. An admin can also
+ * FORGET it: it is then refused if it comes back (a synced folder, an upload, a backup restore). The
+ * result is the deletion job; one that is not complete stays open and says what is left.
  */
 export default function DeleteAssetDialog({
   assetId,
@@ -26,6 +28,11 @@ export default function DeleteAssetDialog({
   const [busy, setBusy] = useState(false);
   const [confirmText, setConfirmText] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [admin, setAdmin] = useState(false);
+  const [forget, setForget] = useState(false);
+  const [result, setResult] = useState<AssetDeleteResult | null>(null);
+
+  useEffect(() => { contextV2Api.authMe().then((r) => setAdmin(r.role === "admin")).catch(() => {}); }, []);
 
   useEffect(() => {
     let alive = true;
@@ -52,9 +59,12 @@ export default function DeleteAssetDialog({
     setBusy(true);
     setError(null);
     try {
-      const res = await contextV2Api.deleteAsset(assetId);
+      const res = await contextV2Api.deleteAsset(assetId, forget);
       onDeleted?.(res);
-      onClose();
+      if (res.status === "done") { onClose(); return; }
+      // Not every store confirmed: the dialog stays open with what is left (retry in Data deletion).
+      setResult(res);
+      setBusy(false);
     } catch (e: any) {
       setError(e?.response?.data?.detail || e?.message || "Delete failed");
       setBusy(false);
@@ -89,8 +99,12 @@ export default function DeleteAssetDialog({
           <p className="text-sm text-stone-600 dark:text-stone-400">
             <span className="font-semibold text-stone-900 dark:text-stone-100">{assetName}</span> and
             everything derived from it will be erased from the database — nodes, edges, extracted
-            entities and claims, progress history. This cannot be undone.
+            entities and claims, table rows, cached answers, the uploaded file, progress history. Chats
+            that cited it are redacted. This cannot be undone.
           </p>
+          {(preview as any)?.external && (
+            <p className="text-xs text-amber-700">This asset reads a source system. OpenCortyx forgets what it read; the source itself still holds the data.</p>
+          )}
 
           <div className="rounded-xl border border-red-200 dark:border-red-900 bg-red-50/60 dark:bg-red-950/30 p-4">
             {loading ? (
@@ -145,6 +159,20 @@ export default function DeleteAssetDialog({
             />
           </div>
 
+          {admin && (
+            <label className="flex items-start gap-2 text-sm text-stone-700 dark:text-stone-300">
+              <input type="checkbox" className="mt-0.5" checked={forget} onChange={(e) => setForget(e.target.checked)} />
+              <span>Also keep it from coming back. Leave this off to upload a corrected version later; turn it on when the data must never be read again (it is refused from a synced folder, an upload or a backup).</span>
+            </label>
+          )}
+
+          {result && (
+            <div role="alert" className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 space-y-1">
+              <div className="font-semibold">Deleted, but not every store confirmed: {result.error || "see Data deletion"}.</div>
+              <div>Retry it from Settings → Data deletion.</div>
+            </div>
+          )}
+
           {error && (
             <div className="text-xs text-red-600 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 rounded-lg px-3 py-2">
               {error}
@@ -156,9 +184,13 @@ export default function DeleteAssetDialog({
           <Button variant="secondary" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <Button variant="danger" icon={Trash2} busy={busy} disabled={!armed} onClick={doDelete}>
-            Delete permanently
-          </Button>
+          {result ? (
+            <Button variant="secondary" onClick={onClose}>Close</Button>
+          ) : (
+            <Button variant="danger" icon={Trash2} busy={busy} disabled={!armed} onClick={doDelete}>
+              {forget ? "Delete and forget" : "Delete permanently"}
+            </Button>
+          )}
         </div>
       </div>
     </div>

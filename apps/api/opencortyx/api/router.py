@@ -5,7 +5,7 @@ included first handles it.
 """
 from fastapi import APIRouter
 
-from opencortyx.api.routes.access import api_keys, audit, auth, collections, users
+from opencortyx.api.routes.access import api_keys, audit, auth, collections, policies, users
 from opencortyx.api.routes.graph import (
     assets, comments, definitions, edges, glossary, graph, nodes, ontology, resolution, tree)
 from opencortyx.api.routes.ingestion import (
@@ -14,7 +14,7 @@ from opencortyx.api.routes.ingestion import (
 from opencortyx.api.routes.knowledge import (
     authoring, capabilities, chats, context, evaluation, memory)
 from opencortyx.api.routes.system import (
-    backup, config, cost, health, integrations, maintenance, models, stats)
+    backup, config, cost, forget, health, integrations, maintenance, models, stats)
 
 router = APIRouter(prefix="/v2", tags=["context-layer-v2"])
 router.include_router(auth.router)
@@ -28,6 +28,7 @@ router.include_router(extraction.router)
 router.include_router(context.router)
 router.include_router(chats.router)
 router.include_router(collections.router)
+router.include_router(policies.router)
 router.include_router(graph.router)
 router.include_router(tree.router)
 router.include_router(stats.router)
@@ -49,6 +50,7 @@ router.include_router(quarantine.router)
 router.include_router(health.router)
 router.include_router(backup.router)
 router.include_router(cost.router)
+router.include_router(forget.router)
 router.include_router(memory.router)
 router.include_router(integrations.router)
 router.include_router(evaluation.router)

@@ -29,7 +29,7 @@ from typing import Optional
 from opencortyx.core.observability import get_logger
 from opencortyx.resolution import records
 from opencortyx.resolution.normalize import identity_key
-from opencortyx.resolution.spec import ResolutionSpec, load_specs
+from opencortyx.resolution.spec import ResolutionSpec, effective, load_specs
 
 log = get_logger(__name__)
 _CHUNK = 1000
@@ -79,9 +79,11 @@ class Store:
                     out.setdefault(key, node_id)
         return out
 
-    async def candidates(self, workspace_id, node_type: str, blocks, exclude, per_block: int = 50) -> dict:
+    async def candidates(self, workspace_id, node_type: str, blocks, exclude, per_block: int = 200) -> dict:
         """{block: [node ids]} of nodes outside `exclude` sharing each block (the "similar" scorer's
-        candidates), at most `per_block` each so one crowded block cannot blow up the comparison."""
+        candidates), at most `per_block` each so one crowded block cannot blow up the comparison.
+        A block that held more is counted in `self.overflow`: a match beyond the cap can be missed,
+        and the resolution summary says how often that happened rather than hiding it."""
         from sqlalchemy import select
         from opencortyx.core.db import V2Session
         from opencortyx.domain.resolution import ResolutionKey as K
@@ -95,6 +97,8 @@ class Store:
                     ids = out.setdefault(block, [])
                     if len(ids) < per_block:
                         ids.append(node_id)
+                    else:
+                        self.overflow = getattr(self, "overflow", 0) + 1
         return out
 
     async def nodes(self, workspace_id, ids) -> dict:
@@ -114,13 +118,11 @@ class Store:
         from sqlalchemy.dialects.postgresql import insert
         from opencortyx.core.db import V2Session
         from opencortyx.domain.resolution import ResolutionDecision, ResolutionKey
+        if plan.same:
+            await self.hold_cluster_conflicts(workspace_id, plan)
+        # The master is rebuilt from its members (resolution/master.py): what a member adds is the
+        # cluster's because the master is composed of its members, not because it was written on it.
         masters = await join(self.repo, workspace_id, plan.same, known) if plan.same else {}
-        if plan.extend:
-            # what a member adds is the cluster's: written on its master (the members stay as they were)
-            await self.repo.upsert_many(workspace_id, [
-                {"node_id": masters.get(cid, cid), "type": known[cid].type, "properties": attrs,
-                 "confidence": known[cid].confidence, "level": known[cid].level}
-                for cid, attrs in plan.extend.items() if cid in known], date_link=False)
         if plan.same:
             await self.share_evidence(workspace_id, [(x, masters[c]) for a, c in plan.same
                                                      for x in (a, c) if c in masters])
@@ -132,6 +134,50 @@ class Store:
                 await db.execute(insert(ResolutionDecision).values(plan.decisions[i:i + _CHUNK])
                                  .on_conflict_do_nothing())
             await db.commit()
+
+    async def hold_cluster_conflicts(self, workspace_id, plan: records.Plan) -> None:
+        """A node already in one cluster that matched a node of ANOTHER cluster would merge two
+        clusters. That is never automatic: the pair goes to Review (a person can join them there)."""
+        from opencortyx.resolution.master import masters_of
+        current = await masters_of(self.repo, workspace_id, [x for p in plan.same for x in p])
+        held = {(a, c) for a, c in plan.same
+                if current.get(a) and current.get(c) and current[a] != current[c]}
+        if not held:
+            return
+        plan.same = [p for p in plan.same if p not in held]
+        for d in plan.decisions:
+            if d["relation"] == records.SAME and (d["subject"], d["target"]) in held:
+                d["needs_review"] = True
+                d["evidence"] = {**(d.get("evidence") or {}),
+                                 "reasons": ["both already belong to different clusters"]}
+        plan.decisions = [d for d in plan.decisions
+                          if not (d["attribute"] and (d["subject"], d["target"]) in held)]
+
+    async def apart(self, workspace_id, node_type: str, node_ids) -> set:
+        """Pairs a person said are different: DISTINCT decisions a person made (a split, an audit
+        "no"), and possible duplicates they answered "keep" in Review."""
+        ids = [i for i in dict.fromkeys(node_ids) if i]
+        if not ids:
+            return set()
+        from sqlalchemy import or_, select
+        from opencortyx.core.db import V2Session
+        from opencortyx.domain.resolution import ResolutionDecision as D
+        out = set()
+        async with V2Session() as db:
+            for i in range(0, len(ids), _CHUNK):
+                part = ids[i:i + _CHUNK]
+                rows = (await db.execute(select(D.subject, D.target, D.relation, D.evidence).where(
+                    D.workspace_id == workspace_id, D.node_type == node_type, D.attribute.is_(None),
+                    D.relation.in_((records.SAME, records.DISTINCT)), D.needs_review.is_(False),
+                    or_(D.subject.in_(part), D.target.in_(part))))).all()
+                for subject, target, relation, ev in rows:
+                    ev = ev or {}
+                    if target is None:
+                        continue
+                    if (relation == records.DISTINCT and ev.get("by_person")) or \
+                            (relation == records.SAME and ev.get("decision") == "keep"):
+                        out.add(records.pair(subject, target))
+        return out
 
     async def share_evidence(self, workspace_id, pairs) -> None:
         """A node found to be the same as a canonical one gives the canonical its evidence too, so the
@@ -242,31 +288,60 @@ def master_id(workspace_id, canonical) -> uuid.UUID:
 
 
 async def join(repo, workspace_id, pairs, known: Optional[dict] = None, *, by: str = "resolution") -> dict:
-    """Put each (member, canonical) pair in the canonical's cluster: its master node - written the
-    first time with the canonical's type, name and fields - and a MEMBER_OF edge from both to it.
-    Never destructive: the members stay as they were. Returns {canonical: master id}."""
-    known = dict(known or {})
+    """Put each (member, canonical) pair in one cluster and rebuild its master from its members.
+
+    The cluster is the canonical's if it already has one, else the member's, else a new one named
+    after the canonical (`master_id`). When the two are in DIFFERENT clusters - only a person's
+    decision gets here with that (`Store.hold_cluster_conflicts` holds the automatic ones) - the
+    member's cluster is moved into the canonical's. Never destructive: members stay as they were.
+    Returns {canonical: master id}."""
+    from opencortyx.resolution.master import masters_of, members_of, rebuild
+    pairs = [(a, c) for a, c in pairs if a and c and a != c]
+    if not pairs:
+        return {}
+    current = await masters_of(repo, workspace_id, [x for p in pairs for x in p])
     masters: dict = {}
-    specs = []
-    for _, c in pairs:
-        if c in masters:
+    moved: list = []                                  # clusters folded into another
+    for a, c in pairs:
+        m = masters.get(c) or current.get(c) or current.get(a) or master_id(workspace_id, c)
+        masters[c] = m
+        for x in (a, c):
+            other = current.get(x)
+            if other and other != m:
+                moved.append(other)
+            current[x] = m
+    edges = {}
+    for a, c in pairs:
+        m = masters[c]
+        for x in (a, c):
+            edges[(x, m)] = {"source_id": x, "target_id": m, "type": MEMBER, "properties": {"__by": by}}
+    if moved:
+        for old, members in (await members_of(repo, workspace_id, moved)).items():
+            target = next((masters[c] for a, c in pairs if old in (current.get(a), current.get(c))), None) \
+                or next(iter(masters.values()))
+            for n in members:
+                edges[(n.id, target)] = {"source_id": n.id, "target_id": target, "type": MEMBER,
+                                         "properties": {"__by": by}}
+            await repo.delete_edges(workspace_id, target_ids=[old], types=[MEMBER])
+    # A master must exist before an edge can point at it: write a first version from the
+    # canonical, then the rebuild composes it from every member.
+    known = dict(known or {})
+    fresh = []
+    present = {n.id for n in await repo.get_many(workspace_id, list(set(masters.values())))}
+    for c, m in masters.items():
+        if m in present or m in {f["node_id"] for f in fresh}:
             continue
-        masters[c] = master_id(workspace_id, c)
         base = known.get(c) or await repo.get(workspace_id, c)
         if base is None:
             continue
-        props = {k: v for k, v in (base.properties or {}).items() if not str(k).startswith("__")}
-        props.update({"__master": True, "__identity": (base.properties or {}).get("__identity") or "record"})
-        specs.append({"node_id": masters[c], "type": base.type, "label": base.label, "properties": props,
+        fresh.append({"node_id": m, "type": base.type, "label": base.label,
+                      "properties": {"__master": True, "__canonical": str(c),
+                                     "__identity": (base.properties or {}).get("__identity") or "record"},
                       "confidence": base.confidence, "level": base.level})
-    if specs:
-        await repo.upsert_many(workspace_id, specs, date_link=False)
-    edges = {(x, masters[c]): {"source_id": x, "target_id": masters[c], "type": MEMBER, "properties": {"__by": by}}
-             for a, c in pairs for x in (a, c) if c in masters}
-    if edges:
-        await repo.add_edges(workspace_id=workspace_id, edges=list(edges.values()))
-    from opencortyx.tasks.graph import embed_later            # a master is in no asset's subtree
-    embed_later(workspace_id, list(masters.values()))
+    if fresh:
+        await repo.upsert_many(workspace_id, fresh, date_link=False)
+    await repo.add_edges(workspace_id=workspace_id, edges=list(edges.values()))
+    await rebuild(repo, workspace_id, list(set(masters.values())) + moved)
     return masters
 
 
@@ -287,8 +362,8 @@ def named_spec() -> ResolutionSpec:
 def spec_for(specs: dict, node) -> Optional[ResolutionSpec]:
     spec = specs.get(node.type)
     if spec is not None and spec.active:
-        return spec
-    return named_spec() if named(node) else None
+        return effective(spec)
+    return effective(named_spec()) if named(node) else None
 
 
 async def reconcile(workspace_id, nodes, *, store=None, source_id=None, specs: Optional[dict] = None) -> dict:
@@ -316,7 +391,7 @@ async def reconcile(workspace_id, nodes, *, store=None, source_id=None, specs: O
         existing = await store.lookup(workspace_id, node_type, keys, exclude=mine) if keys else {}
         pool = {}
         if spec.scorer == "similar":
-            blocks = {b for b in (records.block_of(n, spec) for n in nodes_) if b}
+            blocks = {b for n in nodes_ for b in records.blocks_of(n, spec)}
             pool = await store.candidates(workspace_id, node_type, blocks, exclude=mine) if blocks else {}
         held = set(existing.values()) | {i for ids in pool.values() for i in ids}
         known = await store.nodes(workspace_id, held)
@@ -327,9 +402,14 @@ async def reconcile(workspace_id, nodes, *, store=None, source_id=None, specs: O
             existing = {k: v for k, v in existing.items() if v not in gone}
             pool = {b: [i for i in ids if i not in gone] for b, ids in pool.items()}
             await store.forget(workspace_id, node_type, gone)
-        plan = records.decide(workspace_id, source_id, node_type, spec, nodes_, existing, known, pool)
+        apart_of = getattr(store, "apart", None)
+        apart = await apart_of(workspace_id, node_type, list(mine | held)) if apart_of else set()
+        plan = records.decide(workspace_id, source_id, node_type, spec, nodes_, existing, known, pool, apart)
         await store.apply(workspace_id, node_type, plan, {**known, **{n.id: n for n in nodes_}})
         out[node_type] = plan.summary()
+        if getattr(store, "overflow", 0):
+            out[node_type]["block_overflow"] = store.overflow
+            store.overflow = 0
     return out
 
 
@@ -420,12 +500,26 @@ async def link_existing(workspace_id, type_names, store, page: int = 500) -> int
     return made
 
 
+async def _drop_forgotten(workspace_id, nodes) -> list:
+    """Named records this asset made for a name someone forgot: removed before they are resolved."""
+    try:
+        from opencortyx.knowledge.forget import drop_tombstoned_names
+        return await drop_tombstoned_names(workspace_id, nodes)
+    except Exception as e:                                    # noqa: BLE001 - logged; the run goes on
+        log.warning("resolution.forgotten_check_failed", error=str(e)[:200])
+        return []
+
+
 async def resolve_asset(workspace_id, source_id, *, store=None) -> dict:
     workspace_id, source_id = uuid.UUID(str(workspace_id)), uuid.UUID(str(source_id))
     store = store or Store()
     out: dict = {"types": {}}
     specs = await store.specs(workspace_id)
     nodes_of_asset = await store.asset_nodes(workspace_id, source_id)
+    dropped = await _drop_forgotten(workspace_id, nodes_of_asset)
+    if dropped:
+        nodes_of_asset = [n for n in nodes_of_asset if n.id not in set(dropped)]
+        out["forgotten_names_dropped"] = len(dropped)
     out["types"] = await reconcile(workspace_id, nodes_of_asset, store=store, source_id=source_id, specs=specs)
     out["links"] = await link_references(workspace_id, source_id, specs, nodes_of_asset, store)
     out["statements"] = await store.statements(workspace_id, source_id)

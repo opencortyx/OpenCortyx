@@ -14,10 +14,9 @@ const when = <T,>(simple: T, full: T): T => (FULL_UI ? full : simple);
 /** Sidebar entries reached from elsewhere instead (Settings, Review, Add data), not from the sidebar. */
 export const HIDDEN_NAV: ReadonlySet<string> = new Set(when([
   "/dashboard/curate",          // Review > Curation
-  "/dashboard/schema",          // Review > Types
+  "/dashboard/schema",          // Mapper (kinds of thing in files, and found by extractors)
   "/dashboard/quarantine",      // Review > Not read
   "/dashboard/eval",            // Settings > Quality checks
-  "/dashboard/mapper",          // Customize
   "/dashboard/custom-assets",   // Customize
   "/dashboard/pipelines",       // Customize
   "/dashboard/ingest",          // Customize, and Connections > Scheduled syncs
@@ -25,6 +24,8 @@ export const HIDDEN_NAV: ReadonlySet<string> = new Set(when([
   "/dashboard/users",           // Settings > Users & access
   "/dashboard/models",          // Settings > Models
   "/dashboard/health",          // Settings > System health
+  "/dashboard/cost",            // Settings > Cost & usage
+  "/dashboard/forget",          // Settings > Data deletion
 ], ["/dashboard/customize"]));         // full UI: each page is an entry of its own
 
 /** Sidebar names people use, instead of ours. */
@@ -44,13 +45,17 @@ export const HIDDEN_SETTINGS_TABS: ReadonlySet<string> = new Set(when(
 
 /** The General settings a person can judge; every other knob keeps its default (or `.env`). */
 export const GENERAL_SETTINGS: ReadonlySet<string> | null = when(
-  new Set(["workspace_name", "grounding_mode", "ai_overviews", "allow_local_files"]), null);
+  new Set(["workspace_name", "grounding_mode", "citation_policy", "citation_check", "ai_overviews", "allow_local_files"]), null);
 
 /** The four General settings, in plain words. `grounding_mode` is a switch: strict = the LLM check. */
 export const SETTING_COPY: Readonly<Record<string, { label: string; help: string }>> = when<Record<string, { label: string; help: string }>>({
   workspace_name: { label: "Workspace name", help: "Your name, or your team's. It names the top of the graph." },
   grounding_mode: { label: "Check answers strictly",
                     help: "Every sentence of an answer is checked against its sources by the model. Slower; needs a capable model." },
+  citation_policy: { label: "Unsupported sentences",
+                     help: "A sentence of an answer that none of its sources supports: 'flag' shows it marked, 'strict' removes it. Answers to API keys and agents are always strict unless changed in the full settings." },
+  citation_check: { label: "Use the citation-check model",
+                    help: "Check answer sentences with the Citation check model (Models page), which catches negation. Does nothing until one is added there." },
   ai_overviews: { label: "AI summaries of files", help: "A short summary of each file when it is added. Off saves model calls." },
   allow_local_files: { label: "Read folders on this server", help: "Let connections read files from a folder on the server. Uploads do not need it." },
 }, {});

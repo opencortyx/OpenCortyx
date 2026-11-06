@@ -41,7 +41,7 @@ class NoModelConfigured(RuntimeError):
 
 #: The roles something actually resolves a model for. A role outside this list would be a setting
 #: nothing reads — registering a "vision" or "ocr" model changed nothing — so it is refused.
-MODEL_ROLES = ("generation", "embedding", "rerank", "extraction", "utility")
+MODEL_ROLES = ("generation", "embedding", "rerank", "extraction", "utility", "verification")
 
 #: Roles served by the workspace's generation model when they have no row of their own.
 _SHARES_GENERATION = ("extraction", "utility")

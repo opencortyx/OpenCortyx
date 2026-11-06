@@ -1,8 +1,11 @@
 """Grounded answer generation (optional, on top of /context).
 
-Generates an answer constrained to retrieved context, then VERIFIES every sentence is
-grounded (trust.verify_grounding). Unsupported sentences are flagged — this is the
-no-hallucination guarantee in action. Abstains when there is no grounded context.
+Generates an answer constrained to retrieved context, then VERIFIES every sentence against the
+sources it cites (trust.verify_citations): a citation must support the sentence it is attached to,
+not merely exist. Unsupported sentences are flagged, or removed under the strict policy
+(`citation_policy`; API keys and agents default to strict). Abstains when there is no grounded
+context, and "I don't know" stays a first-class answer. Sources whose file was deleted (`__stale`)
+never reach the model.
 """
 import re
 
@@ -15,6 +18,7 @@ from opencortyx.core.inference.registry import NoModelConfigured, resolve_model
 from opencortyx.capabilities.modules.trust import score_relevance
 from opencortyx.domain.control import ExtractionTemplate
 from opencortyx.core.db import V2Session
+from opencortyx.core.inference import usage
 
 _ABSTAIN = "I don't have enough grounded information in the knowledge base to answer that."
 
@@ -107,6 +111,55 @@ def _grounding_blocks(pkg: dict) -> list:
     if blocks:
         return blocks
     return [b for b in (pkg.get("context") or "").split("\n\n") if b.strip()]
+
+
+def _texts_by_node(pkg: dict) -> dict:
+    """{node_id: the full text the model was shown for it}, from the context lines."""
+    import json
+    out = {}
+    for line in (pkg.get("context") or "").split("\n"):
+        try:
+            obj = json.loads(line) if line.strip() else None
+        except (ValueError, AttributeError):
+            obj = None
+        if isinstance(obj, dict) and obj.get("node_id") and obj.get("text"):
+            out[str(obj["node_id"])] = str(obj["text"])
+    return out
+
+
+async def _drop_stale(workspace_id, pkg: dict) -> dict:
+    """Remove context and citations whose node has no source left (`__stale`: its file was deleted).
+    A citation must lead to a source; one that leads nowhere is not shown or answered from."""
+    import json
+    cites = pkg.get("citations") or []
+    ids = [c.get("node_id") for c in cites if c.get("node_id") and c.get("type") != "TableResult"]
+    if not ids:
+        return pkg
+    try:
+        import uuid as _uuid
+        from opencortyx.core.substrate import NodeRepo
+        nodes = await NodeRepo().get_many(workspace_id, [_uuid.UUID(str(i)) for i in ids
+                                                         if len(str(i)) == 36])
+    except Exception:                                         # noqa: BLE001 - nothing known, nothing dropped
+        return pkg
+    stale = {str(n.id) for n in nodes if (n.properties or {}).get("__stale")}
+    if not stale:
+        return pkg
+    keep_lines = []
+    for line in (pkg.get("context") or "").split("\n"):
+        try:
+            nid = str(json.loads(line).get("node_id")) if line.strip() else None
+        except (ValueError, AttributeError):
+            nid = None
+        if nid not in stale:
+            keep_lines.append(line)
+    out = {**pkg, "context": "\n".join(keep_lines),
+           "citations": [c for c in cites if str(c.get("node_id")) not in stale],
+           "links": [l for l in (pkg.get("links") or []) if not (set(map(str, l)) & stale)]}
+    if not out["citations"]:
+        out.update({"abstained": True, "reason": "every source found was deleted",
+                    "unknown_reason": "every source found has been deleted"})
+    return out
 
 
 def _toks(s: str) -> int:
@@ -221,13 +274,17 @@ _BRACKET = re.compile(r"\[([^\[\]\n]{1,400})\]")
 _NODE_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
 
 
-def _mark_support(answer: str, citations: list) -> list:
+def _mark_support(answer: str, citations: list, report: dict | None = None) -> list:
     """The citations, each flagged `supports` when the answer rests on it (`trust.supporting_citations`).
 
     Every retrieved block stays in the list — the reader can still open what was considered — but
     the ones the answer actually used are marked, so the chat shows those as its sources and the
     rest as other evidence. When nothing can be attributed, all are marked: better to show every
     candidate than to present an answer as if it had no source."""
+    verified = {n for sent in ((report or {}).get("sentences") or []) for n in (sent.get("supported_by") or [])}
+    if verified:
+        # What the per-sentence check found supporting is what the reader is shown as sources.
+        return [{**c, "supports": (i + 1) in verified} for i, c in enumerate(citations or [])]
     cited = {str(citations[int(n) - 1].get("node_id")) for n in re.findall(r"\[(\d+)\]", answer or "")
              if 0 < int(n) <= len(citations or [])}
     support = trust.supporting_citations(answer, citations, cited)
@@ -299,7 +356,8 @@ async def _run_pipeline(query: str, ctx: RetrieveContext, stream: bool):
         {"type": "done",  ...}   once, carrying the full answer payload
     """
     from opencortyx.retrieval.adapter import build_context_v2
-    pkg = await build_context_v2(query, ctx)
+    usage.bind(ctx.workspace_id, "answer")
+    pkg = await _drop_stale(ctx.workspace_id, await build_context_v2(query, ctx))
     spend = {"in": 0, "out": 0}
     base = {"retrievers": pkg.get("retrievers"), "trace": pkg.get("citations", []),
             "stage_trace": pkg.get("stage_trace", []),
@@ -344,7 +402,8 @@ async def _run_pipeline(query: str, ctx: RetrieveContext, stream: bool):
         _crag = {"trust_score": round(float(pkg.get("confidence") or 0.0), 3), "tokens_in": 0, "tokens_out": 0,
                  "eval_context": context[:6000]}
     else:
-        _crag = await score_relevance(ctx.workspace_id, query, context, util_spec=util_spec)
+        with usage.purpose("answer.relevance"):
+            _crag = await score_relevance(ctx.workspace_id, query, context, util_spec=util_spec)
     trust_score = _crag["trust_score"]
     spend["in"] += _crag["tokens_in"]
     spend["out"] += _crag["tokens_out"]
@@ -432,31 +491,49 @@ async def _run_pipeline(query: str, ctx: RetrieveContext, stream: bool):
                        crag={"verdict": "no_answer", "score": trust_score, "threshold": threshold})
         return
 
-    if rc.grounding_mode() == "entailment":
-        grounded, unsupported = await trust.verify_grounding_judge(query, ans, context,
-                                                                   model_spec=util_spec)
-    else:
-        grounded, unsupported = await trust.verify_grounding(
-            ans, _grounding_blocks(pkg), threshold=rc.grounding_threshold())
-
-    if rc.grounding_mode() == "entailment" and not grounded:
-        yield _abstain("Answer was not entailed by the retrieved context (grounding gate).",
-                       trust_score=trust_score)
-        return
-    if rc.grounding_mode() != "entailment" and _fully_ungrounded(ans, unsupported):
-        yield _abstain("No sentence in the answer was grounded in the retrieved context.",
-                       trust_score=trust_score)
-        return
-
     numbered = _number_citations(ans, pkg["citations"])
-    if pkg.get("data") and grounded and not unsupported and rc.answer_write_back():
+    from opencortyx.core.inference import nli as _nli
+    report = await trust.verify_citations(numbered, pkg["citations"], _texts_by_node(pkg), pkg.get("links") or (),
+                                          threshold=rc.grounding_threshold(),
+                                          nli_model=await _nli.model_for(ctx.workspace_id))
+    grounded, unsupported = report["supported"], report["unsupported"]
+    if rc.grounding_mode() == "entailment":
+        with usage.purpose("answer.grounding"):
+            judged_ok, judged_bad = await trust.verify_grounding_judge(query, ans, context, model_spec=util_spec)
+        if not judged_ok:
+            yield _abstain("Answer was not entailed by the retrieved context (grounding gate).",
+                           trust_score=trust_score, verification=report)
+            return
+    if report["judged"] and len(unsupported) >= report["judged"]:
+        yield _abstain("No sentence in the answer was supported by its sources.",
+                       trust_score=trust_score, verification=report)
+        return
+
+    policy = getattr(ctx, "citation_policy", None) or rc.citation_policy()
+    caveats = list(pkg.get("caveats", []))
+    removed = []
+    if policy == "strict" and unsupported:
+        removed = list(unsupported)
+        numbered = trust.strict_answer(numbered, report)
+        if not numbered.strip():
+            yield _abstain("No sentence in the answer was supported by its sources.",
+                           trust_score=trust_score, verification=report)
+            return
+        caveats.append(f"{len(removed)} sentence(s) no source supports were removed.")
+        unsupported = []
+        grounded = True
+    if pkg.get("data") and grounded and not unsupported and not removed and rc.answer_write_back():
         from opencortyx.knowledge.writeback import write_back
         base["written_back"] = await write_back(ctx.workspace_id, query, ans, pkg["data"])
     yield {"type": "done", "answer": numbered,
            "abstained": False, "grounded": grounded,
            "outcome": "PARTIAL" if unsupported else "ANSWERED", "unknown_reason": None,
-           "unsupported_sentences": unsupported, "citations": _mark_support(numbered, pkg["citations"]),
-           "caveats": pkg.get("caveats", []), "confidence": pkg["confidence"],
+           "unsupported_sentences": unsupported, "removed_sentences": removed,
+           "citation_policy": policy,
+           "verification": {k: report[k] for k in ("sentences", "citation_precision", "citations_checked",
+                                                     "citations_supporting", "checked_with")},
+           "citations": _mark_support(numbered, pkg["citations"], report),
+           "caveats": caveats, "confidence": pkg["confidence"],
            "trust_score": trust_score,
            "crag": {"verdict": "accepted", "score": trust_score, "threshold": threshold},
            "tokens_used": pkg.get("tokens_used"), "tokens_prompt": spend["in"],

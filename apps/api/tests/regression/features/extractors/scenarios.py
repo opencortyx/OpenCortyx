@@ -45,7 +45,23 @@ INVALID = {
     "no_mechanism": ({"name": "n"}, 422),
     "name_missing": ({"mechanism": {"ref": "seed.literal", "items": []}}, 422),
     "mechanism_not_object": ({"name": "m", "mechanism": "regex"}, 422),
+    "regex_without_pattern": ({"name": "r", "mechanism": {"ref": "unstructured.regex", "pattern": " "}}, 422),
+    "word_list_without_words": ({"name": "d", "mechanism": {"ref": "unstructured.dictionary", "terms": []}}, 422),
+    # the Extractors form's model method (`_model_records`)
+    "model_creates_nothing": ({"name": "m", "mechanism": {"ref": "unstructured.ner", "kinds": []}}, 422),
+    "model_kind_name_with_space": ({"name": "m", "mechanism": {"ref": "unstructured.ner", "kinds": [{"type": "Two words"}]}}, 422),
+    "model_two_kinds_the_model_names": ({"name": "m", "mechanism": {"ref": "unstructured.ner", "kinds": [{"type": ""}, {"type": ""}]}}, 422),
+    "model_reserved_field": ({"name": "m", "mechanism": {"ref": "unstructured.ner", "kinds": [{"type": "A", "fields": [{"key": "name"}]}]}}, 422),
+    "model_link_to_unknown_kind": ({"name": "m", "mechanism": {"ref": "unstructured.ner", "kinds": [{"type": "A"}],
+                                                                "links": [{"from": "A", "to": "B"}]}}, 422),
+    "model_always_link_without_name": ({"name": "m", "mechanism": {"ref": "unstructured.ner", "kinds": [{"type": "A"}],
+                                                                    "pairs": [{"from": "A", "to": "A"}]}}, 422),
+    "model_unknown_vocabulary": ({"name": "m", "mechanism": {"ref": "unstructured.ner", "kinds": [{"type": "A"}], "vocabulary": "any"}}, 422),
 }
+
+#: Saving by name without replacing another extractor: a new one, a rename, a built-in, a missing file.
+NAMES = ("new name is taken", "rename keeps one extractor", "rename onto a taken name", "rename a built-in",
+         "edit an id that is not this workspace's", "try it on a file that does not exist")
 STATUSES = ("active", "disabled", "draft", "bogus-status")
 VALID_STATUSES = ("active", "disabled")        # the API accepts exactly these
 PREVIEW_MAX_NODES = 12                         # templates.preview_template(max_nodes=12): a sample, by design
@@ -97,6 +113,9 @@ def build() -> list[Scenario]:
         mech = {"ref": "seed.literal", "items": [{"name": f"seed-{i}"} for i in range(k)]}
         add("preview seed extractor", f"{k} literal items", "seed.literal", f"{k} nodes", "integration",
             {"mechanism": mech, "emit": emit("name"), "text": "any"})
+    for case in NAMES:
+        add("extractor names", case, "form save", "no extractor replaced, renamed into another, or leaked", "negative",
+            {"case": case})
     for iname, (body, status) in INVALID.items():
         add("save extractor", iname, "invalid definition", f"refused with {status}", "negative",
             {"body": body, "status": status})

@@ -20,6 +20,7 @@ async def list_apikeys(admin: CurrentUser = Depends(require_admin)):
             ApiKey.workspace_id == admin.workspace_id, ApiKey.revoked_at.is_(None))
             .order_by(ApiKey.created_at.desc()))).scalars().all()
     return {"items": [{"id": str(k.id), "app": k.app, "role": (k.scopes or {}).get("role", "editor"),
+                       "groups": (k.scopes or {}).get("groups") or [],
                        "created_at": k.created_at.isoformat() if k.created_at else None} for k in rows]}
 
 
@@ -34,14 +35,14 @@ async def create_apikey(spec: ApiKeyCreate, admin: CurrentUser = Depends(require
     async with V2Session() as db:
         k = ApiKey(workspace_id=admin.workspace_id, app=(spec.app or "claude").strip(),
                    hash=_hashlib.sha256(raw.encode()).hexdigest(),
-                   scopes={"role": role, "permissions": perms},
+                   scopes={"role": role, "permissions": perms, "groups": spec.groups},
                    # an agent's sessions are attributed to the person who issued its key. A key
                    # issued by another (admin) key has no person behind it, so it records none.
                    created_by=admin.user_id if admin.actor_type == "user" else None)
         db.add(k)
         await db.commit()
         await db.refresh(k)
-    return {"id": str(k.id), "app": k.app, "role": role, "key": raw}   # raw key shown ONCE
+    return {"id": str(k.id), "app": k.app, "role": role, "groups": spec.groups, "key": raw}   # raw key shown ONCE
 
 
 @router.delete("/apikeys/{key_id}")

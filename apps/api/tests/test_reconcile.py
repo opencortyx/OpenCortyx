@@ -51,7 +51,7 @@ def test_a_named_thing_without_a_rule_of_its_own_is_matched_by_its_name():
 
 def test_a_type_with_identity_fields_follows_them_and_a_type_with_neither_is_never_matched():
     rule = ResolutionSpec(identify_by=("customer_id",))
-    assert engine.spec_for({"Customer": rule}, _n("Alice", "Customer", named=False)) is rule
+    assert engine.spec_for({"Customer": rule}, _n("Alice", "Customer", named=False)).identify_by == ("customer_id",)
     assert engine.spec_for({}, _n("a log line", "LogLine", named=False)) is None, "each one unique by default"
 
 
@@ -86,7 +86,10 @@ class _Store:
         self.applied.append((t, plan))
 
 
-def _reconcile(new, old=()):
+def _reconcile(new, old=(), monkeypatch=None, strict=True):
+    if monkeypatch is not None and not strict:
+        monkeypatch.setattr("opencortyx.core.config.runtime.resolution_corroborate", lambda: False)
+        monkeypatch.setattr("opencortyx.core.config.runtime.resolution_conflict_review", lambda: False)
     store = _Store(old)
     for n in old:
         store.index[(n.type, records.key_of(n, engine.named_spec()))] = n.id
@@ -101,19 +104,29 @@ def test_the_same_name_from_two_sources_is_one_thing():
     assert plan.same == [(new.id, old.id)] and out["Work_of_art"]["same"] == 1
 
 
-def test_a_near_name_is_joined_and_a_far_one_left_alone():
+def test_a_near_name_is_joined_and_a_far_one_left_alone(monkeypatch):
     old = _n("Kristin Hannah")
-    _, store = _reconcile([_n("Kristen Hannah"), _n("Kristina Hansen")], [old])
+    _, store = _reconcile([_n("Kristen Hannah"), _n("Kristina Hansen")], [old], monkeypatch, strict=False)
     (_, plan), = store.applied
     assert len(plan.same) == 1 and plan.same[0][1] == old.id, "Kristen joins; Kristina Hansen is someone else"
 
 
-def test_a_near_name_joined_is_not_also_a_disagreement_about_the_name():
+def test_by_default_a_near_name_alone_waits_for_a_person():
+    """A similar name with nothing else agreeing is a possible duplicate, not a join: "Kristen" and
+    "Kristin" Hannah may be two people."""
+    old = _n("Kristin Hannah")
+    _, store = _reconcile([_n("Kristen Hannah")], [old])
+    (_, plan), = store.applied
+    (d,) = plan.decisions
+    assert plan.same == [] and d["needs_review"] and d["evidence"]["reasons"] == ["no second field agrees"]
+
+
+def test_a_near_name_joined_is_not_also_a_disagreement_about_the_name(monkeypatch):
     """"hostel" joined "Hostels" because the names are near: the name is not a conflict for Review.
     Another attribute that differs still is."""
     old = _n("Hostels", "Place", {"name": "Hostels", "country": "Japan"})
     new = _n("hostel", "Place", {"name": "hostel", "country": "Peru"})
-    _, store = _reconcile([new], [old])
+    _, store = _reconcile([new], [old], monkeypatch, strict=False)
     (_, plan), = store.applied
     flagged = [(d["attribute"], d["needs_review"]) for d in plan.decisions if d["relation"] == records.CONTRADICTS]
     assert plan.same == [(new.id, old.id)] and flagged == [("country", True)]
@@ -134,19 +147,7 @@ def test_masters_and_types_without_a_rule_are_not_reconciled():
 
 # ── clusters: a master with members, never destructive ───────────────────────────────────────────
 
-class _Repo:
-    def __init__(self, nodes):
-        self.nodes = {n.id: n for n in nodes}
-        self.upserts, self.edges = [], []
-
-    async def get(self, ws, i):
-        return self.nodes.get(i)
-
-    async def upsert_many(self, ws, specs, date_link=True):
-        self.upserts += specs
-
-    async def add_edges(self, *, workspace_id, edges, **kw):
-        self.edges += edges
+from tests.fakes_graph import FakeRepo as _Repo
 
 
 def test_join_makes_one_master_with_every_member_and_leaves_the_members_as_they_were(monkeypatch):
@@ -156,10 +157,11 @@ def test_join_makes_one_master_with_every_member_and_leaves_the_members_as_they_
     masters = asyncio.run(engine.join(repo, WS, [(second.id, first.id), (third.id, first.id)]))
     master = masters[first.id]
     assert master == engine.master_id(WS, first.id), "one master per cluster, the same id every time"
-    (spec,) = repo.upserts
-    assert spec["type"] == "Org" and spec["label"] == "Acme" and spec["properties"]["country"] == "UK"
-    assert spec["properties"]["__master"] is True
-    assert {(e["source_id"], e["target_id"], e["type"]) for e in repo.edges} == {
+    m = repo.nodes[master]
+    assert m.type == "Org" and m.label == "Acme" and m.properties["country"] == "UK"
+    assert m.properties["__master"] is True and m.properties["__members"] == 3
+    assert m.properties["__prov"]["country"] == [str(first.id)], "the value says which member states it"
+    assert {(e["source_id"], e["target_id"], e["type"]) for e in repo.edge_map.values()} == {
         (first.id, master, "MEMBER_OF"), (second.id, master, "MEMBER_OF"), (third.id, master, "MEMBER_OF")}
     assert first.properties == {"country": "UK", "__identity": "entity"}, "a member is never rewritten"
 
@@ -169,4 +171,4 @@ def test_a_person_s_decision_joins_the_same_way(monkeypatch):
     a, b = _n("Kristen Hannah"), _n("Kristin Hannah")
     repo = _Repo([a, b])
     masters = asyncio.run(engine.join(repo, WS, [(a.id, b.id)], by="person:1"))
-    assert all(e["properties"]["__by"] == "person:1" for e in repo.edges) and masters[b.id]
+    assert all(e["properties"]["__by"] == "person:1" for e in repo.edge_map.values()) and masters[b.id]

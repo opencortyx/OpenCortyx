@@ -29,6 +29,7 @@ from opencortyx.core.db import V2Session
 from opencortyx.core.substrate import NodeRepo
 from opencortyx.core.substrate import document as _node_document
 from opencortyx.core.inference.llm import complete
+from opencortyx.core.inference.usage import BudgetExceeded
 from opencortyx.core.inference.registry import NoModelConfigured
 from opencortyx.stores.graph import NodeQuery
 from opencortyx.stores.graph.query import normalize_name
@@ -140,15 +141,301 @@ def _dictionary_records(terms, text: str) -> list:
     return out
 
 
-#: The model's instructions for named things and how each sentence connects them.
-_ENTITIES_PROMPT = (
-    "Read the text. List every named thing in it - people, organisations, places, products, works, "
-    "events - with its type, one singular noun (Person, Place, Book). Numbers, dates and amounts are "
-    "not things. List every relationship a sentence states between two of them, named by its verb "
-    "(MET, JOINED, WORKS_AT, LIVES_IN). Use the names exactly as written. Return ONLY JSON: "
-    '{"entities":[{"name":"...","type":"Person"}],'
-    '"relationships":[{"subject":"...","relation":"...","object":"..."}]}'
-    "\n\nTEXT:\n")
+# ── The model method (`unstructured.ner`): what the extractor form asks the model for ──────────────
+#
+# The Extractors form saves, under `mechanism`:
+#   kinds        [{"type": "Contract" | "" (the model names it), "ask": str,
+#                  "fields": [{"key", "ask"}], "fields_by_model": bool, "fields_ask": str}]
+#   links        [{"from": end, "to": end, "relation": "HAS_PARTY" | "" (the model names it), "ask": str}]
+#   pairs        [{"from": end, "to": end, "relation": "HAS_PARTY"}]   linked whenever both are found
+#   input_fields [{"key", "ask"}]                                       written onto what was read
+#   vocabulary   "known" (default) | "open" | "only"
+# An `end` is a kind's type, "*" (anything it creates) or "~" (a thing whose kind the model names).
+# Every `ask` is the person's instruction for that slot, put into the prompt as written. Saved without
+# `kinds` - the extractors made before the form - it is one kind the model names, linked as the text says.
+
+#: Keys a thing's record already uses for itself and its links, so no field may take them.
+RESERVED_FIELDS = frozenset({"name", "type", "relation", "object", "object_type", "records", "links"})
+_UNCONFIGURED = {"kinds": [{"type": ""}], "links": [{"from": "*", "to": "*", "relation": ""}]}
+_KNOWN_RELATIONS: dict = {}
+
+
+def _snake(s) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(s or "").lower()).strip("_")
+
+
+def _relation_name(s) -> str:
+    """A relationship's name as an edge type: "signed for" and "Signed-For" are SIGNED_FOR."""
+    return re.sub(r"[^A-Za-z0-9]+", "_", str(s or "")).strip("_").upper()
+
+
+def _model_config(mech: dict) -> dict:
+    return mech if mech.get("kinds") else {**mech, **_UNCONFIGURED}
+
+
+def _fixed_kinds(mech: dict) -> dict:
+    """{folded type: kind} of the kinds a person named."""
+    return {_fold(str(k["type"])): k for k in (mech.get("kinds") or [])
+            if isinstance(k, dict) and str(k.get("type") or "").strip()}
+
+
+def _fits(end, type_name: str, fixed: dict) -> bool:
+    """Whether a thing of `type_name` can be this end of a link."""
+    if end in (None, "", "*"):
+        return True
+    if end == "~":
+        return _fold(type_name) not in fixed
+    return _fold(str(end)) == _fold(type_name)
+
+
+async def _known_relations(workspace_id) -> list:
+    """The relationship names the workspace already has (its ontology's edge types). Cached a minute."""
+    if workspace_id is None:
+        return []
+    at, names = _KNOWN_RELATIONS.get(str(workspace_id), (0.0, None))
+    if names is None or time.monotonic() - at > 60:
+        try:
+            from opencortyx.domain.ontology import visible_types
+            async with V2Session() as db:
+                rows = await visible_types(db, workspace_id)
+            names = sorted({r.name for r in rows if r.kind == "edge" and r.status != "disabled"})
+        except Exception:                                      # noqa: BLE001
+            names = []
+        _KNOWN_RELATIONS[str(workspace_id)] = (time.monotonic(), names)
+    return names
+
+
+def _end_text(end) -> str:
+    return {"*": "any thing", "~": "a thing whose type you chose", "": "any thing", None: "any thing"}.get(
+        end, f'a "{end}"')
+
+
+def _fields_text(kind: dict) -> str:
+    if kind.get("fields_by_model"):
+        ask = str(kind.get("fields_ask") or "").strip()
+        return (" Fields: the facts the text states about it" + (f" - {ask}" if ask else "")
+                + "; name each field in snake_case.")
+    fields = [f for f in (kind.get("fields") or []) if isinstance(f, dict) and f.get("key")]
+    if not fields:
+        return " No fields."
+    return " Fields: " + "; ".join(f'"{f["key"]}" - {str(f.get("ask") or "").strip() or f["key"]}'
+                                   for f in fields) + "."
+
+
+def _model_prompt(cfg: dict, known_types: dict, known_relations: list) -> str:
+    """The one prompt the model method sends, built from what the form says. Ends with "TEXT:\\n"."""
+    kinds = [k for k in cfg.get("kinds") or [] if isinstance(k, dict)]
+    fixed = [k for k in kinds if str(k.get("type") or "").strip()]
+    named_by_model = [k for k in kinds if not str(k.get("type") or "").strip()]
+    links = [x for x in cfg.get("links") or [] if isinstance(x, dict)]
+    inputs = [f for f in cfg.get("input_fields") or [] if isinstance(f, dict) and f.get("key")]
+    vocabulary = cfg.get("vocabulary") or "known"
+    # flat on purpose: a small model nesting a "fields" object inside each thing drops a brace often
+    out = ["Read the TEXT and return what it states, as JSON only, in this shape:",
+           '{"things": [{"name": "...", "type": "...", "<field>": "<value>"}], '
+           '"links": [{"subject": "<a thing\'s name>", "relation": "...", "object": "<a thing\'s name>"}], '
+           '"input": {"<field>": "<value>"}}', "",
+           "THINGS - each one by its own name as the text writes it (MSA-2026, Acme Ltd), never by its type; "
+           "list each once:"]
+    for k in fixed:
+        ask = str(k.get("ask") or "").strip()
+        out.append(f'- type "{k["type"]}": {ask or "each one the text names"}.' + _fields_text(k))
+    for k in named_by_model:
+        ask = str(k.get("ask") or "").strip() or "people, organisations, places, products, works, events"
+        out.append(f"- other named things - {ask}. Give each a type: one singular noun you choose "
+                   "(Person, Place, Book)." + _fields_text(k))
+    out.append("Numbers, dates, amounts and durations are values, not things: they belong in fields.")
+    if links:
+        out += ["", "LINKS - only between things listed above, as the text states them:"]
+        for x in links:
+            ask = str(x.get("ask") or "").strip()
+            rel = _relation_name(x.get("relation"))
+            head = (f'- "{rel}"' if rel else "- a relationship you name by its verb (WORKS_AT, SIGNED_FOR),")
+            out.append(f"{head} from {_end_text(x.get('from'))} to {_end_text(x.get('to'))}"
+                       + (f": {ask}" if ask else "."))
+    else:
+        out += ["", 'Return "links": [].']
+    if inputs:
+        out += ["", "INPUT - about the text as a whole:"]
+        out += [f'- "{f["key"]}": {str(f.get("ask") or "").strip() or f["key"]}' for f in inputs]
+    else:
+        out.append('Return "input": {}.')
+    names_types = bool(named_by_model)
+    names_relations = any(not _relation_name(x.get("relation")) for x in links)
+    if vocabulary == "only":
+        types = sorted({k["type"] for k in fixed} | {t for _, t in known_types.values()})
+        rels = sorted({_relation_name(x.get("relation")) for x in links if x.get("relation")} | set(known_relations))
+        if names_types:
+            out.append("Use only these types: " + (", ".join(types) or "none") + ".")
+        if names_relations:
+            out.append("Use only these relationships: " + (", ".join(rels) or "none") + ".")
+    elif vocabulary == "known":
+        if names_types:
+            out.append(_types_prompt(known_types).strip())
+        if names_relations and known_relations:
+            out.append("Relationships already used here: " + ", ".join(known_relations[:_TYPES_SHOWN])
+                       + ". Use one of them when it fits; otherwise name a new one.")
+    return "\n".join(x for x in out if x is not None) + "\n\nTEXT:\n"
+
+
+def _balanced(raw) -> str:
+    """A model's JSON with its brackets put right: before a closer, the ones it skipped; a closer nothing
+    opened, dropped; whatever is still open, closed at the end. Text inside strings is left alone.
+    Small models drop a brace often enough that one missing `}` must not lose a whole answer."""
+    out, stack, in_str, esc = [], [], False, False
+    for ch in str(raw or ""):
+        if in_str:
+            out.append(ch)
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if ch not in stack:
+                continue
+            while stack[-1] != ch:
+                out.append(stack.pop())
+            stack.pop()
+        out.append(ch)
+    if in_str:
+        out.append('"')
+    return "".join(out + stack[::-1])
+
+
+def _value(v):
+    """A field's value as stored: scalars as given, a list of scalars joined; anything else none."""
+    if isinstance(v, (list, tuple)):
+        parts = [str(x).strip() for x in v if isinstance(x, (str, int, float, bool)) and str(x).strip()]
+        return ", ".join(parts) or None
+    if isinstance(v, bool) or isinstance(v, (int, float)):
+        return v
+    if isinstance(v, str) and v.strip() and not _is_placeholder(v):
+        return v.strip()
+    return None
+
+
+def _thing_fields(item: dict, kind: dict) -> dict:
+    raw = item.get("fields") if isinstance(item.get("fields"), dict) else {
+        k: v for k, v in item.items() if k not in ("name", "type", "fields")}
+    if kind.get("fields_by_model"):
+        pairs = ((_snake(k), v) for k, v in raw.items())
+    else:
+        pairs = ((f["key"], raw.get(f["key"])) for f in (kind.get("fields") or [])
+                 if isinstance(f, dict) and f.get("key"))
+    out = {}
+    for k, v in pairs:
+        if k and k not in RESERVED_FIELDS and not k.startswith("__") and _value(v) is not None:
+            out[k] = _value(v)
+    return out
+
+
+async def _model_records(text: str, mech: dict | None = None, model_spec: dict | None = None,
+                         workspace_id=None) -> dict:
+    """What the model method finds in `text`: {"records": things, "links": links, <input field>: value}.
+
+    A thing is {"name", "type", **fields}; a link {"name", "type", "relation", "object", "object_type"}
+    - its subject's name and type, so an edge resolves both ends by name. Only what the form allows
+    survives: a type the person named (any spelling of it), or - when a kind is the model's to name -
+    the model's type (spelled as the workspace already spells it); a link only between things found,
+    with a relationship the form names or, where the model names it, one that fits that link's ends."""
+    cfg = _model_config(mech or {})
+    if not str(text or "").strip():
+        return {"records": [], "links": []}
+    kinds = [k for k in cfg.get("kinds") or [] if isinstance(k, dict)]
+    fixed = _fixed_kinds(cfg)
+    open_kind = next((k for k in kinds if not str(k.get("type") or "").strip()), None)
+    vocabulary = cfg.get("vocabulary") or "known"
+    link_specs = [x for x in cfg.get("links") or [] if isinstance(x, dict)]
+    model_relations = any(not _relation_name(x.get("relation")) for x in link_specs)
+    known = await _known_types(workspace_id) if open_kind is not None and vocabulary != "open" else {}
+    known_rels = await _known_relations(workspace_id) if model_relations and vocabulary != "open" else []
+    try:
+        raw = await complete(_model_prompt(cfg, known, known_rels) + (text or "")[:4000],
+                             system="You read text into a knowledge graph. JSON only.", max_tokens=1200,
+                             json_mode=True, temperature=0.0, model_spec=model_spec)
+    except NoModelConfigured:
+        raise                                        # the run must say what to connect, not find nothing
+    except BudgetExceeded:
+        raise
+    except Exception as e:                           # noqa: BLE001 - one input that fails reads as nothing
+        log.warning("extract.model_failed", error=str(e)[:300])
+        return {"records": [], "links": []}
+    parsed = _parse_json(raw)
+    if not isinstance(parsed, dict):
+        parsed = _parse_json(_balanced(raw))
+    parsed = parsed if isinstance(parsed, dict) else {}
+
+    allowed_types = {_fold(k["type"]) for k in fixed.values()} | set(known)
+    records, seen = [], {}
+    for item in parsed.get("things") or parsed.get("entities") or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        kind_said = str(item.get("type") or "").strip()
+        if not name or _is_placeholder(name) or normalize_name(name) in seen:
+            continue
+        if _fold(kind_said) in fixed:
+            kind = fixed[_fold(kind_said)]
+            type_name = kind["type"]
+        elif open_kind is not None:
+            kind = open_kind
+            word = re.sub(r"[^A-Za-z0-9]+", "_", kind_said or "Entity").strip("_") or "Entity"
+            if vocabulary == "only" and _fold(word) not in allowed_types:
+                continue
+            type_name = word if vocabulary == "open" and _fold(word) not in known else _type_named(word, known)
+            type_name = type_name[:1].upper() + type_name[1:]
+        else:
+            continue
+        seen[normalize_name(name)] = (name, type_name)
+        records.append({"name": name, "type": type_name, **_thing_fields(item, kind)})
+
+    allowed_rels = {_relation_name(x.get("relation")) for x in link_specs if x.get("relation")} | set(known_rels)
+    links, done = [], set()
+
+    def add(sub, rel, obj):
+        key = (normalize_name(sub[0]), rel, normalize_name(obj[0]))
+        if key not in done and key[0] != key[2]:
+            done.add(key)
+            links.append({"name": sub[0], "type": sub[1], "relation": rel, "object": obj[0], "object_type": obj[1]})
+
+    for r in parsed.get("links") or parsed.get("relationships") or []:
+        if not isinstance(r, dict):
+            continue
+        sub = seen.get(normalize_name(str(r.get("subject") or "")))
+        obj = seen.get(normalize_name(str(r.get("object") or "")))
+        rel = _relation_name(r.get("relation"))
+        if not (sub and obj and rel):
+            continue
+        ends = [x for x in link_specs if _fits(x.get("from"), sub[1], fixed) and _fits(x.get("to"), obj[1], fixed)]
+        named = next((x for x in ends if _relation_name(x.get("relation")) == rel), None)
+        if named is None and not any(not _relation_name(x.get("relation")) for x in ends):
+            continue                                     # not a link this extractor asks for
+        if named is None and vocabulary == "only" and rel not in allowed_rels:
+            continue
+        add(sub, rel, obj)
+    for p in cfg.get("pairs") or []:                     # linked whenever both are found
+        rel = _relation_name((p or {}).get("relation"))
+        if not rel:
+            continue
+        for a in records:
+            for b in records:
+                if a is not b and _fits(p.get("from"), a["type"], fixed) and _fits(p.get("to"), b["type"], fixed):
+                    add((a["name"], a["type"]), rel, (b["name"], b["type"]))
+
+    out: dict = {"records": records, "links": links}
+    said = parsed.get("input") if isinstance(parsed.get("input"), dict) else {}
+    for f in cfg.get("input_fields") or []:
+        key = (f or {}).get("key")
+        if key and key not in out and _value(said.get(key)) is not None:
+            out[key] = _value(said.get(key))
+    return out
 
 
 #: The named-thing types a workspace has: (read at, {folded spelling: (nodes, type)}). Re-read a minute on.
@@ -202,46 +489,6 @@ def _type_named(kind: str, known: dict) -> str:
     kind = kind[:1].upper() + kind[1:]
     known[_fold(kind)] = (0, kind)
     return kind
-
-
-async def _ner_records(text: str, model_spec: dict | None = None, workspace_id=None) -> list:
-    """Named things and how each sentence connects them, read by the extraction's model: a record per
-    entity {name, type}, then a record per relationship {name, type, relation, object, object_type} -
-    the subject's name and type, so an edge can run from it to the object found by name. Types and
-    relations are the model's words for this text: it is shown the types the workspace already has
-    to reuse (`_types_prompt`), and a type differing from one only in case or separators is that one
-    (`_type_named`); no type is listed here."""
-    known = await _known_types(workspace_id)
-    try:
-        raw = await complete(_ENTITIES_PROMPT.replace("\n\nTEXT:\n", "\n" + _types_prompt(known) + "\nTEXT:\n")
-                             + (text or "")[:4000],
-                             system="You read text into a knowledge graph. JSON only.", max_tokens=900,
-                             json_mode=True, temperature=0.0, model_spec=model_spec)
-    except NoModelConfigured:
-        raise                                        # the run must say what to connect, not find nothing
-    except Exception:
-        return []
-    parsed = _parse_json(raw)
-    parsed = parsed if isinstance(parsed, dict) else {}
-    ents, seen = [], {}
-    for e in parsed.get("entities") or []:
-        if not isinstance(e, dict):
-            continue
-        name = str(e.get("name") or "").strip()
-        kind = re.sub(r"[^A-Za-z0-9]+", "_", str(e.get("type") or "Entity")).strip("_") or "Entity"
-        if name and normalize_name(name) not in seen:
-            seen[normalize_name(name)] = _type_named(kind, known)
-            ents.append({"name": name, "type": seen[normalize_name(name)]})
-    rels = []
-    for r in parsed.get("relationships") or []:
-        if not isinstance(r, dict):
-            continue
-        sub, obj = str(r.get("subject") or "").strip(), str(r.get("object") or "").strip()
-        rel = re.sub(r"[^A-Za-z0-9]+", "_", str(r.get("relation") or "")).strip("_").upper()
-        if sub and obj and rel and normalize_name(sub) in seen and normalize_name(obj) in seen:
-            rels.append({"name": sub, "type": seen[normalize_name(sub)], "relation": rel,
-                         "object": obj, "object_type": seen[normalize_name(obj)]})
-    return ents + rels
 
 
 def _seed_records(mech: dict) -> list:
@@ -334,7 +581,7 @@ async def _produce_parsed(mech: dict, ctx: dict, text: str, model_spec: dict | N
             return _parse_json(raw)
         return {"records": _keywords(text, int(ctx.get("top_n") or mech.get("top_n", 8)))}
     if ref == "unstructured.ner":
-        return {"records": await _ner_records(text, model_spec, workspace_id)}
+        return await _model_records(text, mech, model_spec, workspace_id)
     if ref == "unstructured.python":
         from opencortyx.ingest.extraction.pyextractor import run_python_extractor_async
         inputs = {**(ctx or {}), "text": text}
@@ -415,6 +662,11 @@ def _extractor_text(node, ctx: dict) -> str:
     props = node.properties or {}
     return str(props.get("text") or ctx.get("chunk_text") or ctx.get("excerpt")
                or props.get(_node_document.STORED_KEY) or node.label or "")
+
+
+def _fields_read(ctx: dict, fields: list) -> str:
+    """What an extractor reads when it names a node's fields (`source.fields`): those, one a line."""
+    return "\n".join(f"{f}: {_s(ctx.get(f))}" for f in fields if ctx.get(f) not in (None, "", [], {}))
 
 
 def _fill(prompt: str, ctx: dict) -> str:
@@ -634,6 +886,8 @@ async def _gen_attr_value(workspace_id, override: dict, attr_key: str, ctx: dict
     try:
         raw = await complete(prompt, max_tokens=600, temperature=0.1, model_spec=spec,
                              json_mode=wants_json)
+    except BudgetExceeded:
+        raise
     except Exception:
         return None
     raw = (raw or "").strip()
@@ -695,6 +949,8 @@ async def _gen_attr_values(workspace_id, overrides: dict, keys, ctx: dict) -> di
             raw = await complete("\n".join(parts), system="You output one JSON object. JSON only.",
                                  max_tokens=1200, json_mode=True, temperature=0.1, model_spec=spec)
             parsed = _parse_json(raw)
+        except BudgetExceeded:
+            raise
         except Exception:                                            # noqa: BLE001 — fall back below
             parsed = {}
         for k, ov in items:
@@ -734,6 +990,11 @@ def _emit_edges(emit: dict) -> list:
     already saved that way start linking without being re-saved."""
     out = []
     for e in (emit or {}).get("edges") or []:
+        if (isinstance(e, dict) and not e.get("over") and e.get("from") == "emitted"
+                and isinstance(e.get("to"), dict) and e["to"].get("name") == "$object"):
+            # Saved when a link was a record of its own, its subject the node that record made. Links
+            # are now rows of their own (`_model_records`), each end found by its name.
+            e = {**e, "over": "links", "from": {"resolve": "entity", "name": "$name", "type": "$type"}}
         if isinstance(e, dict) and "match_on" in (e.get("from"), e.get("to")):
             e = dict(e)
             for side in ("from", "to"):
@@ -746,6 +1007,20 @@ def _emit_edges(emit: dict) -> list:
     return out
 
 
+def _links(parsed) -> list:
+    """The link rows a mechanism produced (the model method's `links`), for edges `over: "links"`."""
+    rows = parsed.get("links") if isinstance(parsed, dict) else None
+    return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+
+def _of_kind(rec: dict, only, mech: dict) -> bool:
+    """Whether a record is of the kind an edge is limited to (`only`): a type, "~" for a thing whose
+    kind the model named, absent or "*" for any."""
+    if only in (None, "", "*"):
+        return True
+    return _fits(only, str((rec or {}).get("type") or ""), _fixed_kinds(mech))
+
+
 _NAMED_NS = uuid.uuid5(uuid.NAMESPACE_URL, "opencortyx/text-reader")   # the ids named things already have
 
 
@@ -755,8 +1030,38 @@ def entity_id(workspace_id, type_name: str, name: str) -> uuid.UUID:
     return uuid.uuid5(_NAMED_NS, f"{workspace_id}:{type_name}:{normalize_name(name)}")
 
 
-def _named_id(workspace_id, node_type: str, name: str, collection_id=None):
-    """The id of the one node of `node_type` called `name` (per collection when given)."""
+_NAME_SCOPES: dict = {}       # workspace -> (read_at, {type: "workspace" | "asset"})
+
+
+async def _name_asset(workspace_id, node_type: str):
+    """The asset a named node of `node_type` is scoped to, or None (one node per name in the
+    workspace, the default). A type whose resolution rule says `name_scope: asset` gets one node per
+    name PER FILE, so two files' "John Smith" stay two nodes until resolution - with its gates and
+    labels - says they are one (resolution/spec.py)."""
+    import time as _t
+    key = str(workspace_id)
+    hit = _NAME_SCOPES.get(key)
+    if hit is None or _t.monotonic() - hit[0] > 60.0:
+        try:
+            from opencortyx.resolution.spec import load_specs
+            async with V2Session() as db:
+                specs = await load_specs(db, uuid.UUID(key))
+            hit = (_t.monotonic(), {t: s.name_scope for t, s in specs.items()})
+        except Exception:                                    # noqa: BLE001 - unknown: the default
+            hit = (_t.monotonic(), {})
+        _NAME_SCOPES[key] = hit
+    if hit[1].get(str(node_type)) != "asset":
+        return None
+    from opencortyx.core.dataplane import evidence as _ev
+    cur = _ev.current()
+    return cur.asset_id if cur is not None else None
+
+
+def _named_id(workspace_id, node_type: str, name: str, collection_id=None, asset_id=None):
+    """The id of the one node of `node_type` called `name` (per collection when given, per asset
+    when the type's names are scoped to the file they appear in)."""
+    if asset_id:
+        return _det_id(workspace_id, str(node_type).lower(), f"asset:{asset_id}:{normalize_name(name)}")
     if not collection_id:
         # one id per (type, normalised name): "The Nightingale" from any extractor or file is one node
         return entity_id(workspace_id, str(node_type), str(name))
@@ -769,7 +1074,7 @@ async def named_node(workspace_id, name: str, *, node_type: str = "Entity", enti
     edge endpoint and an emitted entity with the same name are one node. No lookup and no matching:
     which DIFFERENT names are the same thing is decided after the asset, by the resolution step."""
     node_type = entity_type or node_type                   # a typed name ("Person") is a node of that type
-    nid = _named_id(workspace_id, node_type, name, collection_id)
+    nid = _named_id(workspace_id, node_type, name, collection_id, await _name_asset(workspace_id, node_type))
     if await _repo.get(workspace_id, nid) is None:
         await _repo.upsert_node(node_id=nid, workspace_id=workspace_id, type=node_type, label=str(name).strip()[:200],
                                 entity_type=entity_type or None, collection_id=collection_id, confidence=0.85,
@@ -945,6 +1250,8 @@ async def _relate_pairs(mech: dict, text: str, from_cands: list, to_cands: list,
     try:
         raw = await complete(prompt, system="You extract relationships between listed items. JSON only.",
                              max_tokens=900, json_mode=True, temperature=0.1, model_spec=model_spec)
+    except BudgetExceeded:
+        raise
     except Exception:
         return []
     parsed = _parse_json(raw)
@@ -1248,7 +1555,7 @@ async def _apply_emit_unit(db, workspace_id, tmpl, *, source_node, parsed, ctx, 
             # every emitted node: a deterministic id, then an upsert
             key = label if resolve else spec.get("key") or (
                 (":".join(_s(rec.get(f)) for f in idfields) or label) if idfields else label)
-            nid = (_named_id(workspace_id, rtype, key, collection_id) if resolve
+            nid = (_named_id(workspace_id, rtype, key, collection_id, await _name_asset(workspace_id, rtype)) if resolve
                    else _det_id(workspace_id, rtype.lower(), key.strip().lower()) if is_global
                    else _det_id(workspace_id, rtype.lower(),
                                 f"{source_node.id if source_node else 'global'}:{tmpl.name}:{key}"))
@@ -1294,25 +1601,35 @@ async def _apply_emit_unit(db, workspace_id, tmpl, *, source_node, parsed, ctx, 
         if not etype and mode != "relate.llm":
             continue
         frm, to = espec.get("from", "source"), espec.get("to", "emitted")
-        is_record_edge = (espec.get("per") == "record" or isinstance(frm, dict) or isinstance(to, dict)
+        over_links = espec.get("over") == "links"
+        is_record_edge = (over_links or espec.get("per") == "record" or isinstance(frm, dict) or isinstance(to, dict)
                           or "org" in (frm, to)
                           or frm in declared_types or to in declared_types
                           or (isinstance(frm, dict) and (frm.get("node") in declared_types or frm.get("node_type") in declared_types))
                           or (isinstance(to, dict) and (to.get("node") in declared_types or to.get("node_type") in declared_types)))
         if is_record_edge:
+            rows = _links(parsed) if over_links else recs
             if _node_off(_endpoint_type(frm)) or _node_off(_endpoint_type(to)):
                 # An endpoint's type is switched off, so its nodes were deliberately not written; the
                 # edge is skipped with them, not recorded as an unresolved write that failed.
-                counts["skipped_disabled"] = counts.get("skipped_disabled", 0) + len(recs)
+                counts["skipped_disabled"] = counts.get("skipped_disabled", 0) + len(rows)
                 continue
-            for ri, rec in enumerate(recs):
+            for ri, rec in enumerate(rows):
                 if "when" in espec and not _fill_field(espec.get("when"), rec):
                     continue
-                rec_nodes = per_record_by_type[ri] if ri < len(per_record_by_type) else {}
-                en = per_record[ri] if ri < len(per_record) else None
+                if not _of_kind(rec, espec.get("only"), tmpl.mechanism or {}):
+                    continue
+                rec_nodes = {} if over_links else (per_record_by_type[ri] if ri < len(per_record_by_type) else {})
+                en = None if over_links else (per_record[ri] if ri < len(per_record) else None)
                 sources = await _resolve_endpoints(workspace_id, frm, rec, source_node, en, collection_id, rec_nodes=rec_nodes)
                 targets = await _resolve_endpoints(workspace_id, to, rec, source_node, en, collection_id, rec_nodes=rec_nodes)
                 if not sources or not targets:
+                    missing = frm if not sources else to
+                    if isinstance(missing, dict) and (missing.get("match") or missing.get("find")):
+                        # a lookup of a node already there ("the Vendor of this name") that found none:
+                        # most things are not matched by every lookup, so it is counted, not failed
+                        counts["unmatched"] = counts.get("unmatched", 0) + 1
+                        continue
                     await _q_capture(workspace_id, "edge",
                                      {"source_id": str((sources or [("", "")])[0][0]),
                                       "target_id": str((targets or [("", "")])[0][0]),
@@ -1346,6 +1663,8 @@ async def _apply_emit_unit(db, workspace_id, tmpl, *, source_node, parsed, ctx, 
                                 gen_rel = str(raw_rel or "").strip().strip('"').strip("'")
                                 if gen_rel:
                                     rec_etype = gen_rel
+                            except BudgetExceeded:
+                                raise
                             except Exception:
                                 pass
                 if not rec_etype:
@@ -1457,6 +1776,18 @@ async def _apply_emit_unit(db, workspace_id, tmpl, *, source_node, parsed, ctx, 
 async def run_template(workspace_id: uuid.UUID, template, *, collection_id=None, limit: int = _RUN_LIMIT,
                        source_key: str | None = None, node_ids: list | None = None,
                        attrs=None, deadline: float | None = None, done=()) -> dict:
+    """`_run_template`, with every model call it makes counted as this extractor's
+    ("extract:<name>" in llm_usage), so its cost per record can be read and estimated."""
+    from opencortyx.core.inference import usage
+    with usage.scope(workspace_id, purpose_name=f"extract:{getattr(template, 'name', '') or 'extractor'}"):
+        return await _run_template(workspace_id, template, collection_id=collection_id, limit=limit,
+                                   source_key=source_key, node_ids=node_ids, attrs=attrs,
+                                   deadline=deadline, done=done)
+
+
+async def _run_template(workspace_id: uuid.UUID, template, *, collection_id=None, limit: int = _RUN_LIMIT,
+                        source_key: str | None = None, node_ids: list | None = None,
+                        attrs=None, deadline: float | None = None, done=()) -> dict:
     """Run ONE executable template. Independent templates (seed.literal / source=null) emit once;
     bound templates iterate the nodes they select — optionally scoped to one `source_key`, or to an
     explicit set of `node_ids` (DAG chaining: run a task over a prior step's exact output). Any
@@ -1501,6 +1832,7 @@ async def run_template(workspace_id: uuid.UUID, template, *, collection_id=None,
         return {"status": "ok", "name": template.name, **totals}
 
     nodes = await _select_nodes(workspace_id, template, node_ids=node_ids, source_key=source_key, limit=limit)
+    reads = [str(f) for f in ((template.source or {}).get("fields") or []) if str(f).strip()]
     done, read, stopped = {str(i) for i in done}, [], False
     async with V2Session() as db:
         for node in nodes:
@@ -1513,7 +1845,7 @@ async def run_template(workspace_id: uuid.UUID, template, *, collection_id=None,
             totals["nodes_seen"] += 1
             try:
                 ctx = await _node_ctx(node)
-                text = _extractor_text(node, ctx)
+                text = _fields_read(ctx, reads) if reads else _extractor_text(node, ctx)
                 parsed = await _produce_parsed(mech, ctx, text, model_spec=model_spec, workspace_id=workspace_id,
                                                node_id=node.id, collection_id=collection_id,
                                                template_name=template.name)
@@ -1528,6 +1860,15 @@ async def run_template(workspace_id: uuid.UUID, template, *, collection_id=None,
                 for k in ("attributes", "nodes", "edges"):
                     totals[k] += c[k]
                 await db.commit()
+            except BudgetExceeded as e:
+                # Not this node's fault, and every next node would fail the same way: stop here, keep
+                # what was read, and report it so the run can be resumed once the budget allows.
+                read.pop()
+                totals["nodes_seen"] -= 1
+                await db.rollback()
+                log.warning("enrich.paused_budget", template=str(template.name), error=str(e))
+                return {"status": "paused", "reason": "budget", "detail": str(e), "name": template.name,
+                        "done": sorted(done | set(read)), **totals}
             except Exception as e:                       # noqa: BLE001 — isolate per-node failures
                 totals["errors"] += 1
                 log.warning("enrich.template_failed", template=str(template.name), node_id=str(node.id), error=str(e))
@@ -1645,7 +1986,7 @@ async def preview_template(workspace_id: uuid.UUID, spec: dict, sample_text: str
 
     # 2) emitted nodes (one per LLM/deterministic record)
     recs = _records(parsed)
-    nodes_out, rec_label = [], {}
+    nodes_out, rec_label, rec_first = [], {}, {}
     rec_nodes_by_type = [{} for _ in recs]
     for ri, rec in enumerate(recs[:max_nodes]):
         for spec_n in (emit.get("nodes") or []):
@@ -1659,6 +2000,7 @@ async def preview_template(workspace_id: uuid.UUID, spec: dict, sample_text: str
             if spec_n.get("label"):
                 label = str(_fill_field(spec_n["label"], rec) or label)[:200]
             rec_label.setdefault(ri, label)
+            rec_first.setdefault(ri, f"{ntype}_{ri}")
             if ri < len(rec_nodes_by_type):
                 rec_nodes_by_type[ri][ntype] = label
             rctx = {**ctx, **{k: v for k, v in rec.items() if isinstance(v, (str, int, float))}, "label": label}
@@ -1691,7 +2033,7 @@ async def preview_template(workspace_id: uuid.UUID, spec: dict, sample_text: str
         if ep in (None, "source", "the node it read"):
             return "source"
         if ep == "emitted":
-            return f"emitted_{ri}"
+            return rec_first.get(ri)
         if isinstance(ep, str) and ep in declared_types:
             return f"{ep}_{ri}"
         if isinstance(ep, dict):
@@ -1700,6 +2042,7 @@ async def preview_template(workspace_id: uuid.UUID, spec: dict, sample_text: str
                 return f"{t}_{ri}"
         return None
 
+    by_name = {normalize_name(n["label"]): n["id"] for n in nodes_out}
     for espec in _emit_edges(emit):
         if not isinstance(espec, dict):
             continue
@@ -1708,12 +2051,26 @@ async def preview_template(workspace_id: uuid.UUID, spec: dict, sample_text: str
         if not etype and mode != "relate.llm":
             continue
         frm, to = espec.get("from", "source"), espec.get("to", "emitted")
+        if espec.get("over") == "links":                  # one edge per link the mechanism found
+            for row in _links(parsed)[:max_nodes * 2]:
+                if "when" in espec and not _fill_field(espec.get("when"), row):
+                    continue
+                edges_out.append({
+                    "rel": str(_fill_field(etype, row) or etype or "RELATES_TO") if str(etype).startswith("$") else etype,
+                    "from": _endpoint_label(frm, row, src_label, None),
+                    "to": _endpoint_label(to, row, src_label, None),
+                    "from_id": by_name.get(normalize_name(str(_fill_field((frm or {}).get("name", "$name"), row) or ""))) if isinstance(frm, dict) else None,
+                    "to_id": by_name.get(normalize_name(str(_fill_field((to or {}).get("name", "$name"), row) or ""))) if isinstance(to, dict) else None,
+                })
+            continue
         is_rec = (espec.get("per") == "record" or isinstance(frm, dict) or isinstance(to, dict)
                   or frm in declared_types or to in declared_types
                   or (isinstance(frm, dict) and (frm.get("node") in declared_types or frm.get("node_type") in declared_types))
                   or (isinstance(to, dict) and (to.get("node") in declared_types or to.get("node_type") in declared_types)))
         if is_rec:
             for ri, rec in enumerate(recs[:max_nodes]):
+                if not _of_kind(rec, espec.get("only"), mech):
+                    continue
                 rn = rec_nodes_by_type[ri] if ri < len(rec_nodes_by_type) else {}
                 rec_etype = str(_fill_field(etype, rec) or etype or "").strip() if (etype and etype.startswith("$")) else (etype or "")
                 if not rec_etype and mode == "relate.llm":
@@ -1752,22 +2109,17 @@ async def preview_template(workspace_id: uuid.UUID, spec: dict, sample_text: str
                 "An edge points at `emitted`, but this extractor emits no node — that endpoint can "
                 "never resolve, so the edge is never written.")
             break
-    if emit.get("attributes") and _emitted:
+    if emit.get("attributes") and _emitted and _ref != "unstructured.ner":   # its input fields are its own
         warnings.append(
             "This extractor both emits nodes AND enriches the source. Both run; the source "
             "attributes take their values from the FIRST record only.")
 
     _fields = {k for r in _records(parsed)[:5] if isinstance(r, dict) for k in r}
     for _n in (emit.get("nodes") or []):
-        if not isinstance(_n, dict):
-            continue
+        if not isinstance(_n, dict) or str(_n.get("type") or "").startswith("$"):
+            continue                                       # a type each record names: its fields are its own
         _nt = _n.get("type") or "?"
         _declared = list(_n.get("attributes") or [])
-        if not _declared:
-            warnings.append(
-                f"The `{_nt}` node declares no attributes, so it takes whatever fields the model "
-                f"returns — right now {', '.join(sorted(_fields)) or 'none'}. It works, but the "
-                f"node's shape is not pinned and per-attribute controls are unavailable.")
         _ids = _n.get("id")
         _ids = [_ids] if isinstance(_ids, str) else list(_ids or [])
         _unknown = [i for i in _ids if i not in _declared and i not in _fields]
@@ -1969,6 +2321,8 @@ async def run_named_templates_on_chunks(workspace_id: uuid.UUID, names, pairs, c
                     max_tokens=min(4000, 800 + 400 * len(members)),
                     json_mode=True, temperature=0.1, model_spec=specs[members[0].name])
             parsed = _parse_json(raw)
+        except BudgetExceeded:
+            raise
         except Exception as e:                        # noqa: BLE001 — whole call failed → all fall back
             log.warning("enrich.group_call_failed", chunk_id=str(cid), error=str(e))
         for t in members:

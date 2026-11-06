@@ -74,6 +74,21 @@ async def create_template(spec: TemplateSpec, user: CurrentUser = Depends(requir
             ExtractionTemplate.workspace_id == user.workspace_id,
             ExtractionTemplate.name == spec.name
         ))).scalar_one_or_none()
+        if spec.new and t is not None:
+            raise HTTPException(status_code=409, detail=f"an extractor called {spec.name} already exists")
+        if spec.id and not is_builtin:                 # editing one: a new name renames it
+            try:
+                editing = await db.get(ExtractionTemplate, uuid.UUID(spec.id))
+            except ValueError:
+                editing = None
+            if editing is None or editing.workspace_id != user.workspace_id:
+                raise HTTPException(status_code=404, detail="extractor not found")
+            if (editing.name or "").startswith("builtin:"):
+                raise HTTPException(status_code=403, detail="a built-in extractor keeps its name")
+            if t is not None and t.id != editing.id:
+                raise HTTPException(status_code=409, detail=f"an extractor called {spec.name} already exists")
+            t = editing
+            t.name = spec.name
 
         if is_builtin:
             if not t:
@@ -161,10 +176,31 @@ async def preview_template_ep(spec: TemplatePreviewSpec, user: CurrentUser = Dep
     attributes it would produce — each attribute annotated with mechanism, model, weight and the
     concrete value. Read-only (no DB writes) so authors can iterate before saving or running."""
     from opencortyx.ingest.extraction.templates import preview_template
-    return await preview_template(user.workspace_id, {
-        "name": spec.name, "source": spec.source,
-        "mechanism": spec.mechanism, "emit": spec.emit,
-    }, spec.sample_text or "")
+    text = spec.sample_text or ""
+    if spec.sample_asset:
+        text = await _first_input(user.workspace_id, spec.sample_asset, spec.source or {})
+        if not text:
+            raise HTTPException(status_code=422, detail="that file has nothing this extractor reads")
+    from opencortyx.core.inference import usage
+    # Counted as this extractor's preview: what it cost per record is the basis of /cost/estimate.
+    with usage.scope(user.workspace_id, purpose_name=f"preview:{spec.name or 'extractor'}"):
+        out = await preview_template(user.workspace_id, {
+            "name": spec.name, "source": spec.source,
+            "mechanism": spec.mechanism, "emit": spec.emit,
+        }, text)
+    return out
+
+
+async def _first_input(workspace_id, asset: str, source: dict) -> str:
+    """The first thing the extractor would read in one file, read as a run over that file reads it."""
+    from opencortyx.ingest.extraction import data_inputs
+    own = source.get("data") or {}
+    reads = {**own, "asset": asset} if own.get("type") else data_inputs.with_own_fields({"asset": asset}, source)
+    try:
+        nodes = await data_inputs.select(workspace_id, reads, limit=1)
+    except Exception:                                    # noqa: BLE001 - an unreadable file reads as nothing
+        return ""
+    return str((nodes[0].properties or {}).get("text") or "") if nodes else ""
 
 
 @router.post("/extraction-templates/{tid}/run")

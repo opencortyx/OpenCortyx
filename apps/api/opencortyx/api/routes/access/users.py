@@ -55,11 +55,15 @@ async def update_user(user_id: str, spec: UserPatch, admin: CurrentUser = Depend
             u.role = spec.role
         if spec.status in ("active", "disabled"):
             u.status = spec.status
+        if spec.groups is not None:
+            u.groups = spec.groups
         if spec.password:
             if len(spec.password) < 6:
                 raise HTTPException(status_code=400, detail="Password must be 6+ chars.")
             u.password_hash = hash_password(spec.password)
         await db.commit()
+        from opencortyx.core.security.scope import forget
+        forget(user_id=u.id)
         return user_view(u)
 
 

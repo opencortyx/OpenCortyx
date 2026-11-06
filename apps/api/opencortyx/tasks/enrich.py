@@ -207,6 +207,7 @@ def v2_run_extractor_over(self, workspace_id: str, name: str, data: dict, done: 
 
         from opencortyx.core.db import V2Session
         from opencortyx.domain.control import ExtractionTemplate
+        from opencortyx.ingest.extraction.data_inputs import with_own_fields
         from opencortyx.ingest.extraction.templates import run_template
         oid = uuid.UUID(workspace_id)
         async with V2Session() as db:
@@ -223,7 +224,7 @@ def v2_run_extractor_over(self, workspace_id: str, name: str, data: dict, done: 
             if data.get("columns"):
                 reads["column"] = data["columns"][0]
         else:
-            reads = data
+            reads = with_own_fields(data, t.source)
         t.source = {**(t.source or {}), "select": "*", "data": reads}   # this run only; never saved
         return await run_template(oid, t, deadline=_deadline(), done=done)
 

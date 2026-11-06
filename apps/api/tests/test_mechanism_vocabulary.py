@@ -1,17 +1,15 @@
-"""The Studio and the engine must agree on what a mechanism is.
+"""The Extractors form and the engine must agree on what a mechanism is.
 
-They had drifted, and the drift was silent in the worst direction: the Studio offered
-`unstructured.topic` and `structured.sql`, neither of which `_produce_parsed` has a branch for, so an
-extractor built on either **saved, ran, reported success and wrote nothing**. In the other direction
-`structured.llm` and `unstructured.attributes` were implemented and used by seven built-ins, and
-could not be picked at all.
+They drifted once, silently and in the worst direction: the editor offered `unstructured.topic` and
+`structured.sql`, neither of which `_produce_parsed` has a branch for, so an extractor built on either
+**saved, ran, reported success and wrote nothing**. This test also pointed at a file that had moved
+(`ingest/enrich_templates.py`) and so skipped itself for months without anyone noticing - it now
+fails, rather than skips, when the engine is not where it says.
 
 The engine owns the vocabulary (`DEPENDENT_MECHANISM_REFS`, declared beside the branches that
-implement it). These tests hold the Studio to it.
-
-Read as TEXT, not imported: `enrich_templates` pulls in the whole ingest stack, and this needs to run
-in the api container (which has no `apps/web`) and on a bare checkout (which has no dependencies).
-Comparing two files is the whole job.
+implement it). The form (`apps/web/lib/extractors/form.ts`) declares `SAVED_REFS`, every mechanism it
+saves. Read as TEXT, not imported, so this runs in the api container (which has no `apps/web`, where
+only the engine half runs) and on a bare checkout.
 """
 import re
 from pathlib import Path
@@ -27,17 +25,14 @@ def _find(*parts):
     return None
 
 
-ENGINE = _find("apps", "api", "opencortyx", "ingest", "enrich_templates.py") \
-    or _find("opencortyx", "ingest", "enrich_templates.py")
-STUDIO = _find("apps", "web", "app", "dashboard", "custom-assets", "extractorVocab.ts")
-# The preview badge colours live with the rest of the Studio's state (split out of page.tsx).
-DRAFT = _find("apps", "web", "app", "dashboard", "custom-assets", "useExtractorDraft.ts")
+ENGINE = _find("apps", "api", "opencortyx", "ingest", "extraction", "templates.py") \
+    or _find("opencortyx", "ingest", "extraction", "templates.py")
+FORM = _find("apps", "web", "lib", "extractors", "form.ts")
 
 
 @pytest.fixture(scope="module")
 def engine_src():
-    if ENGINE is None:
-        pytest.skip("enrich_templates.py not reachable from here")
+    assert ENGINE is not None, "the extraction engine is not at ingest/extraction/templates.py"
     return ENGINE.read_text(encoding="utf-8")
 
 
@@ -62,42 +57,22 @@ def test_every_declared_mechanism_has_a_branch(engine_src, declared):
             f"{ref} is declared but _produce_parsed has no branch for it"
 
 
-def test_the_studio_offers_exactly_what_the_engine_implements(declared):
-    if STUDIO is None:
+def test_the_form_saves_only_what_the_engine_implements(declared):
+    if FORM is None:
         pytest.skip("apps/web not reachable from here (running inside the api container?)")
-    m = re.search(r"const DEPENDENT_MECHANISMS = \[(.*?)\];", STUDIO.read_text(encoding="utf-8"), re.S)
-    assert m, "DEPENDENT_MECHANISMS not found in the Studio page"
-    offered = re.findall(r'"([a-z_.]+)"', m.group(1))
-
-    phantom = [r for r in offered if r not in declared]
-    missing = [r for r in declared if r not in offered]
-    assert not phantom, (
-        "the Studio offers mechanism(s) the engine does not implement: %s — choosing one saves, "
+    m = re.search(r"export const SAVED_REFS = \[(.*?)\]", FORM.read_text(encoding="utf-8"), re.S)
+    assert m, "SAVED_REFS not found in lib/extractors/form.ts"
+    saved = re.findall(r'"([a-z_.]+)"', m.group(1))
+    phantom = [r for r in saved if r not in declared]
+    assert saved and not phantom, (
+        "the form saves mechanism(s) the engine does not implement: %s - such an extractor saves, "
         "runs, reports success and writes nothing" % ", ".join(phantom))
-    assert not missing, (
-        "the engine implements mechanism(s) the Studio will not let anyone pick: %s"
-        % ", ".join(missing))
 
 
-def test_the_preview_badge_covers_every_reported_mechanism(declared):
-    """A mechanism with no badge rendered as an unexplained grey chip — which is exactly how
-    `source` looked on cog.claim's `speaker` before it had a control."""
-    if DRAFT is None:
+def test_the_form_and_the_engine_reserve_the_same_field_names(engine_src):
+    if FORM is None:
         pytest.skip("apps/web not reachable from here")
-    m = re.search(r"const mechBadge = \(m: string\) => \(\{(.*?)\}\[m\]",
-                  DRAFT.read_text(encoding="utf-8"), re.S)
-    assert m, "mechBadge not found"
-    coloured = set(re.findall(r'"?([a-z-]+)"?:\s*"bg-', m.group(1)))
-
-    # `_mech_short` shortens a ref to its last segment; the LLM refs all collapse to "llm" and
-    # `unstructured.attributes` to "per-attribute". Plus what the preview reports directly.
-    short = set()
-    for ref in declared:
-        if ref.endswith(".llm"):
-            short.add("llm")
-        elif ref == "unstructured.attributes":
-            short.add("per-attribute")
-        else:
-            short.add(ref.split(".", 1)[1])
-    unstyled = sorted((short | {"source", "copy", "constant"}) - coloured)
-    assert not unstyled, "mechBadge has no colour for: %s" % ", ".join(unstyled)
+    engine = re.search(r"RESERVED_FIELDS = frozenset\(\{(.*?)\}\)", engine_src, re.S)
+    form = re.search(r"export const RESERVED_FIELDS = \[(.*?)\]", FORM.read_text(encoding="utf-8"), re.S)
+    assert engine and form
+    assert set(re.findall(r'"([a-z_]+)"', engine.group(1))) == set(re.findall(r'"([a-z_]+)"', form.group(1)))

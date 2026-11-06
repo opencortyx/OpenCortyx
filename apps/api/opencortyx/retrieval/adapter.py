@@ -237,12 +237,16 @@ async def build_context_v2(query: str, ctx: RetrieveContext, k: int = 0) -> dict
     wf = _workflow(cfg)
 
     decompose = getattr(ctx, "decompose", None)
-    res = await wf.run(ctx.workspace_id, query,
-                       collection_ids=list(ctx.collection_ids) if ctx.collection_ids else None,
-                       decompose=rc.query_decomposition() if decompose is None
-                       else ("full" if decompose else "off"))
-
-    prov = await _provenance(ctx.workspace_id, res.blocks, query) if res.blocks else {}
+    from opencortyx.core.security import scope as _scope
+    # The question's scope - its collections and sensitivity - on top of the caller's: every read
+    # retrieval makes, graph hops and table columns included, stays inside it.
+    with _scope.using(_scope.question_scope(getattr(ctx, "access_collections", None),
+                                            getattr(ctx, "max_sensitivity", "normal"))):
+        res = await wf.run(ctx.workspace_id, query,
+                           collection_ids=list(ctx.collection_ids) if ctx.collection_ids else None,
+                           decompose=rc.query_decomposition() if decompose is None
+                           else ("full" if decompose else "off"))
+        prov = await _provenance(ctx.workspace_id, res.blocks, query) if res.blocks else {}
     context_str, used = _serialise(res.blocks, prov)
     cites = _citations(res.blocks, prov)
     best = max((float(b.score or 0.0) for b in res.blocks), default=0.0)
@@ -277,9 +281,15 @@ async def build_context_v2(query: str, ctx: RetrieveContext, k: int = 0) -> dict
 
     _note_salience(getattr(ctx, "workspace_id", None), [b.node_id for b in res.blocks])
 
+    packed = {str(b.node_id) for b in res.blocks if b.node_id}
+    links = sorted({tuple(sorted((str(a), str(c)))) for b in res.blocks for a, _e, c in (b.relations or [])
+                    if str(a) in packed and str(c) in packed and str(a) != str(c)})
     return {"abstained": False,
             "context": context_str,
             "citations": cites,
+            # pairs of packed nodes the graph connects: a sentence may join facts across these
+            # (answering/trust.verify_citations), never across nodes nothing links
+            "links": [list(p) for p in links],
             "caveats": ["Nothing retrieved closely resembles the question; the context may not answer it."]
             if low_relevance else [],
             **({"low_relevance": True} if low_relevance else {}),

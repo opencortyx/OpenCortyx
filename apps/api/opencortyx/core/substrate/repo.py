@@ -188,6 +188,18 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+from opencortyx.core.security import scope as _scope  # noqa: E402 - access is checked on read
+from opencortyx.domain.ontology import ASSET_TYPES  # noqa: E402
+
+
+async def _guard_assets(workspace_id, ids) -> None:
+    """An asset someone FORGOT (core/dataplane/tombstones.py) is never written again: refused here, the one
+    place every ingestion path writes its asset node through."""
+    if ids:
+        from opencortyx.core.dataplane.tombstones import guard_assets
+        await guard_assets(workspace_id, ids)
+
+
 class NodeRepo:
     """Stateless; the stores are resolved per process."""
 
@@ -205,12 +217,23 @@ class NodeRepo:
         return self._vectors or get_vector_store()
 
     # ── reads ────────────────────────────────────────────────────────────
+    #
+    # Every read below returns only what the bound access scope allows (core/security/scope.py):
+    # a record the caller may not see is not found. Writes read through `_raw_get` / the graph store
+    # directly, so a write never mistakes an existing record it cannot see for a new one.
 
-    async def get(self, workspace_id, node_id) -> Optional[Node]:
+    async def _raw_get(self, workspace_id, node_id) -> Optional[Node]:
         if node_id is None:
             return None
         found = await self.graph.get_nodes(as_uuid(workspace_id), [as_uuid(node_id)])
         return found[0] if found else None
+
+    async def get(self, workspace_id, node_id) -> Optional[Node]:
+        node = await self._raw_get(workspace_id, node_id)
+        if node is None:
+            return None
+        s = _scope.current()
+        return node if s is None or s.allows(node) else None
 
     async def get_many(self, workspace_id, node_ids: Sequence) -> list[Node]:
         """Nodes in the order of `node_ids`, skipping ids that do not exist.
@@ -227,15 +250,15 @@ class NodeRepo:
                 from opencortyx.core.dataplane.passages import hydrate
                 for n in await hydrate(workspace_id, missing):
                     by_id[str(n.id)] = n
-        return [by_id[i] for i in dict.fromkeys(ids) if i in by_id]
+        return _scope.visible([by_id[i] for i in dict.fromkeys(ids) if i in by_id])
 
     async def find(self, workspace_id, query: NodeQuery | None = None, **filters) -> list[Node]:
-        return await self.graph.find_nodes(as_uuid(workspace_id), query or NodeQuery(**filters))
+        return _scope.visible(await self.graph.find_nodes(as_uuid(workspace_id), query or NodeQuery(**filters)))
 
     async def outlines(self, workspace_id) -> list[Node]:
         """Every node, without text or properties beyond its base type and status: for passes over
         the whole graph (`GraphStore.node_outlines`)."""
-        return await self.graph.node_outlines(as_uuid(workspace_id))
+        return _scope.visible(await self.graph.node_outlines(as_uuid(workspace_id)))
 
     async def incident_edge_counts(self, workspace_id, node_ids: Sequence) -> dict[str, int]:
         return await self.graph.incident_edge_counts(as_uuid(workspace_id), node_ids)
@@ -291,9 +314,12 @@ class NodeRepo:
         hops = await self.graph.neighbors(as_uuid(workspace_id), list(node_ids), edge_types=edge_types,
                                           direction=direction, limit=limit)
         out = []
+        access = _scope.current()
         for hop in hops:
             if (hop.edge.properties or {}).get("__status") in HIDDEN_STATUSES or node_status(hop.node) in HIDDEN_STATUSES:
                 continue
+            if access is not None and not access.allows(hop.node):
+                continue                  # a hop never walks into what the caller may not see
             if in_scope(hop.node, scope):
                 out.append((hop.edge, hop.node))
         return out
@@ -312,9 +338,11 @@ class NodeRepo:
         hops = await self.graph.neighbor_page(as_uuid(workspace_id), node_id, edge_type=edge_type,
                                               direction=direction, node_type=node_type,
                                               offset=offset, limit=limit)
+        access = _scope.current()
         return [(h.edge, h.node) for h in hops
                 if (h.edge.properties or {}).get("__status") not in HIDDEN_STATUSES
-                and node_status(h.node) not in HIDDEN_STATUSES]
+                and node_status(h.node) not in HIDDEN_STATUSES
+                and (access is None or access.allows(h.node))]
 
     async def shortest_paths(self, workspace_id, source_id, target_id, *, max_depth: int = 3, limit: int = 10):
         return await self.graph.shortest_paths(as_uuid(workspace_id), source_id, target_id,
@@ -334,6 +362,8 @@ class NodeRepo:
                           sensitivity: str | None = None) -> Node:
         """Create a node or merge into the existing one with `node_id`. An existing node keeps its type."""
         org = as_uuid(workspace_id)
+        if type in ASSET_TYPES and node_id:
+            await _guard_assets(org, [node_id])
         _acct.note(org, _acct.ATTEMPTED)
         outcome = None
         try:
@@ -361,7 +391,7 @@ class NodeRepo:
         if entity_type is not None and not isinstance(entity_type, str):
             entity_type = str(entity_type)
         nid = as_uuid(node_id) or uuid.uuid4()
-        old = await self.get(org, nid) if node_id else None
+        old = await self._raw_get(org, nid) if node_id else None
         node = self._build_node(org, nid, old, type=type, label=label, entity_type=entity_type,
                                 properties=properties, confidence=confidence, level=level, source_ref=source_ref,
                                 collection_id=collection_id, replace_properties=replace_properties,
@@ -411,6 +441,7 @@ class NodeRepo:
         if not specs:
             return []
         ids = [as_uuid(s.pop("node_id", None)) or uuid.uuid4() for s in specs]
+        await _guard_assets(org, [i for i, s in zip(ids, specs) if s.get("type") in ASSET_TYPES])
         stored = {n.id: n for n in await self.graph.get_nodes(org, list(dict.fromkeys(ids)))}
         built: dict = {}
         for nid, spec in zip(ids, specs):
@@ -460,6 +491,7 @@ class NodeRepo:
         nodes = [n for n in nodes if str(n.workspace_id) == str(org)]
         if not nodes:
             return []
+        await _guard_assets(org, [n.id for n in nodes if n.type in ASSET_TYPES])
         old = {n.id: n for n in await self.graph.get_nodes(org, [n.id for n in nodes])}
         now = _now()
         for node in nodes:
@@ -710,9 +742,18 @@ class NodeRepo:
 
     def _filter(self, workspace_id, *, types, collection_ids, min_conf, max_sensitivity, conversation_id,
                 scope, attrs=None, exclude_attrs=None) -> VectorFilter:
+        sens = sensitivities_up_to(max_sensitivity)
+        include_unscoped = False
+        access = _scope.current()
+        if access is not None:
+            # The caller's scope narrows the search itself, not only its results: a page of hits
+            # filtered afterwards would come back short.
+            sens = [x for x in sens if x in set(access.sensitivities())]
+            if not collection_ids and access.collections is not None:
+                collection_ids, include_unscoped = access.collection_ids(), True
         return VectorFilter(workspace_id=require_uuid(workspace_id, "workspace_id"), attrs=attrs, exclude_attrs=exclude_attrs, types=types or None,
                             collection_ids=collection_ids or None, source_ref=as_uuid(conversation_id),
-                            sensitivities=sensitivities_up_to(max_sensitivity),
+                            sensitivities=sens, include_unscoped=include_unscoped,
                             min_confidence=min_conf or None, evidence=True, scope=scope)
 
     async def _nodes_for_hits(self, workspace_id, hits, k: int, as_of) -> list[tuple[Node, float]]:

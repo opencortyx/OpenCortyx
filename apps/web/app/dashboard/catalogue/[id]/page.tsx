@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useCallback, use } from "react";
+import { useEffect, useRef, useState, useCallback, use } from "react";
 import { contextV2Api } from "@/lib/api/contextV2";
 import {
   ArrowLeft, Network, Box, Hash, Layers, ListTree, Database, RefreshCw, FileText, ShieldCheck,
@@ -25,6 +25,7 @@ export default function AssetDetailsPage(props0: { params: Promise<{ id: string 
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const deletedRef = useRef(false);        // set once the asset is gone, so closing the dialog leaves the page
   const [activeTab, setActiveTab] = useState<"overview" | "schema" | "data" | "lineage">("overview");
 
   // Comments & collaboration
@@ -290,8 +291,8 @@ export default function AssetDetailsPage(props0: { params: Promise<{ id: string 
         <DeleteAssetDialog
           assetId={params.id}
           assetName={node.label || "this asset"}
-          onClose={() => setConfirmDelete(false)}
-          onDeleted={() => router.push("/dashboard/catalogue" as any)}
+          onClose={() => { setConfirmDelete(false); if (deletedRef.current) router.push("/dashboard/catalogue" as any); }}
+          onDeleted={() => { deletedRef.current = true; }}
         />
       )}
 

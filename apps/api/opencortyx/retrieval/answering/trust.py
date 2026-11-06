@@ -252,3 +252,337 @@ async def verify_grounding_judge(query: str, answer_text: str, context: str, mod
     except Exception:
         return await verify_grounding(answer_text, context.split("\n\n"))
 
+
+
+# ── citations: each sentence against the sources it cites ───────────────────────────────────────
+#
+# `verify_grounding` asks "is this sentence supported by SOMETHING in the context?". That is not what
+# a reader is told: a sentence marked [2] says source 2 supports it. So each sentence is checked
+# against the blocks it cites, ONE AT A TIME; several cited blocks together count only when the
+# graph links them (the answer may join a customer's record to their order's, not to some other
+# order's). A sentence whose citation does not support it is re-attributed to the block that does,
+# when one does, and the citation is reported as wrong. Checks, strongest available first:
+#
+#   numbers    every number the sentence states is in the block(s) supporting it - not merely
+#              somewhere in the context ("$50,000 limit in Berlin" fails on Munich's 50,000)
+#   nli        the workspace's verification model (core/inference/nli.py): the block entails the
+#              sentence and does not contradict it - catches "did not approve" vs "approved"
+#   words      without a verification model: most of the sentence's content words are in the block
+#   similarity ...or the sentence is close to the block by embedding
+#
+# A sentence with no content words of its own ("Yes.", a bare list marker) is not judged.
+
+_SENT_SPLIT = None
+_MARKS = None
+
+
+def _sentence_split(text: str) -> list[str]:
+    """Sentences, with bullets and numbered list items as sentences of their own."""
+    import re
+    global _SENT_SPLIT
+    if _SENT_SPLIT is None:
+        _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+\s*(?:[-*•]\s+|\d+[.)]\s+)?|\n+")
+    out = []
+    for part in _SENT_SPLIT.split(text or ""):
+        part = (part or "").strip()
+        if part:
+            out.append(part)
+    return out
+
+
+def _marks(sentence: str) -> tuple[str, list[int]]:
+    """(the sentence without citation markers, the citation numbers it carries)."""
+    import re
+    global _MARKS
+    if _MARKS is None:
+        _MARKS = re.compile(r"\[\s*(\d+(?:\s*,\s*\d+)*)\s*\]")
+    nums = []
+    for m in _MARKS.finditer(sentence or ""):
+        nums.extend(int(x) for x in re.findall(r"\d+", m.group(1)))
+    clean = _MARKS.sub(" ", sentence or "")
+    return re.sub(r"\s+([.,;:!?])", r"\1", re.sub(r"[ \t]{2,}", " ", clean)).strip(), list(dict.fromkeys(nums))
+
+
+def _content_words(sentence: str) -> list[str]:
+    """The words a sentence says something with: lower case, no stop words, and no full stop or
+    hyphen left on the end ("LIC-1007." is the id LIC-1007)."""
+    import re
+    words = (t.rstrip(".-") for t in re.findall(r"[A-Za-z0-9][A-Za-z0-9_.-]{2,}", (sentence or "").lower()))
+    return [t for t in words if len(t) > 2 and t not in _GROUND_STOP]
+
+
+def _words_in(sentence: str, text: str, need: float = 0.6) -> bool:
+    toks = _content_words(sentence)
+    if len(toks) < 2:
+        return False
+    low = (text or "").lower()
+    return sum(1 for t in toks if t in low) / len(toks) >= need
+
+
+def _names_in(sentence: str) -> set:
+    """The words a sentence NAMES things by: capitalised words that do not start it ("Berlin",
+    "DBO-1", "Acme"). A supporting source must contain each of them - most words matching is not
+    enough when the one that differs is the city or the customer. Scripts without case have none,
+    and fall back to numbers and the other checks."""
+    import re
+    words = re.findall(r"[^\W\d_][\w.-]*", sentence or "")
+    out = set()
+    for i, w in enumerate(words):
+        if i == 0:
+            continue
+        if any(ch.isupper() for ch in w[:1]) and len(w) > 1:
+            out.add(w.lower().rstrip(".-"))
+    return out
+
+
+#: Characters of a block the verification model reads at once (about its 512-token window).
+_NLI_WINDOW = 1200
+
+
+def _windows_for(sentence: str, text: str, keep: int = 3) -> list[str]:
+    """What the verification model reads `sentence` against in a block: the block's `keep`
+    sentences that share the most content words with it, ONE AT A TIME, and those together.
+
+    One sentence at a time is the point. Read against a whole passage, "Yes, sublicences are
+    permitted" was not flagged as contradicting "Sublicensing is not permitted under any licence
+    type", because a dozen other sentences diluted it; read against that sentence alone, it is."""
+    import re
+    text = text or ""
+    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+|\n+", text) if len(p.strip()) > 3]
+    if len(parts) <= 1:
+        return [text[:_NLI_WINDOW]]
+    toks = _content_words(sentence)
+
+    def overlap(p: str) -> int:
+        low = p.lower()
+        return sum(1 for t in toks if t in low or (len(t) > 6 and t[:6] in low))
+    best = sorted(parts, key=lambda p: -overlap(p))[:keep]
+    together = " ".join(p for p in parts if p in best)[:_NLI_WINDOW]
+    return list(dict.fromkeys([*best, together]))
+
+
+def _contradicted(score) -> bool:
+    """A block contradicts a sentence when some part of it does and NO part of it states it: one
+    unrelated sentence the model reads as opposed must not overrule the sentence that says it."""
+    return bool(score) and score.get("contradict", 0.0) >= 0.5 and score.get("entail", 0.0) < 0.5
+
+
+def _linked(ids: list, links: set) -> bool:
+    """Whether the blocks `ids` form one connected group in the graph's links among packed nodes."""
+    ids = [str(i) for i in ids]
+    if len(ids) < 2:
+        return True
+    seen, todo = {ids[0]}, [ids[0]]
+    while todo:
+        cur = todo.pop()
+        for other in ids:
+            if other not in seen and frozenset((cur, other)) in links:
+                seen.add(other)
+                todo.append(other)
+    return len(seen) == len(ids)
+
+
+async def verify_citations(answer: str, citations: list, texts: dict, links=(), *, threshold: float = 0.55,
+                           nli_model: str | None = None, embed=None) -> dict:
+    """Check every sentence of `answer` (citation markers `[n]` index `citations`) against the full
+    text of the blocks (`texts`: node_id -> text). `links`: pairs of node ids the graph connects.
+
+    Returns {"sentences": [{text, cited, supported_by, supported, check, reason}], "supported",
+    "unsupported" (sentence texts), "citations_checked", "citations_supporting", "citation_precision",
+    "checked_with"}."""
+    links = {frozenset((str(a), str(b))) for a, b in (links or ())}
+    ids = [str(c.get("node_id")) for c in citations or []]
+    body = {i + 1: texts.get(nid) or (citations[i].get("text") or "") for i, nid in enumerate(ids)}
+    numbers = {n: _numbers(t) for n, t in body.items()}
+    sentences = []
+    for raw in _sentence_split(answer):
+        clean, cited = _marks(raw)
+        cited = [n for n in cited if n in body]
+        judged = bool(_content_words(clean)) and (len(_content_words(clean)) >= 2 or _numbers(clean))
+        sentences.append({"text": clean, "raw": raw, "cited": cited, "judge": judged})
+
+    use_nli = nli_model is not None
+    sim: dict = {}
+    want = [s["text"] for s in sentences if s["judge"]]
+    if want and body:
+        if embed is None:
+            from opencortyx.core.inference.embedding import embed_batch as embed
+        try:
+            vecs = await embed(want + [body[n][:_MAX_BLOCK_CHARS] for n in body])
+        except Exception:                                     # noqa: BLE001 - words and numbers still check
+            vecs = []
+        if vecs and len(vecs) == len(want) + len(body):
+            svec = dict(zip(want, vecs[:len(want)]))
+            bvec = dict(zip(list(body), vecs[len(want):]))
+
+            def _cos(a, b):
+                num = sum(x * y for x, y in zip(a, b))
+                da = sum(x * x for x in a) ** 0.5
+                db_ = sum(y * y for y in b) ** 0.5
+                return num / (da * db_) if da and db_ else 0.0
+            for t, v in svec.items():
+                for n, bv in bvec.items():
+                    if v and bv:
+                        sim[(n, t)] = _cos(v, bv)
+
+    # The verification model reads a sentence against the parts of a block that best match it (a
+    # long passage is cut into windows; the model reads ~512 tokens), and only against the blocks
+    # that could support it: the ones it cites, and the few the words or similarity point to. It is
+    # a CONTRADICTION detector first - "did not approve" against "approved" - and a second way to
+    # be supported; it never rejects a sentence the other checks support on its own, because such
+    # models answer "neutral" to correct framing ("The policy states that ...").
+    nli_scores: dict = {}                             # (block, sentence) -> {"entail", "contradict"}
+    if use_nli:
+        pairs, keys = [], []
+        for s in sentences:
+            if not s["judge"]:
+                continue
+            t = s["text"]
+            ranked = sorted(body, key=lambda n: -sim.get((n, t), 0.0))
+            cand = list(dict.fromkeys([n for n in s["cited"] if n in body]
+                                      + [n for n in ranked if _words_in(t, body[n], 0.4)][:3] + ranked[:2]))[:5]
+            for n in cand:
+                for w in _windows_for(t, body[n]):
+                    pairs.append((w, t))
+                    keys.append((n, t, w))
+        from opencortyx.core.inference import nli as _nli
+        scored = await _nli.entails(nli_model, pairs) if pairs else []
+        if scored is None:
+            use_nli = False
+        else:
+            for (n, t, w), r in zip(keys, scored):
+                cur = nli_scores.setdefault((n, t), {"entail": 0.0, "contradict": 0.0})
+                cur["entail"] = max(cur["entail"], r["entail"])
+                # a contradiction counts only where the window is about the sentence at all
+                if _words_in(t, w, 0.3) or any(len(x) > 6 and x[:6] in w.lower() for x in _content_words(t)):
+                    cur["contradict"] = max(cur["contradict"], r["contradict"])
+
+    def supports(ns: list, text: str) -> tuple[bool, str]:
+        """Whether blocks `ns` (one, or several the graph links) support `text`, and by which check."""
+        have = set().union(*(numbers[n] for n in ns)) if ns else set()
+        if _numbers(text) - have:
+            return False, "numbers"
+        lows = " ".join(body[n] for n in ns).lower()
+        if any(name not in lows for name in _names_in(text)):
+            return False, "names"
+        if use_nli and any(_contradicted(nli_scores.get((n, text))) for n in ns):
+            return False, "contradicted"
+        if len(ns) == 1:
+            n = ns[0]
+            if _words_in(text, body[n]):
+                return True, "words+nli" if use_nli else "words"
+            if sim.get((n, text), 0.0) >= threshold:
+                return True, "similarity+nli" if use_nli else "similarity"
+            if use_nli and (nli_scores.get((n, text)) or {}).get("entail", 0.0) >= 0.5:
+                return True, "nli"
+            return False, "nli" if use_nli else "similarity"
+        return _words_in(text, " ".join(body[n] for n in ns)), "words+nli" if use_nli else "words"
+
+    def compose(text: str, first: list) -> list | None:
+        """Blocks the graph connects that TOGETHER state `text`: grown from `first` (or from the
+        block most like the sentence), adding a linked block that holds a number or name still
+        missing, at most six. None when no such set covers it."""
+        need = _numbers(text) | _names_in(text)
+
+        def covers(n):
+            low = body[n].lower()
+            return sum(1 for x in need if str(x).lower() in low or str(x) in numbers[n])
+        starts = [first] if first else [[n] for n in sorted(body, key=lambda n: (-covers(n), -sim.get((n, text), 0.0)))[:3]]
+        for start in starts:
+            got = grow(list(dict.fromkeys(start)), need)
+            if got:
+                return got
+        return None
+
+    def grow(chosen: list, need: set) -> list | None:
+        while len(chosen) < 6:
+            have = " ".join(body[n] for n in chosen).lower()
+            missing = {x for x in need if str(x).lower() not in have and str(x) not in _numbers(have)}
+            if not missing:
+                break
+            nxt = None
+            for n in body:
+                if n in chosen or not any(frozenset((ids[n - 1], ids[c - 1])) in links for c in chosen):
+                    continue
+                low = body[n].lower()
+                gain = sum(1 for x in missing if str(x).lower() in low or str(x) in numbers[n])
+                if gain and (nxt is None or gain > nxt[1]):
+                    nxt = (n, gain)
+            if nxt is None:
+                return None
+            chosen.append(nxt[0])
+        return chosen if len(chosen) > 1 else None
+
+    checked = supporting = 0
+    for s in sentences:
+        s.update({"supported": True, "supported_by": [], "check": "none", "reason": None})
+        if not s["judge"]:
+            continue
+        text, cited = s["text"], s["cited"]
+        found, why = None, None
+        for n in cited:                                  # 1. a cited block on its own
+            ok, how = supports([n], text)
+            checked += 1
+            if ok:
+                supporting += 1
+                found = found or ([n], how)
+            elif how == "contradicted":
+                why = "a cited source contradicts it"
+        if found is None and len(cited) > 1 and _linked([ids[n - 1] for n in cited], links):
+            ok, how = supports(cited, text)                # 2. the cited blocks together, linked
+            if ok:
+                found = (cited, how)
+                supporting += len(cited)                   # none alone, all together
+        if found is None:                                # 3. another block: re-attributed
+            for n in body:
+                if n in cited:
+                    continue
+                ok, how = supports([n], text)
+                if ok:
+                    found = ([n], how)
+                    if cited:
+                        why = why or "its citation does not support it; another source does"
+                    break
+        if found is None:                                # 4. several blocks the graph links
+            group = compose(text, [n for n in cited if n in body])
+            if group:
+                ok, how = supports(group, text)
+                if ok:
+                    found = (group, "composed")
+        against = [n for n in body if use_nli and _contradicted(nli_scores.get((n, text)))]
+        if against and not any((nli_scores.get((n, text)) or {}).get("entail", 0.0) >= 0.5 for n in body):
+            # A source says otherwise and none says it. It overrules the support found only when it
+            # is at least as much about the sentence's specifics - its names and numbers - as that
+            # support is: "Yes, X is permitted" against the passage on X loses to it, while a list
+            # of three licences is not undone by a letter about the same customer's fourth.
+            key = _numbers(text) | _names_in(text)
+
+            def cov(ns):
+                low = " ".join(body[n] for n in ns).lower()
+                return sum(1 for x in key if str(x).lower() in low or str(x) in _numbers(low))
+            if found is None or max(cov([n]) for n in against) >= cov(found[0]):
+                found, why = None, "a source contradicts it"
+        if found is None:
+            s.update({"supported": False, "check": "nli" if use_nli else "words+similarity",
+                      "reason": why or "no source supports it"})
+        else:
+            s.update({"supported_by": found[0], "check": found[1], "reason": why})
+    judged = [s for s in sentences if s["judge"]]
+    return {"sentences": [{k: s[k] for k in ("text", "cited", "supported_by", "supported", "check", "reason")}
+                          for s in sentences],
+            "supported": all(s["supported"] for s in judged),
+            "unsupported": [s["text"] for s in judged if not s["supported"]],
+            "unsupported_raw": [s["raw"] for s in judged if not s["supported"]],
+            "judged": len(judged),
+            "citations_checked": checked, "citations_supporting": supporting,
+            "citation_precision": round(supporting / checked, 4) if checked else None,
+            "checked_with": "nli" if use_nli else "words+similarity"}
+
+
+def strict_answer(answer: str, report: dict) -> str:
+    """`answer` without the sentences `report` found unsupported (their citation markers go too)."""
+    drop = set(report.get("unsupported_raw") or [])
+    if not drop:
+        return answer
+    kept = [s for s in _sentence_split(answer) if s not in drop]
+    return " ".join(kept).strip()

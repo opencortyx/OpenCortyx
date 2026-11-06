@@ -81,10 +81,10 @@ export default function ModelDownload({ provider, role, baseUrl, modelId, availa
         follow(() => contextV2Api.fastembedDownloadStatus(name, role), name);
         return;
       }
-      const meta = await contextV2Api.hfModelInfo(id, token);
+      const meta = await contextV2Api.hfModelInfo(id, token, role);
       setInfo(meta);
       if (!meta.runs_in_opencortyx) { busy(false); return; }
-      setStatus(await contextV2Api.hfDownload(id, token));
+      setStatus(await contextV2Api.hfDownload(id, token, role));
       follow(() => contextV2Api.hfDownloadStatus(meta.repo), meta.repo);
     } catch (e) { setError(detail(e)); busy(false); }
   };

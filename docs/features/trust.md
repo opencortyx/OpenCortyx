@@ -43,50 +43,70 @@ The page has two tabs.
 - Entries are embedded when you save them, so they show up in search and answers at once.
 - **Recent edits** lists what changed lately, so you can review what others added.
 
-## Nodes & Relationships
+## Kinds of thing in your data
 
-This page shows every node type and relationship type in your workspace, built-in or discovered,
-in one place.
-
-![Nodes and relationships](../assets/screenshots/nodes-relationships.png)
-
-### How to use it
-
-1. Type in **Search types...** to find a type.
-2. Click the switch on a type to turn it off. A type that is off is hidden from the graph and is not
-   extracted any more. Click it again to turn it back on.
-3. Click the pencil to edit a type's description. The model reads these descriptions during
-   extraction, so a precise description gives better results.
-4. Use **Enable all** or **Disable all** to change every type at once.
+Every kind of thing in your workspace, and how it connects, is checked in one place: the
+[Mapper](integration.md#mapper). A file's kinds (Customer, Order…) are named, identified and
+connected there, and **Found by extractors** lists the kinds extractors found in documents and in
+the text of records (Person, Product…), each with a switch: a kind that is off is hidden from the
+graph and is not extracted any more.
 
 ### Match the same record across files (Resolution)
 
-Each record you ingest becomes its own node, even when another file has a record with the same id.
-Resolution is how you tell OpenCortyx when two records are the same thing, for example the same
-employee in two files. Nothing is matched until you set it, and it is set per node type.
+A thing's identifier already makes the same id the same node. Resolution goes further: it says when
+two records are the same thing even when they come from different files or are spelled
+differently, for example the same employee in two HR exports. It is set per kind.
 
-1. Click the pencil on a node type, for example `Lead`. Its editor opens at the top of the page.
-2. Scroll to **Resolution**. The fields listed are the ones real records of this type carry.
-3. Under **Identified by**, click the field (or fields) that identify a record, for example
+1. Open the [Mapper](integration.md#mapper), pick a file, and on the kind's card open **Same thing
+   across files**. (For a kind an extractor creates, use that extractor's **Resolution** section.)
+2. Under **Identified by**, click the field (or fields) that identify a record, for example
    `employee_id`. Pick two fields, such as `name` and `country`, when only both together are unique.
-4. Pick a **Scorer**:
+3. Pick a **Scorer**:
    - **Exact (same values)**: the values must be equal once tidied up. A match is linked
      automatically.
    - **Similar (close spellings)**: "Acme Corp" can match "Acme Corporation". Set **Apply
      automatically at** and **Send for review at**. A match above the first is linked on its own,
      one between the two waits in the [Review Queue](#review-queue).
-5. Under **Never compare**, click any field whose differences do not matter, such as notes.
-6. Press **Save resolution**. From now on, every new asset is matched after it is ingested.
-7. Press **Re-check existing data** to match the records that are already in as well.
+4. Under **Never compare**, click any field whose differences do not matter, such as notes.
+5. Press **Save resolution**. From now on, every new asset is matched after it is ingested.
+6. Press **Re-check existing data** to match the records that are already in as well.
 
 When two records match, they are linked as the same thing, values one is missing are added from the
 other, and different values are kept on both and flagged in the Review Queue. Nothing is
-overwritten. A type with resolution set shows a small link icon next to its name.
+overwritten. Renaming a kind in the Mapper keeps its Resolution.
 
-### Good to know
+**When a match is not trusted on its score alone.** A wrong link does more harm than a missing one,
+so by default:
 
-- The counter at the top shows how many types are on out of the total.
-- A new type needs no database change: properties are stored as JSON.
+- Two records whose other fields **disagree** (two people called John Smith with different emails)
+  are not joined; the pair waits in the Review Queue.
+- Two records whose identities are only **similar** ("Andersen" and "Anderson") are joined only
+  when another field agrees; otherwise the pair waits in the Review Queue.
+- Under **Must agree**, pick fields that make two records different things whenever they differ, such
+  as a date of birth. Such a pair is never joined and never sent for review.
+- **Names from extractors** decides whether two files' "John Smith" start as one record (**One per
+  name**) or as two that only these rules can join (**One per name per file**).
+
+The first two are the Settings > Quality switches "Similar names need a second field" and
+"Disagreeing matches wait for a person"; each type can override them.
+
+### Is matching right? (Review > Quality)
+
+Tuning matching without examples is guessing. Review > **Quality** shows, for every type, the pairs
+people labelled "same" or "different" and how the type's rule scores on them.
+
+1. Labels come from your answers in the Review Queue, from **Check automatic merges** (a random
+   sample of joins nobody has looked at - answer **Same** or **Different**; "Different" also splits
+   the pair), and from **Import labelled pairs**: one pair a line as `type,first,second,same`, or the
+   JSON the API takes. Public sets such as DBLP-ACM or Abt-Buy fit this shape.
+2. Pick a type to see its score: **false merges** (labelled different, joined - each one listed),
+   precision, recall, the pairs a person would have to review, and the ones it missed.
+3. Change a setting under **Try other settings** and press **Score these settings**: the new score
+   shows beside the current one before anything is saved. **Save settings** when it is better.
+
+A merged record is rebuilt from its members whenever one joins or leaves, so splitting a member off,
+or deleting the file it came from, takes its values out of the merged record. A pair a person said
+is different is never joined again, even when the files are read again.
 
 ## Review Queue
 
@@ -127,6 +147,27 @@ Work through the four tabs:
 - Adding a new version of the same file is not a conflict: its values replace the old ones, and the
   earlier version stays in the data store's history.
 - Press **Refresh** to load decisions made since you opened the page.
+
+## Citations
+
+Every sentence of an answer is checked against the sources it cites, one at a time:
+
+- each number and each name the sentence states must be in the cited source - not merely somewhere
+  in what was retrieved ("the Berlin limit is 50,000" fails when 50,000 is Munich's);
+- facts joined from several records count only when the graph links those records;
+- with a **Citation check** model, the source must not contradict the sentence, which catches "did
+  not approve" against "approved" and a wrong "yes" to a policy that says no. Add it on the Models
+  page with **Use the recommended cross-encoder/nli-deberta-v3-xsmall** (about 290 MB, runs on the
+  CPU, loaded at start-up) and press **Download**. It reads each source sentence by sentence, and a
+  sentence it finds stated is supported even when the words differ. Settings > **Use the
+  citation-check model** switches it off and on;
+- a sentence whose citation is wrong but another source supports it keeps an answer, re-attributed,
+  and the wrong citation is reported.
+
+The Assistant marks the sentences no source supports. With **Unsupported sentences** set to
+`strict`, they are removed from the answer, and it abstains when nothing supported is left. Answers
+to API keys and MCP agents are strict by default, because nobody may see the mark there. A question
+can ask for either with `citation_policy`.
 
 ## Evaluations
 

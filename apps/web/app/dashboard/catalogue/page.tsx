@@ -114,7 +114,7 @@ export default function CataloguePage() {
       />
 
       {/* KPIs & Stats Metric Cards Strip - "…" while loading: a zero there read as "your data is gone" */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <div className="bg-white dark:bg-stone-900 p-3.5 rounded-xl border border-stone-200 dark:border-stone-800 shadow-xs space-y-1">
           <div className="p-2 rounded-lg bg-blue-50 dark:bg-blue-950 text-blue-600 w-max">
             <LayoutGrid size={18} />
@@ -139,7 +139,7 @@ export default function CataloguePage() {
           <div className="p-2 rounded-lg bg-emerald-50 dark:bg-emerald-950 text-emerald-600 w-max">
             <Database size={18} />
           </div>
-          <div className="text-[11px] text-stone-400 font-medium">Embedded Assets</div>
+          <div className="text-[11px] text-stone-400 font-medium" title="Records and passages search can find by meaning">Searchable records</div>
           <div className="text-lg font-bold text-stone-900 dark:text-stone-100">
             {loading ? "…" : stats?.embedded_nodes?.toLocaleString() ?? 0}
           </div>
@@ -164,16 +164,6 @@ export default function CataloguePage() {
         </div>
 
         <div className="bg-white dark:bg-stone-900 p-3.5 rounded-xl border border-stone-200 dark:border-stone-800 shadow-xs space-y-1">
-          <div className="p-2 rounded-lg bg-blue-50 dark:bg-blue-950 text-blue-600 w-max">
-            <Fingerprint size={18} />
-          </div>
-          <div className="text-[11px] text-stone-400 font-medium">Unique Fingerprints</div>
-          <div className="text-lg font-bold text-stone-900 dark:text-stone-100">
-            {loading ? "…" : new Set(assets.map((m) => m.fingerprint).filter(Boolean)).size}
-          </div>
-        </div>
-
-        <div className="bg-white dark:bg-stone-900 p-3.5 rounded-xl border border-stone-200 dark:border-stone-800 shadow-xs space-y-1">
           <div className="p-2 rounded-lg bg-violet-50 dark:bg-violet-950 text-violet-600 w-max">
             <Library size={18} />
           </div>
@@ -192,7 +182,7 @@ export default function CataloguePage() {
               <span className="text-[10px] text-stone-400 font-normal">({collections.length})</span>
             </h2>
             <span className="text-[11px] text-stone-400">
-              Deleting a collection removes every node scoped to it
+              Deleting a collection deletes every file in it, from every store
             </span>
           </div>
           <div className="divide-y divide-stone-100 dark:divide-stone-800">
@@ -298,10 +288,10 @@ export default function CataloguePage() {
                   const kind = m.kind || "document";
                   const schemaDef =
                     kind === "structured"
-                      ? { label: "Schema · auto · editable", href: "/dashboard/mapper", tone: "blue" }
+                      ? { label: "Schema · auto · editable", href: `/dashboard/mapper?asset=${m.id}`, tone: "blue" }
                       : kind === "semistructured"
-                        ? { label: "Keys (auto)", href: "/dashboard/mapper", tone: "purple" }
-                        : { label: "Document mapping", href: "/dashboard/mapper", tone: "stone" };
+                        ? { label: "Keys (auto)", href: `/dashboard/mapper?asset=${m.id}`, tone: "purple" }
+                        : { label: "Found by extractors", href: "/dashboard/mapper?asset=documents", tone: "stone" };
                   const KindIcon = kind === "structured" ? Table2 : kind === "semistructured" ? Braces : FileText;
                   const kindTone =
                     kind === "structured"
@@ -433,10 +423,11 @@ export default function CataloguePage() {
           assetName={toDelete.label || toDelete.table || "this asset"}
           onClose={() => setToDelete(null)}
           onDeleted={(res) => {
-            setAssets((prev) => prev.filter((x) => x.id !== res.id));
-            setFlash(
-              `Deleted “${res.label || "asset"}” — ${res.nodes.toLocaleString()} nodes and ${res.edges.toLocaleString()} edges removed.`
-            );
+            const gone = toDelete;
+            setAssets((prev) => prev.filter((x) => x.id !== gone.id));
+            setFlash(res.status === "done"
+              ? `Deleted “${gone.label || gone.table || "asset"}” from every store — ${res.nodes.toLocaleString()} nodes, checked afterwards: nothing left.`
+              : `Deleted “${gone.label || gone.table || "asset"}”, but not every store confirmed. Retry it in Settings → Data deletion.`);
             load();               // refresh the KPI counts from the server
           }}
         />

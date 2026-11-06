@@ -15,6 +15,20 @@ Beside the attributes, a spec says HOW a match is scored and gated:
   * relations  which outcomes may be applied: SAME (link), SUPPORTS, EXTENDS (add a missing value),
                CONTRADICTS (flag a differing value)
 
+And when a match is NOT trusted on its score alone (a wrong link does more harm than a missing one):
+
+  * distinguish   "must agree": fields that, when both records have them and they differ, make two
+                  records different things whatever their identity says (two John Smiths with
+                  different dates of birth). Recorded as DISTINCT; never joined, never reviewed.
+  * corroborate   when an automatic match also needs a second field to agree: "similar" (only
+                  for a similar, not equal, identity), "always", "never", or "default" (the
+                  workspace setting `resolution_corroborate`: on = "similar").
+  * conflict_review  a match whose compared fields disagree waits for a person instead of being
+                  applied with the disagreement flagged (default: the workspace setting).
+  * name_scope    for named things an extractor writes: "workspace" (one node per name in the
+                  workspace, the default) or "asset" (one per name per file, so two files' "John
+                  Smith" are two nodes until resolution, with the rules above, says they are one).
+
 A type without identity fields is not resolved as a record. That is the safe default: two nodes
 are only ever called the same because a person said which attributes make them the same.
 
@@ -26,6 +40,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, replace
+from typing import Optional
 
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -33,6 +48,8 @@ KEY = "resolution"
 NODE_KINDS = ("node", "entity")
 RELATIONS = ("SAME", "SUPPORTS", "EXTENDS", "CONTRADICTS")
 SCORERS = ("exact", "similar")
+CORROBORATE = ("default", "never", "similar", "always")
+NAME_SCOPES = ("workspace", "asset")
 #: The dates the substrate stamps on every write (`repo.AUDIT_DATE_KEYS`): when a node was written,
 #: not anything its source said, so two records ingested on different days never "disagree" on them.
 STAMPED = ("created_date", "modified_date")
@@ -87,6 +104,10 @@ class ResolutionSpec:
     review: float = 0.80                # sent for review at or above this score
     references: tuple = ()              # Reference: this type's foreign keys
     header_references: bool = True      # documents: link the references their header names
+    distinguish: tuple[str, ...] = ()   # "must agree": a difference here means two different things
+    corroborate: str = "default"        # default | never | similar | always
+    conflict_review: Optional[bool] = None  # None: the workspace setting
+    name_scope: str = "workspace"       # workspace | asset
 
     @property
     def active(self) -> bool:
@@ -109,7 +130,9 @@ class ResolutionSpec:
                 "ignore": list(self.ignore), "enabled": self.enabled, "relations": list(self.relations),
                 "scorer": self.scorer, "auto": self.auto, "review": self.review,
                 "references": [r.to_dict() for r in self.references],
-                "header_references": self.header_references}
+                "header_references": self.header_references,
+                "distinguish": list(self.distinguish), "corroborate": self.corroborate,
+                "conflict_review": self.conflict_review, "name_scope": self.name_scope}
 
     @classmethod
     def parse(cls, raw) -> "ResolutionSpec | None":
@@ -123,7 +146,28 @@ class ResolutionSpec:
                    relations=relations if "relations" in raw else RELATIONS,
                    scorer=raw.get("scorer") if raw.get("scorer") in SCORERS else "exact",
                    auto=auto, review=min(_unit(raw.get("review"), 0.80), auto), references=refs,
-                   header_references=bool(raw.get("header_references", True)))
+                   header_references=bool(raw.get("header_references", True)),
+                   distinguish=_names(raw.get("distinguish")),
+                   corroborate=raw.get("corroborate") if raw.get("corroborate") in CORROBORATE else "default",
+                   conflict_review=(None if raw.get("conflict_review") is None else bool(raw.get("conflict_review"))),
+                   name_scope=raw.get("name_scope") if raw.get("name_scope") in NAME_SCOPES else "workspace")
+
+
+def effective(spec: "ResolutionSpec", *, corroborate: Optional[bool] = None,
+              conflict_review: Optional[bool] = None) -> "ResolutionSpec":
+    """`spec` with its "default" gates replaced by the workspace settings (or the values given), so
+    the decision function reads only the spec."""
+    if corroborate is None or conflict_review is None:
+        from opencortyx.core.config import runtime as rc
+        try:
+            corroborate = rc.resolution_corroborate() if corroborate is None else corroborate
+            conflict_review = rc.resolution_conflict_review() if conflict_review is None else conflict_review
+        except Exception:                                    # noqa: BLE001 - settings not loaded: safe side
+            corroborate = True if corroborate is None else corroborate
+            conflict_review = True if conflict_review is None else conflict_review
+    mode = spec.corroborate if spec.corroborate != "default" else ("similar" if corroborate else "never")
+    review = spec.conflict_review if spec.conflict_review is not None else bool(conflict_review)
+    return replace(spec, corroborate=mode, conflict_review=review)
 
 
 def _unit(value, default: float) -> float:

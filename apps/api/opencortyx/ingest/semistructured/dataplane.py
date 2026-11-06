@@ -84,6 +84,8 @@ async def store_records(workspace_id, asset_id, rows: list[dict], *, name: str, 
     """Replace the asset's records in Delta, register the asset, and write its fields as profiled
     Attribute nodes under the asset node. `external` ({format, location, connector_id}) is a source
     read in place - a MongoDB collection: registered and profiled from what was read, not copied."""
+    from opencortyx.core.dataplane.tombstones import guard_assets
+    await guard_assets(workspace_id, [asset_id])   # a forgotten asset writes no data
     import anyio
 
     from opencortyx.core.dataplane import assets

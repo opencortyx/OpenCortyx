@@ -19,7 +19,7 @@ def admin(live_api, tenants, rec):
 
 
 @pytest.mark.parametrize("scenario", scenarios("EXTR"), ids=str)
-def test_extractor(scenario, rec, admin):
+def test_extractor(scenario, rec, admin, tenants_b):
     p = scenario.params
     wf = scenario.workflow
     if wf.startswith("preview"):
@@ -32,8 +32,59 @@ def test_extractor(scenario, rec, admin):
         listed = admin.get(BASE).json().get("templates", [])
         name = p["body"].get("name")
         rec.verify("nothing was saved", not any(t.get("name") == name for t in listed) or not name or not str(name).strip())
+    elif wf == "extractor names":
+        _names(p["case"], rec, admin, tenants_b)
     else:
         _lifecycle(p, rec, admin)
+
+
+@pytest.fixture
+def tenants_b(live_api, tenants, rec):
+    c = Client(live_api, principal_headers("admin", tenants["B"]), rec)
+    yield c
+    c.close()
+
+
+def _names(case, rec, admin, other):
+    import uuid
+    mech = {"ref": "unstructured.dictionary", "terms": ["Oslo"]}
+    body = lambda name, **kw: {"name": name, "mechanism": mech, "emit": {"nodes": [{"type": "Term", "name": "$term"}]}, **kw}
+    a, b = f"regression-{uuid.uuid4().hex[:8]}", f"regression-{uuid.uuid4().hex[:8]}"
+    made = []
+    try:
+        r = admin.post(BASE, json=body(a, new=True))
+        rec.verify("a new name saves", r.status_code == 200, f"{r.status_code} {r.text[:160]}")
+        made.append(r.json()["id"])
+        if case == "new name is taken":
+            r = admin.post(BASE, json=body(a, new=True))
+            rec.verify("refused as taken", r.status_code == 409 and a in r.json().get("detail", ""), f"{r.status_code} {r.text[:160]}")
+        elif case == "rename keeps one extractor":
+            r = admin.post(BASE, json=body(b, id=made[0]))
+            names = [t["name"] for t in admin.get(BASE).json()["templates"]]
+            rec.verify("renamed in place", r.status_code == 200 and r.json()["id"] == made[0], r.text[:160])
+            rec.verify("one extractor, under the new name", b in names and a not in names, names)
+        elif case == "rename onto a taken name":
+            r2 = admin.post(BASE, json=body(b, new=True))
+            made.append(r2.json()["id"])
+            r = admin.post(BASE, json=body(b, id=made[0]))
+            names = [t["name"] for t in admin.get(BASE).json()["templates"]]
+            rec.verify("refused", r.status_code == 409, f"{r.status_code} {r.text[:160]}")
+            rec.verify("both kept as they were", a in names and b in names, names)
+        elif case == "rename a built-in":
+            builtin = next(t for t in admin.get(BASE).json()["templates"] if t["name"].startswith("builtin:"))
+            r = admin.post(BASE, json=body(b, id=builtin["id"]))
+            rec.verify("refused", r.status_code == 403, f"{r.status_code} {r.text[:160]}")
+        elif case == "edit an id that is not this workspace's":
+            r = other.post(BASE, json=body(b, id=made[0]))
+            rec.verify("not found from another workspace", r.status_code == 404, f"{r.status_code} {r.text[:160]}")
+            names = [t["name"] for t in admin.get(BASE).json()["templates"]]
+            rec.verify("unchanged", a in names and b not in names, names)
+        elif case == "try it on a file that does not exist":
+            r = admin.post(f"{BASE}/preview", json={**body("x"), "sample_asset": str(uuid.uuid4())})
+            rec.verify("says the file has nothing to read", r.status_code == 422, f"{r.status_code} {r.text[:160]}")
+    finally:
+        for tid in made:
+            admin.delete(f"{BASE}/{tid}")
 
 
 def _preview(p, rec, admin):

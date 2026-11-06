@@ -1,7 +1,9 @@
 "use client";
 
 /**
- * Step 1 of every pipeline: the mapping that reads the source, and two options.
+ * Step 1 of every pipeline: the mapping that reads the source, and two options. The mapping is a
+ * rule mapping, shown with the full UI (lib/simple.ts) or when one is already bound: what a file
+ * means is otherwise detected, and corrected in the Mapper, for every pipeline at once.
  *
  * The same form for documents, tables and JSON. A bound mapping declares what a source becomes;
  * without one the default walker reads it. The options behave the same for every kind:
@@ -17,6 +19,7 @@ import Link from "next/link";
 import { ExternalLink, Loader2 } from "lucide-react";
 import SchemaMappingPicker from "@/components/pipelines/SchemaMappingPicker";
 import { contextV2Api } from "@/lib/api/contextV2";
+import { FULL_UI } from "@/lib/simple";
 import type { PipelineKind } from "@/components/pipelines/model";
 import { AnchorSection, MappingOption } from "./shared";
 
@@ -36,15 +39,17 @@ export default function ReadingRuleConfig({ kind, config, onChange, mappings }: 
 
   return (
     <div className="space-y-4">
-      <AnchorSection title="Mapping">
-        <SchemaMappingPicker
-          options={mappings} value={bound}
-          onChange={(ids) => onChange({ mapping_ids: ids })}
-          engineHref="/dashboard/mapper"
-          accent="teal"
-          emptyHint="none: read automatically" />
-        {kind === "semistructured" && <DeclaredPaths mappingId={bound[0]} />}
-      </AnchorSection>
+      {(FULL_UI || bound.length > 0) && (
+        <AnchorSection title="Mapping">
+          <SchemaMappingPicker
+            options={mappings} value={bound}
+            onChange={(ids) => onChange({ mapping_ids: ids })}
+            engineHref="/dashboard/mapper/rules"
+            accent="teal"
+            emptyHint="none: read automatically" />
+          {kind === "semistructured" && <DeclaredPaths mappingId={bound[0]} />}
+        </AnchorSection>
+      )}
 
       <AnchorSection title="Options">
         <Option

@@ -9,7 +9,9 @@ import IngestOutcomeCard from "@/components/authoring/IngestOutcomeCard";
 import {
   contextV2Api, type IngestOutcome, type OutcomeStep, type Pipeline, type SchemaMappingRecord, type UploadBatch,
 } from "@/lib/api/contextV2";
+import { costApi, tokens, usd, type CostEstimate } from "@/lib/api/governance";
 import { uploadAll } from "@/lib/uploadQueue";
+import { FULL_UI } from "@/lib/simple";
 import { buildStages, newStage, type PipelineKind } from "@/components/pipelines/model";
 
 /**
@@ -53,9 +55,10 @@ function kindOf(file: File): FileKind {
 
 /** Custom: what a person who knows they want it can set. Empty = the defaults. */
 /** `inputs`: per extractor, the columns or keys (tables, JSON) or sections (documents) it reads; empty = all */
+/** `collectionId`: the collection the files go in - what access policies give groups (Users & access) */
 type CustomOptions = { pipelines: PipelineChoice; mappings: string[]; extractors: string[]; inputs: Record<string, string>;
-                       tags: string[] };
-const NO_CUSTOM: CustomOptions = { pipelines: { ...NO_CHOICE }, mappings: [], extractors: [], inputs: {}, tags: [] };
+                       tags: string[]; collectionId: string };
+const NO_CUSTOM: CustomOptions = { pipelines: { ...NO_CHOICE }, mappings: [], extractors: [], inputs: {}, tags: [], collectionId: "" };
 
 /** The columns (CSV header) or top-level keys (first JSON record) of the dropped files, as suggestions. */
 async function fieldsOf(files: File[]): Promise<string[]> {
@@ -194,6 +197,7 @@ function uploadOptions(graph: GraphOptions, custom: CustomOptions) {
     extractorInputs: Object.fromEntries(custom.extractors.map((n) => [n, (custom.inputs[n] || "").split(",")
       .map((x) => x.trim()).filter(Boolean)])),
     extractKnowledge: graph.knowledge, wholeData: graph.wholeData,
+    ...(custom.collectionId ? { collectionId: custom.collectionId } : {}),
   };
 }
 
@@ -269,7 +273,7 @@ function GraphOptionsChoice({ kinds, value, onChange }: {
       <legend className="px-1 text-xs text-stone-500 dark:text-stone-400">Knowledge graph</legend>
       {option("shape", records ? "Structure only" : "Summary only", `The data is kept and searchable; the graph gets ${shape}.`)}
       {records && option("knowledge", "Extract knowledge",
-        "Each record becomes a node of its kind (Customer, Account…) with its identifier, name, text and dates. Change the fields in Customize → Mappings.")}
+        "Each record becomes a node of its kind (Customer, Account…) with its identifier, name, text and dates. Correct what was found in the Mapper.")}
       {option("whole", "Add the whole data", [records && "Every row, key and value", documents && "every heading, paragraph and table"]
         .filter(Boolean).join("; ") + " as nodes. Large files make large graphs.")}
     </fieldset>
@@ -277,9 +281,10 @@ function GraphOptionsChoice({ kinds, value, onChange }: {
 }
 
 /**
- * Custom — folded, for people who already know they want it: a pipeline per kind of file, mappings
- * that shape the graph for tables and JSON, extractors that read documents, tags. Everything here is
- * optional; empty means the defaults.
+ * Custom — folded, for people who already know they want it: a pipeline per kind of file, extractors,
+ * tags. Everything here is optional; empty means the defaults. Nothing is mapped before an upload:
+ * detection reads the file, and the Mapper corrects what it found. Rule mappings chosen up front stay
+ * with the full UI (lib/simple.ts).
  */
 function CustomSection({ kinds, files, value, onChange }: {
   kinds: FileKind[]; files: File[]; value: CustomOptions; onChange: (v: CustomOptions) => void;
@@ -293,7 +298,7 @@ function CustomSection({ kinds, files, value, onChange }: {
   const documents = kinds.includes("unstructured");
   useEffect(() => {
     if (!open) return;
-    if (records.length && mappings === null) {
+    if (FULL_UI && records.length && mappings === null) {
       contextV2Api.listSchemaMappings(undefined, true)
         .then((r) => setMappings((r.items || []).filter((m) => (records as string[]).includes(String(m.paradigm)))))
         .catch(() => setMappings([]));
@@ -312,8 +317,25 @@ function CustomSection({ kinds, files, value, onChange }: {
     }
   }, [open, records.length, documents, mappings, extractors]);  // eslint-disable-line react-hooks/exhaustive-deps
 
+  const [collections, setCollections] = useState<{ id: string; name: string }[] | null>(null);
+  useEffect(() => {
+    if (open && collections === null) {
+      contextV2Api.collections().then((r: any) => setCollections((r?.collections || []).map((c: any) => ({ id: String(c.id), name: c.name }))))
+        .catch(() => setCollections([]));
+    }
+  }, [open, collections]);
+  // What each chosen extractor cost per 1,000 records on its last calls (previews included).
+  const [costs, setCosts] = useState<Record<string, CostEstimate | null>>({});
+  useEffect(() => {
+    for (const n of value.extractors) {
+      if (n in costs) continue;
+      setCosts((c) => ({ ...c, [n]: null }));
+      costApi.estimate(`extract:${n}`, 1000).then((e) => setCosts((c) => ({ ...c, [n]: e }))).catch(() => {});
+    }
+  }, [value.extractors]);  // eslint-disable-line react-hooks/exhaustive-deps
+
   const set = Object.values(value.pipelines).filter(Boolean).length + value.mappings.length
-    + value.extractors.length + (value.tags.length ? 1 : 0);
+    + value.extractors.length + (value.tags.length ? 1 : 0) + (value.collectionId ? 1 : 0);
   const toggle = (list: string[], v: string) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
   const [saved, setSaved] = useState("");
   const saveSetup = async () => {
@@ -343,18 +365,18 @@ function CustomSection({ kinds, files, value, onChange }: {
               className="w-full flex items-center gap-1.5 px-3 py-2 text-left text-stone-700 dark:text-stone-300">
         <ChevronRight size={14} className={`transition-transform ${open ? "rotate-90" : ""}`} />
         <span className="font-medium">Custom</span>
-        <span className="text-xs text-stone-400">{set ? `${set} set` : "optional - pipeline, mapping, extractors, tags"}</span>
+        <span className="text-xs text-stone-400">{set ? `${set} set` : `optional - pipeline, ${FULL_UI ? "mapping, " : ""}extractors, tags`}</span>
       </button>
       {open && (
         <div className="space-y-4 px-3 pb-3">
           <PipelinePicker kinds={kinds} value={value.pipelines} onChange={(pipelines) => onChange({ ...value, pipelines })} />
 
-          {records.length > 0 && (
+          {FULL_UI && records.length > 0 && (
             <div>
               <p className="text-sm font-medium text-stone-800 dark:text-stone-200">Shape the graph with a mapping</p>
               <p className="text-xs text-stone-500 dark:text-stone-400 mb-1">
                 The nodes and edges a mapping declares, instead of what detection finds.{" "}
-                <Link href="/dashboard/mapper" className="text-primary hover:underline">Create or edit mappings</Link>
+                <Link href="/dashboard/mapper/rules" className="text-primary hover:underline">Create or edit rule mappings</Link>
               </p>
               {mappings === null && <Loader2 className="animate-spin text-stone-400" size={14} />}
               {mappings?.length === 0 && <p className="text-xs text-stone-400">No mappings for tables or JSON yet.</p>}
@@ -398,12 +420,36 @@ function CustomSection({ kinds, files, value, onChange }: {
                     list="add-fields" value={value.inputs[n] || ""}
                     placeholder={records.length ? "all columns / keys, or e.g. notes, summary" : "all sections, or e.g. Pricing, Terms"}
                     onChange={(e) => onChange({ ...value, inputs: { ...value.inputs, [n]: e.target.value } })} />
+                  <span className="shrink-0 text-[11px] text-stone-400" title="Measured on this extractor's last calls; a preview counts">
+                    {costs[n]?.estimate ? `≈ ${tokens(costs[n]!.estimate!.tokens)} tokens${costs[n]!.estimate!.cost_usd ? ` (${usd(costs[n]!.estimate!.cost_usd)})` : ""} per 1,000 records`
+                      : costs[n] ? "cost not measured yet - preview it first" : ""}
+                  </span>
                 </label>
               ))}
               <datalist id="add-fields">{fields.map((f) => <option key={f} value={f} />)}</datalist>
             </div>
           )}
 
+          <div>
+            <label htmlFor="add-collection" className="block text-sm font-medium text-stone-800 dark:text-stone-200 mb-1">Collection</label>
+            <select id="add-collection" value={value.collectionId}
+              onChange={async (e) => {
+                if (e.target.value !== "__new") { onChange({ ...value, collectionId: e.target.value }); return; }
+                const name = prompt("Name the new collection")?.trim();
+                if (!name) return;
+                try {
+                  const c = await contextV2Api.createCollection(name);
+                  setCollections((cs) => [...(cs || []), { id: c.id, name: c.name }]);
+                  onChange({ ...value, collectionId: c.id });
+                } catch (err: any) { alert(err?.response?.data?.detail || "Could not create the collection."); }
+              }}
+              className="w-full rounded border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-900 px-2 py-1.5 text-sm">
+              <option value="">None - the whole workspace reads it</option>
+              {(collections || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              <option value="__new">+ New collection…</option>
+            </select>
+            <p className="text-[11px] text-stone-400 mt-1">Who reads a collection is set in Settings → Users &amp; access.</p>
+          </div>
           <div>
             <label htmlFor="add-tags" className="block text-sm font-medium text-stone-800 dark:text-stone-200 mb-1">Tags</label>
             <TagInput id="add-tags" value={value.tags} onChange={(tags) => onChange({ ...value, tags })}

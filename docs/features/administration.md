@@ -24,6 +24,24 @@ Decide who can use the workspace and what they can do, and create keys for agent
 | `editor` | everything a viewer can, plus ingest, curate, review and edit |
 | `admin` | everything an editor can, plus manage users, API keys, models and settings |
 
+**Decide who reads which collection:**
+
+A collection is a group of files (pick one in Add data, under Custom > **Collection**). A policy gives
+a **group** read access to a collection, up to a sensitivity.
+
+1. Give people groups: type a group (for example `finance`) under their email under **Members**. An
+   API key gets its groups when it is created. A person's role is always one of their groups too.
+2. Under **Who reads which collection**, pick a group, a collection (or **Every collection**) and
+   **Up to** (`normal` is the usual; `confidential` also shows personal-data columns), then
+   **Add policy**.
+3. Use **What does this person or group read?** to check before relying on it.
+
+The first policy turns access control on for the whole workspace: from then on everyone reads only
+the collections a policy gives their groups, plus files in no collection, which stay workspace-wide.
+Admins read every collection. Removing the last policy turns it off. The rule applies to every
+read - answers, search, the graph, browsing and the Data tab - and something a person may not read
+is "not found", never "forbidden".
+
 **Create a key for an agent or script:**
 
 1. Under **Agent API keys**, pick the role the key acts with.
@@ -38,6 +56,45 @@ Decide who can use the workspace and what they can do, and create keys for agent
   `opencortyx reset-password <email>` (Windows: `bin\opencortyx.ps1 reset-password <email>`). It asks
   for the new password twice, hidden, and also re-enables the account if it was disabled.
 - Revoke a key you no longer use. Anything using it stops working at once.
+- Policies and groups take effect within 30 seconds on every server process.
+
+## Cost & usage
+
+Settings > **Cost & usage** shows what the models cost: this month against the budget, by use
+(answers, each extractor, summaries, the answer checks), by model, and for each ingest run the cost
+per 1,000 records. "Measured, not estimated" says how much of it the provider or the local tokenizer
+counted; the rest is estimated at four characters a token and marked as such.
+
+- Set a **Monthly budget** in paid tokens and, if you want, **Stop paid calls at the budget**. Free
+  models (the built-in one, your own server) are never stopped. A run that reads files with a paid
+  model pauses at the budget, keeping what it has read, and can be resumed.
+- Set each paid model's price on the Models page; costs are its tokens times its price.
+- When you choose extractors in Add data, each shows what it cost per 1,000 records on its last calls.
+  Run a preview of a new extractor once to measure it.
+- Extraction answers are cached: reading an unchanged record again costs nothing. **Clear cache**
+  after changing a model in place.
+
+## Data deletion
+
+Settings > **Data deletion** (admins) forgets a person, a company or any record, everywhere.
+
+1. Type the name and pick the record.
+2. Read what would go: its records (and a merged record of them), records linked only to it, the
+   chats and labels that name it, and the **documents that also mention it** - tick the ones to forget
+   whole; the others are kept and still mention the name.
+3. Type the name again to confirm, and press **Forget everywhere**.
+
+Each deletion is listed under **Deletion history** with one line per store and a **proof**: what a
+search of every store found afterwards. One that did not finish says what is left and has **Retry**.
+What was forgotten is kept from coming back - it is refused from a synced folder, an upload or a
+backup restore - and only a hash of it is stored. **Allow again** lifts that.
+
+Deleting a file (Assets) removes it from every store the same way: its records, search points, table
+rows (the table history is cleaned at once), evidence, cached answers, the stored upload, runs, and
+chat citations; a merged record it was part of is rebuilt without it. An admin can tick **Also keep it
+from coming back** to forget it. Leave it off to upload a corrected version later. Data read from a
+customer's own database or lake is never written to: OpenCortyx forgets what it read, and the source
+still holds it.
 
 ## Models
 

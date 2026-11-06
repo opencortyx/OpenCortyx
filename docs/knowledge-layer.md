@@ -489,10 +489,12 @@ decision for Review with every value and its file (`publish.conflict_decisions`)
 
 Nothing is read out of a field's text unless an extractor is run over it: chosen in Add data's
 Custom section with the columns, keys or sections it reads (`tasks/enrich.book_extractors`, run when
-the upload's run finishes), or built in Custom Extractors over a type's records. The named-things
-mechanism (`unstructured.ner`) asks the extraction model for entities `{name, type}` and the
-relationships between them; each becomes a node of the type the model named, identified by
-`templates.entity_id(type, normalised name)`.
+the upload's run finishes), or built in Custom Extractors over a type's records. The model method
+(`unstructured.ner`, `templates._model_records`) builds one prompt from the extractor's form - its
+kinds, fields, links and input fields, each named by the person or left to the model, each with the
+person's instruction - and keeps only what the form allows from the answer: things `{name, type,
+fields}`, link rows `{name, type, relation, object, object_type}` written by an edge `over: "links"`,
+and fields on the input. Each thing is identified by `templates.entity_id(type, normalised name)`.
 
 **Reconcile.** Everything an extractor or a publish writes goes through one function,
 `resolution/engine.reconcile`: per type, one rule (the type's ResolutionSpec, or for named things

@@ -18,17 +18,18 @@ def test_the_same_name_is_one_thing_whatever_its_spelling_and_another_type_is_an
 
 
 @pytest.mark.anyio
-async def test_the_model_s_entities_and_relationships_become_records(monkeypatch):
+async def test_the_model_s_things_and_links_become_records_and_link_rows(monkeypatch):
+    """Saved before the form (no `kinds`): one kind the model names, linked as the text says."""
     async def complete(prompt, **kw):
         assert "Alice Smith joined Acme." in prompt
-        return ('{"entities":[{"name":"Alice Smith","type":"person"},{"name":"Acme","type":"Org"},'
-                '{"name":"Acme","type":"Org"}],"relationships":[{"subject":"Alice Smith","relation":"joined",'
+        return ('{"things":[{"name":"Alice Smith","type":"person"},{"name":"Acme","type":"Org"},'
+                '{"name":"Acme","type":"Org"}],"links":[{"subject":"Alice Smith","relation":"joined",'
                 '"object":"Acme"},{"subject":"Bob","relation":"knows","object":"Acme"}]}')
     monkeypatch.setattr(templates, "complete", complete)
-    recs = await templates._ner_records("Alice Smith joined Acme.")
-    assert recs[:2] == [{"name": "Alice Smith", "type": "Person"}, {"name": "Acme", "type": "Org"}], "each named once"
-    assert recs[2:] == [{"name": "Alice Smith", "type": "Person", "relation": "JOINED", "object": "Acme",
-                         "object_type": "Org"}], "a relationship only between named things it found"
+    out = await templates._model_records("Alice Smith joined Acme.")
+    assert out["records"] == [{"name": "Alice Smith", "type": "Person"}, {"name": "Acme", "type": "Org"}], "each named once"
+    assert out["links"] == [{"name": "Alice Smith", "type": "Person", "relation": "JOINED", "object": "Acme",
+                             "object_type": "Org"}], "a link only between named things it found"
 
 
 @pytest.mark.anyio
@@ -36,7 +37,7 @@ async def test_an_unreadable_answer_finds_nothing(monkeypatch):
     async def complete(prompt, **kw):
         return "not json"
     monkeypatch.setattr(templates, "complete", complete)
-    assert await templates._ner_records("Alice joined Acme.") == []
+    assert await templates._model_records("Alice joined Acme.") == {"records": [], "links": []}
 
 
 @pytest.mark.anyio
@@ -57,13 +58,17 @@ async def test_the_model_is_shown_the_workspace_s_types_and_a_spelling_of_one_is
 
     async def complete(prompt, **kw):
         prompts.append(prompt)
-        return ('{"entities":[{"name":"Hawaii","type":"place"},{"name":"Q3","type":"Time period"},'
-                '{"name":"Dune","type":"novels"},{"name":"Emma","type":"Novels"}],"relationships":[]}')
+        return ('{"things":[{"name":"Hawaii","type":"place"},{"name":"Q3","type":"Time period"},'
+                '{"name":"Dune","type":"novels"},{"name":"Emma","type":"Novels"}],"links":[]}')
     monkeypatch.setattr(templates, "complete", complete)
-    recs = await templates._ner_records("Hawaii in Q3, reading Dune and Emma.", workspace_id=WS)
+
+    async def no_relations(ws):
+        return []
+    monkeypatch.setattr(templates, "_known_relations", no_relations)
+    out = await templates._model_records("Hawaii in Q3, reading Dune and Emma.", workspace_id=WS)
     assert "Types already used here: Place, Time_Period, Library." in prompts[0]
     assert prompts[0].endswith("TEXT:\nHawaii in Q3, reading Dune and Emma.")
-    assert [r["type"] for r in recs] == ["Place", "Time_Period", "Novels", "Novels"]
+    assert [r["type"] for r in out["records"]] == ["Place", "Time_Period", "Novels", "Novels"]
 
 
 # ── a detected link between the fields themselves ─────────────────────────────────────────────
