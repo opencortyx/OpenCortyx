@@ -13,28 +13,20 @@ from opencortyx.core.observability import get_logger
 log = get_logger(__name__)
 
 
-def _groups(user) -> list:
-    """Derive policy groups from the caller (default empty → full org access at 'normal')."""
-    g = []
-    for attr in ("role", "groups", "team"):
-        v = getattr(user, attr, None)
-        if isinstance(v, str):
-            g.append(v)
-        elif isinstance(v, (list, tuple)):
-            g.extend(v)
-    return g
-
-
 async def scoped_ctx(user, payload):
     """Build a scoped RetrieveContext from the request, carrying the per-query retrieval config."""
-    from opencortyx.core.security.scope import resolve_scope
-    allowed, max_sens = await resolve_scope(user.workspace_id, _groups(user))
+    from opencortyx.core.security.scope import resolve_scope, user_groups
+    allowed, max_sens = await resolve_scope(user.workspace_id, await user_groups(user),
+                                            admin=getattr(user, "role", None) == "admin")
+    narrowed = None
     if payload.collection_ids:   # explicit request narrows within what's allowed
+        from opencortyx.core.security.scope import NO_COLLECTION
         req = [uuid.UUID(c) for c in payload.collection_ids]
-        allowed = req if allowed is None else [c for c in req if c in set(allowed)]
+        # never an empty list: that would read as "every collection" further down
+        narrowed = req if allowed is None else ([c for c in req if c in set(allowed)] or [NO_COLLECTION])
     return RetrieveContext(
         workspace_id=user.workspace_id,
-        collection_ids=allowed, max_sensitivity=max_sens,
+        collection_ids=narrowed, access_collections=allowed, max_sensitivity=max_sens,
         retrievers=payload.retrievers, rerank=payload.rerank,
         k=payload.k, abstain_threshold=payload.abstain_threshold,
         as_of=getattr(payload, "as_of", None), as_of_ingest=getattr(payload, "as_of_ingest", None),
@@ -42,7 +34,17 @@ async def scoped_ctx(user, payload):
         decompose=getattr(payload, "decompose", None),
         # Default "knowledge": the assistant answers from INGESTED data unless asked otherwise, so a
         # workspace's own chat history can never become the evidence for a question about its data.
-        scope=(getattr(payload, "scope", None) or "knowledge"))
+        scope=(getattr(payload, "scope", None) or "knowledge"),
+        # An API key or an MCP agent may not show anyone the "unsupported" flag: strict by default.
+        citation_policy=_citation_policy(user, payload))
+
+
+def _citation_policy(user, payload) -> str:
+    from opencortyx.core.config import runtime as rc
+    asked = getattr(payload, "citation_policy", None)
+    if asked in ("flag", "strict"):
+        return asked
+    return rc.citation_policy(agent=getattr(user, "actor_type", "user") == "agent")
 
 
 def humanize_backend_error(e: Exception) -> str:
@@ -129,18 +131,9 @@ async def capture_assistant_chat(user: "CurrentUser", query: str, res: dict,
 
 
 async def month_token_spend(db, workspace_id) -> int:
-    """Total LLM tokens recorded in the audit log this calendar month (provider-neutral)."""
-    import datetime as _dt
-    start = _dt.datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    metas = (await db.execute(select(AuditLog.meta).where(
-        AuditLog.workspace_id == workspace_id, AuditLog.ts >= start))).scalars().all()
-    total = 0
-    for m in metas:
-        try:
-            total += int(((m or {}).get("tokens") or {}).get("total") or 0)
-        except Exception:
-            pass
-    return total
+    """Paid LLM tokens this calendar month (UTC), from the usage ledger (core/inference/usage.py)."""
+    from opencortyx.core.inference import usage
+    return await usage.month_spend(workspace_id, paid_only=True)
 
 
 async def enforce_budget(workspace_id):

@@ -1,6 +1,50 @@
 # Changelog
 
-## Unreleased
+## 0.2.0-beta.5 - 2026-11-06
+
+### Added
+- **Cost & usage.** Every model call is metered in one place - answers, each extractor, summaries,
+  the relevance and grounding checks - with its tokens counted by the provider or the local
+  tokenizer (estimates are marked as estimates). Settings > Cost & usage shows this month against
+  the budget, spend by use and by model, and each ingest run's cost per 1,000 records. The monthly
+  hard cap now also stops paid extraction: a run pauses with what it has read and can be resumed.
+  Add data shows what each chosen extractor cost per 1,000 records on its last calls. Prices are set
+  per model on the Models page. An extraction request answered before is answered from a cache
+  (deleted with its file), so reading an unchanged record again costs nothing.
+- **Resolution you can measure.** Review > Quality: label pairs "same" or "different" (from Review,
+  from checking automatic merges, from splitting, or imported - public sets such as DBLP-ACM fit),
+  and see the type's rule scored on them: false merges listed one by one, precision, recall, and
+  what a person would review. Change a setting and score it before saving. Works for every type an
+  extractor, a mapping or a reader writes.
+- **Safer matching, by default.** Two records whose fields disagree, or whose identities are only
+  similar with nothing else agreeing, wait for a person instead of being joined. A type can name
+  fields that **must agree** (a different date of birth: never the same person), and can keep an
+  extractor's names **per file** so two files' "John Smith" are two records until resolution says
+  otherwise. A person's "different" is never re-joined; a merged record can be split, and it is
+  rebuilt from its members, so a split or a deleted file takes its values out of it.
+- **Every citation checked against its sentence.** An answer's sentences are each checked against
+  the sources they cite - numbers and names must be in that source, not somewhere in the context;
+  facts joined across records count only when the graph links them; a wrong citation is reported and
+  re-attributed. An optional **Citation check** model also catches negation and wrong yes/no answers
+  ("Yes, sublicences are permitted" against a policy that forbids them): on the Models page, **Use
+  the recommended cross-encoder/nli-deberta-v3-xsmall** (about 290 MB, Apache-2.0, runs on the CPU)
+  and press Download. It is loaded at start-up, reads each source sentence by sentence, and can be
+  switched off in Settings ("Use the citation-check model"). Answers
+  show which sentences no source supports; with `citation_policy: strict` (the default for API keys
+  and agents) they are removed, and the answer abstains when nothing supported is left.
+- **Access by collection.** Users & access: give a group read access to a collection, up to a
+  sensitivity. The first policy turns access control on for the workspace (deny by default); records
+  in no collection stay readable to everyone. One rule applies to every read - answers, search, graph
+  hops, browsing, the Data tab - and personal-data columns are left out of the SQL views below
+  "confidential". People and API keys have groups. Add data can put files in a collection.
+- **Data deletion that reaches every copy.** Settings > Data deletion forgets a person, a company or
+  any record: its records and a merged record of them, what the platform remembers about it (labels,
+  decisions, cached answers, chats, audit, captured conversations), and the documents you choose
+  that mention it - with a proof that a search of every store finds nothing left, and a retry for a
+  step that failed. Deleting a file now also vacuums its table rows at once, deletes its stored
+  upload and cached answers and redacts chats that cited it. An admin can **forget** a file instead
+  of deleting it: it is then refused if it comes back from a synced folder, an upload or a backup
+  restore.
 
 ### Changed
 - **One Mapper page.** Pick a table or a JSON file and see, on one page, the kinds of thing
@@ -29,6 +73,13 @@
   tunable and resettable. Extractors saved before keep running and open in the new form.
 
 ### Fixed
+- Deleting a collection removed only its graph nodes; its files' table rows, evidence, uploads and
+  cached answers stayed. It now deletes each file from every store, and the policies that named it.
+- The header search box did nothing, and the bell showed an unread dot with no notifications behind
+  it. The search now finds files and offers to ask the Assistant; the bell is gone.
+- Editing a model on the Models page cleared its saved parameters.
+- Assets: "Embedded Assets" counted searchable records, not assets (now "Searchable records"); the
+  duplicate "Unique Fingerprints" tile is gone.
 - Saving a new extractor under a taken name replaced that extractor, and renaming one left the
   old one behind. A new name that is taken is refused; a rename keeps one extractor.
 - The model's answer to an extractor was lost whenever it dropped one closing brace (often, with
@@ -41,6 +92,16 @@
   instead of sitting beside them. A renamed kind keeps its Resolution.
 - A file opened in the Mapper while it was still being read showed no fields; it is measured again
   once it is read.
+
+### Upgrading
+- `opencortyx update`. The database gains its new tables on start (migration
+  `0033_trust_and_governance`); nothing is re-read.
+- Matching is stricter from now on: a possible duplicate whose fields disagree, or whose name is
+  only similar, now waits in Review instead of being joined. Clusters made before stay as they are;
+  "Re-check existing data" on a type applies the new rules to it. To keep the old behaviour, turn off
+  Settings > Quality > "Similar names need a second field" and "Disagreeing matches wait for a person".
+- Answers to API keys and MCP agents now leave out sentences no source supports
+  (`citation_policy_agents: strict`). Set it to `flag` to keep them, marked.
 
 ## 0.2.0-beta.3 - 2026-11-01
 

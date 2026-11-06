@@ -11,6 +11,15 @@ _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 STATUSES = ("active", "disabled")
 
 
+def clean_groups(values) -> list:
+    """Group names: trimmed, lower case, single-spaced, at most 80 characters, no duplicates, at most
+    50 of them. Lower case so "Finance" on a person and "finance" on a policy are one group."""
+    out = list(dict.fromkeys(" ".join(str(v).split()).lower()[:80] for v in (values or []) if str(v or "").strip()))
+    if len(out) > 50:
+        raise ValueError("at most 50 groups")
+    return out
+
+
 def _role(v):
     """A role is one the guards know. Any other string was stored and then treated as 'not a viewer',
     which require_write lets write."""
@@ -42,6 +51,12 @@ class UserPatch(BaseModel):
     role: Optional[str] = None
     status: Optional[str] = None
     password: Optional[str] = None
+    groups: Optional[list[str]] = None       # access groups (core/security/scope.py); None: unchanged
+
+    @field_validator("groups")
+    @classmethod
+    def _g(cls, v):
+        return None if v is None else clean_groups(v)
 
     @field_validator("role")
     @classmethod

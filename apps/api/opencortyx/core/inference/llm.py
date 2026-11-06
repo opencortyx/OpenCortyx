@@ -119,7 +119,9 @@ async def _openai_complete(prompt, system, max_tokens, json_mode, model, tempera
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
     resp = await client.chat.completions.create(**kwargs)
-    return resp.choices[0].message.content or ""
+    u = getattr(resp, "usage", None)
+    counts = (getattr(u, "prompt_tokens", None), getattr(u, "completion_tokens", None)) if u else None
+    return (resp.choices[0].message.content or ""), counts
 
 
 async def _anthropic_complete(prompt, system, max_tokens, model, temperature, api_key=None) -> str:
@@ -128,7 +130,9 @@ async def _anthropic_complete(prompt, system, max_tokens, model, temperature, ap
     msg = await client.messages.create(
         model=model or "claude-3-5-sonnet-latest", max_tokens=max_tokens, temperature=temperature,
         system=(system or ""), messages=[{"role": "user", "content": prompt}])
-    return "".join(getattr(b, "text", "") for b in (msg.content or []) if getattr(b, "type", "") == "text")
+    u = getattr(msg, "usage", None)
+    counts = (getattr(u, "input_tokens", None), getattr(u, "output_tokens", None)) if u else None
+    return "".join(getattr(b, "text", "") for b in (msg.content or []) if getattr(b, "type", "") == "text"), counts
 
 
 _WINDOW_BY_ENDPOINT: dict = {}
@@ -235,11 +239,44 @@ async def complete(prompt: str, system: Optional[str] = None, max_tokens: int = 
     prompt = await _fit_to_window(prompt, max_tokens, base, mid,
                                   discover=prov in OPENAI_COMPATIBLE_PROVIDERS)
 
+    # The meter (core/inference/usage.py): a cached answer first, then the budget, then the call,
+    # and every outcome is one llm_usage row.
+    from opencortyx.core.inference import usage
+    spec = {**(model_spec or {}), "model_id": mid}
+    ckey = (usage.cache_key(spec, prompt, system, max_tokens, temp, json_mode)
+            if usage.cacheable(json_mode, temp) else None)
+    if ckey:
+        hit = await usage.cache_get(ckey)
+        if hit is not None:
+            await usage.record(spec, tokens_in=hit[1], tokens_out=hit[2], measured=True, ms=0, cached=True)
+            return hit[0]
+    await usage.check_budget(spec, usage.estimate(prompt) + usage.estimate(system) + int(max_tokens or 0))
+    meter = usage.Meter(spec, prompt, system)
+    try:
+        text, counts = await _complete_once(prov, prompt, system, max_tokens, json_mode, mid, temp, base, key)
+    except Exception:
+        await meter.failed()
+        raise
+    await meter.done(text, counts)
+    if ckey and text:
+        measured = counts if counts and None not in counts else (meter.est_in, usage.estimate(text))
+        await usage.cache_put(ckey, text, *measured)
+    return text
+
+
+async def _complete_once(prov, prompt, system, max_tokens, json_mode, mid, temp, base, key) -> tuple:
+    """One call on the provider: (text, (tokens_in, tokens_out) | None)."""
+    out = await _provider_call(prov, prompt, system, max_tokens, json_mode, mid, temp, base, key)
+    # a provider helper that reports no counts returns the text alone
+    return (out, None) if isinstance(out, str) else out
+
+
+async def _provider_call(prov, prompt, system, max_tokens, json_mode, mid, temp, base, key):
     if prov == "anthropic":
         return await _anthropic_complete(prompt, system, max_tokens, mid, temp, api_key=key)
     if prov in LOCAL_LLM_PROVIDERS:
         from opencortyx.core.inference import local_llm
-        return await local_llm.complete(mid, prompt, system, max_tokens, temp)
+        return await local_llm.complete_counted(mid, prompt, system, max_tokens, temp)
     base = _hosted_base(prov, base)
     if prov not in OPENAI_COMPATIBLE_PROVIDERS and prov not in ("huggingface", "hf"):
         raise ValueError(
@@ -282,7 +319,7 @@ async def _openai_stream(prompt, system, max_tokens, model, temperature, base_ur
             yield delta
 
 
-async def _anthropic_stream(prompt, system, max_tokens, model, temperature, api_key=None):
+async def _anthropic_stream(prompt, system, max_tokens, model, temperature, api_key=None, counts=None):
     from anthropic import AsyncAnthropic
     client = AsyncAnthropic(api_key=api_key)
     async with client.messages.stream(
@@ -291,6 +328,12 @@ async def _anthropic_stream(prompt, system, max_tokens, model, temperature, api_
         async for text in stream.text_stream:
             if text:
                 yield text
+        if counts is not None:
+            try:
+                u = (await stream.get_final_message()).usage
+                counts["in"], counts["out"] = u.input_tokens, u.output_tokens
+            except Exception:                               # noqa: BLE001 - an estimate is recorded
+                pass
 
 
 async def stream_complete(prompt: str, system: Optional[str] = None, max_tokens: int = 600,
@@ -302,20 +345,41 @@ async def stream_complete(prompt: str, system: Optional[str] = None, max_tokens:
     prov, mid, base, key, params = _require(model_spec)
     mid = model or mid
     temp = params.get("temperature", temperature)
+    from opencortyx.core.inference import usage
+    spec = {**(model_spec or {}), "model_id": mid}
+    await usage.check_budget(spec, usage.estimate(prompt) + usage.estimate(system) + int(max_tokens or 0))
+    meter, parts, counts = usage.Meter(spec, prompt, system), [], {}
     try:
         if prov == "anthropic":
-            async for c in _anthropic_stream(prompt, system, max_tokens, mid, temp, key):
+            async for c in _anthropic_stream(prompt, system, max_tokens, mid, temp, key, counts):
+                parts.append(c)
                 yield c
         elif prov in LOCAL_LLM_PROVIDERS:
             from opencortyx.core.inference import local_llm
-            async for c in local_llm.stream(mid, prompt, system, max_tokens, temp):
+            async for c in local_llm.stream(mid, prompt, system, max_tokens, temp, counts):
+                parts.append(c)
                 yield c
         else:
             async for c in _openai_stream(prompt, system, max_tokens, mid, temp, _hosted_base(prov, base), key):
+                parts.append(c)
                 yield c
     except Exception:
+        if parts:
+            # Text already went out: a second call would repeat it. What streamed is the answer.
+            await meter.done("".join(parts), _counts(counts))
+            return
+        await meter.failed()
         yield await complete(prompt, system=system, max_tokens=max_tokens, model=mid,
                              temperature=temp, model_spec=model_spec)
+        return
+    await meter.done("".join(parts), _counts(counts))
+
+
+def _counts(counts: dict):
+    """(in, out) when a stream reported both, else None (the meter then estimates)."""
+    if counts.get("in") is not None and counts.get("out") is not None:
+        return counts["in"], counts["out"]
+    return None
 
 
 def repair_truncated_json(json_str: str) -> str:

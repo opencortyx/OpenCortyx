@@ -99,7 +99,12 @@ export interface CostStatus {
   alert_threshold: number;
   hard_cap: boolean;
   usd_per_1k_tokens: number;
-  spent_tokens: number;
+  spent_tokens: number;            // paid tokens this month (what the budget caps)
+  total_tokens: number;            // every call, free models included
+  calls: number;
+  measured_share: number | null;   // how much of it the provider or tokenizer counted
+  cached_calls: number;
+  month_start: string;
   fraction: number;
   alert: boolean;
   over: boolean;
@@ -150,11 +155,15 @@ export interface AssetDeletePreview {
   by_type: Record<string, number>;
 }
 
-export interface AssetDeleteResult extends AssetDeletePreview {
+/** Deleting an asset is a deletion job (knowledge/forget.py): a step per store, and a proof. */
+export interface AssetDeleteResult {
+  id: string;                    // the deletion job
   deleted: boolean;
-  edges: number;
-  runs: number;                  // Progress runs removed
-  manifest_entries: number;      // sync-manifest entries forgotten
+  nodes: number;
+  status: "done" | "incomplete" | "running";
+  steps: Record<string, { status: string; count?: number; error?: string; note?: string }>;
+  proof: { remaining?: Record<string, number>; note?: string };
+  error?: string | null;
 }
 
 export interface ProgressStep {
@@ -389,6 +398,14 @@ export interface RuleInput {
 export interface TypeResolution {
   identify_by: string[]; compare: string[]; ignore: string[]; enabled: boolean;
   relations?: string[]; scorer: "exact" | "similar"; auto: number; review: number;
+  /** "Must agree": a difference here keeps two records apart. */
+  distinguish?: string[];
+  /** When an automatic match also needs a second field to agree. */
+  corroborate?: "default" | "never" | "similar" | "always";
+  /** A match whose fields disagree waits for a person (null: the workspace setting). */
+  conflict_review?: boolean | null;
+  /** One node per name in the workspace, or per name per file. */
+  name_scope?: "workspace" | "asset";
 }
 export interface BusinessContextInput {
   title: string; content: string; scope?: string; collection_id?: string;
@@ -479,8 +496,9 @@ export interface ModelRuntime { servers: RuntimeServer[]; note: string; }
 
 export interface AppUser {
   id: string; email: string; role: "admin" | "editor" | "viewer"; status: string; created_at?: string | null;
+  groups?: string[];
 }
-export interface ApiKeyView { id: string; app: string; role: string; created_at?: string | null; }
+export interface ApiKeyView { id: string; app: string; role: string; groups?: string[]; created_at?: string | null; }
 
 export const SYSTEM_DEFAULT_PIPELINES_LIST: Pipeline[] = [
   {
@@ -594,7 +612,7 @@ export interface IngestOutcome {
 
 /** One decision of the resolution engine, as the Review queue shows it. */
 export type ResolutionDecision = {
-  id: string; relation: "SAME" | "SUPPORTS" | "EXTENDS" | "CONTRADICTS"; node_type: string;
+  id: string; relation: "SAME" | "SUPPORTS" | "EXTENDS" | "CONTRADICTS" | "DISTINCT"; node_type: string;
   subject: string; subject_label?: string | null; target?: string | null; target_label?: string | null;
   attribute?: string | null; evidence: Record<string, any>; needs_review: boolean;
   confidence: number; method: string; source_id?: string | null; source_label?: string | null;
@@ -630,12 +648,12 @@ export const contextV2Api = {
   listUsers: () => apiClient.get<{ items: AppUser[] }>("/api/v2/users").then((r) => r.data),
   createUser: (email: string, password: string, role: string) =>
     apiClient.post<AppUser>("/api/v2/users", { email, password, role }).then((r) => r.data),
-  updateUser: (id: string, patch: { role?: string; status?: string; password?: string }) =>
+  updateUser: (id: string, patch: { role?: string; status?: string; password?: string; groups?: string[] }) =>
     apiClient.patch(`/api/v2/users/${id}`, patch).then((r) => r.data),
   deleteUser: (id: string) => apiClient.delete(`/api/v2/users/${id}`).then((r) => r.data),
   listApiKeys: () => apiClient.get<{ items: ApiKeyView[] }>("/api/v2/apikeys").then((r) => r.data),
-  createApiKey: (app: string, role: string) =>
-    apiClient.post<{ id: string; app: string; role: string; key: string }>("/api/v2/apikeys", { app, role }).then((r) => r.data),
+  createApiKey: (app: string, role: string, groups: string[] = []) =>
+    apiClient.post<{ id: string; app: string; role: string; key: string }>("/api/v2/apikeys", { app, role, groups }).then((r) => r.data),
   revokeApiKey: (id: string) => apiClient.delete(`/api/v2/apikeys/${id}`).then((r) => r.data),
 
   // ── integrations: one-click MCP connect for AI agents / IDEs (Claude Code, Antigravity) ──
@@ -903,10 +921,10 @@ export const contextV2Api = {
   modelRuntime: () =>
     apiClient.get<ModelRuntime>("/api/v2/models/runtime").then((r) => r.data),
   // Hugging Face models run in OpenCortyx itself (CPU): look one up, download it, list/delete them.
-  hfModelInfo: (repo: string, token?: string) =>
-    apiClient.post<HFModelInfo>("/api/v2/models/hf/info", { repo, token: token || undefined }).then((r) => r.data),
-  hfDownload: (repo: string, token?: string) =>
-    apiClient.post<HFDownloadStatus>("/api/v2/models/hf/download", { repo, token: token || undefined }).then((r) => r.data),
+  hfModelInfo: (repo: string, token?: string, role = "generation") =>
+    apiClient.post<HFModelInfo>("/api/v2/models/hf/info", { repo, token: token || undefined, role }).then((r) => r.data),
+  hfDownload: (repo: string, token?: string, role = "generation") =>
+    apiClient.post<HFDownloadStatus>("/api/v2/models/hf/download", { repo, token: token || undefined, role }).then((r) => r.data),
   hfDownloadStatus: (repo: string) =>
     apiClient.get<HFDownloadStatus>("/api/v2/models/hf/download", { params: { repo } }).then((r) => r.data),
   // fastembed (ONNX, CPU) embedders and rerankers: download one ahead of its first use.
@@ -914,8 +932,8 @@ export const contextV2Api = {
     apiClient.post<HFDownloadStatus>("/api/v2/models/fastembed/download", { model, role }).then((r) => r.data),
   fastembedDownloadStatus: (model: string, role: string) =>
     apiClient.get<HFDownloadStatus>("/api/v2/models/fastembed/download", { params: { model, role } }).then((r) => r.data),
-  hfLocalModels: () =>
-    apiClient.get<{ items: DiscoveredModel[] }>("/api/v2/models/hf/local").then((r) => r.data),
+  hfLocalModels: (role = "generation") =>
+    apiClient.get<{ items: DiscoveredModel[] }>("/api/v2/models/hf/local", { params: { role } }).then((r) => r.data),
   hfDeleteLocal: (repo: string) =>
     apiClient.delete("/api/v2/models/hf/local", { params: { repo } }).then((r) => r.data),
   // Have an Ollama server pull a model (a HF GGUF repo or an Ollama name); progress per NDJSON line.
@@ -1155,6 +1173,8 @@ export const contextV2Api = {
 
   // ── collections (scoping) ──────────────────────────────────────────────
   collections: () => apiClient.get("/api/v2/collections").then((r) => r.data),
+  createCollection: (name: string, description = "") =>
+    apiClient.post<{ id: string; name: string }>("/api/v2/collections", { name, description }).then((r) => r.data),
   previewCollectionDelete: (id: string) =>
     apiClient
       .get<CollectionDeletePreview>(`/api/v2/collections/${id}/delete-preview`)
@@ -1378,8 +1398,8 @@ export const contextV2Api = {
     apiClient
       .get<AssetDeletePreview>(`/api/v2/assets/${id}/delete-preview`)
       .then((r) => r.data),
-  deleteAsset: (id: string) =>
-    apiClient.delete<AssetDeleteResult>(`/api/v2/assets/${id}`).then((r) => r.data),
+  deleteAsset: (id: string, forget = false) =>
+    apiClient.delete<AssetDeleteResult>(`/api/v2/assets/${id}`, { params: forget ? { forget: true } : {} }).then((r) => r.data),
   seedDomain: (domain: string, n_tables = 6) =>
     apiClient.post("/api/v2/structured/seed-domain", { domain, n_tables }).then((r) => r.data),
 

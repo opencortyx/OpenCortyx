@@ -13,8 +13,14 @@ import fnmatch
 import threading
 from pathlib import Path
 
-#: The files a causal language model needs to load with `transformers`.
+#: The files a model needs to load with `transformers`.
 ALLOW = ["*.json", "*.safetensors", "*.txt", "*.model", "*.tiktoken", "*.jinja"]
+
+#: What each registry role can run, by the Hub's task tag and the model's architecture: a text-
+#: generation model for generation, and a natural-language-inference classifier (entailment /
+#: neutral / contradiction) for the citation check (core/inference/nli.py).
+ROLE_TASKS = {"verification": ("text-classification", "zero-shot-classification")}
+ROLE_ARCH = {"verification": "ForSequenceClassification"}
 
 _jobs: dict = {}
 _lock = threading.Lock()
@@ -29,8 +35,8 @@ def _repo_dir(repo: str) -> Path:
     return Path(constants.HF_HUB_CACHE) / ("models--" + repo.replace("/", "--"))
 
 
-def info(repo: str, token: str | None = None) -> dict:
-    """What `repo` is and whether it can run in OpenCortyx, from the Hub (no download)."""
+def info(repo: str, token: str | None = None, role: str = "generation") -> dict:
+    """What `repo` is and whether it can run in OpenCortyx for `role`, from the Hub (no download)."""
     from huggingface_hub import HfApi
     from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
     try:
@@ -47,8 +53,10 @@ def info(repo: str, token: str | None = None) -> dict:
     gguf = any(s.rfilename.endswith(".gguf") for s in (mi.siblings or []))
     task = mi.pipeline_tag
     why = None
-    if task != "text-generation":
-        why = f"it is a {task or 'model of unknown type'} model, not a text-generation one"
+    wanted = ROLE_TASKS.get(role, ("text-generation",))
+    if task not in wanted:
+        why = (f"it is a {task or 'model of unknown type'} model, not a "
+               + ("natural-language-inference (text-classification) one" if role == "verification" else "text-generation one"))
     elif not weights:
         why = "it has no safetensors weights" + (" (it is a GGUF repository: download it into Ollama)" if gguf else "")
     return {"repo": mi.id, "task": task, "bytes": total, "gguf": gguf, "gated": bool(mi.gated),
@@ -89,9 +97,9 @@ def _download(repo: str, token: str | None) -> None:
         _jobs[repo].update(status="failed", error=str(e)[:300])
 
 
-def start(repo: str, token: str | None = None) -> dict:
+def start(repo: str, token: str | None = None, role: str = "generation") -> dict:
     """Start downloading `repo`, or report the download already running."""
-    meta = info(repo, token)
+    meta = info(repo, token, role)
     if not meta["runs_in_opencortyx"]:
         raise ValueError(f"'{repo}' cannot run in OpenCortyx: {meta['why_not']}.")
     repo = meta["repo"]
@@ -104,8 +112,9 @@ def start(repo: str, token: str | None = None) -> dict:
     return status(repo)
 
 
-def downloaded() -> list[dict]:
-    """The text-generation models in the cache, for the Model ID picker."""
+def downloaded(role: str = "generation") -> list[dict]:
+    """The models in the cache that can serve `role`, for the Model ID picker."""
+    suffix = ROLE_ARCH.get(role, "ForCausalLM")
     import json
 
     from huggingface_hub import scan_cache_dir
@@ -122,7 +131,7 @@ def downloaded() -> list[dict]:
             archs = json.loads((snap / "config.json").read_text()).get("architectures") or []
         except Exception:                               # noqa: BLE001 — not a transformers model
             continue
-        if any(a.endswith("ForCausalLM") for a in archs) and any(snap.glob("*.safetensors")):
+        if any(a.endswith(suffix) for a in archs) and any(snap.glob("*.safetensors")):
             out.append({"id": r.repo_id, "size": r.size_on_disk})
     return sorted(out, key=lambda x: x["id"])
 

@@ -59,6 +59,94 @@ def _bench_docs(bench: Path, n: int) -> list[Path]:
     return out[:n]
 
 
+def write_mixed(root: str) -> dict:
+    """120 files over one business, so every kind connects to the others: 10 CSV, 10 JSON, 100 documents.
+
+        structured (10)       licences, 30 rows each              licence_id, customer_id (-> customers)
+        semi-structured (10)  5 crm files, 12 customers each       customer_id, name, nested contact
+                              5 billing files, the same customers  customer_id, name, billing_currency
+                              (duplicates resolution must find)
+        documents (100)       the licensing policy, 35 terms letters (10 contradict the CSV), and 64
+                              account notes, one per customer, naming the customer and its licences
+                              by id - what links a document to the records it is about
+
+    Every expected count and answer is computed here and written to `expected.json`."""
+    rnd = random.Random(SEED)
+    d = domain.build()
+    base = Path(root)
+    if base.exists():
+        shutil.rmtree(base)
+    S, M, U = base / "structured", base / "semistructured", base / "unstructured"
+    for p in (S, M, U):
+        p.mkdir(parents=True)
+    exp: dict = {"files": {}, "rows": {}, "records": {}, "profile": "mixed"}
+    keys = list(d.licences[0])
+    for i, part in enumerate(_chunks(d.licences, 30)):
+        name = f"licences-{i:02d}.csv"
+        with open(S / name, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=keys)
+            w.writeheader()
+            w.writerows(part)
+        exp["rows"][name] = len(part)
+    for i, part in enumerate(_chunks(d.customers, 12)):
+        name = f"crm-{i:02d}.json"
+        (M / name).write_text(json.dumps({"customers": part}, indent=1), encoding="utf-8")
+        exp["records"][name] = 1
+        billed = [{"customer_id": c["customer_id"], "name": c["name"], "region": c["region"],
+                   "billing_currency": rnd.choice(("EUR", "USD", "SGD"))} for c in part]
+        name = f"billing-{i:02d}.json"
+        (M / name).write_text(json.dumps(billed, indent=1), encoding="utf-8")
+        exp["records"][name] = len(billed)
+    (U / "licensing-policy.md").write_text(domain.policy_markdown(), encoding="utf-8")
+    for lic_id, (text, _) in d.letters.items():
+        (U / f"terms-{lic_id}.md").write_text(text, encoding="utf-8")
+    held: dict = {}
+    for x in d.licences:
+        held.setdefault(x["customer_id"], []).append(x["licence_id"])
+    notes = []
+    for c in d.customers:
+        if len(notes) >= 100 - 1 - len(d.letters):
+            break
+        if c["name"] == domain.AMBIGUOUS:
+            continue
+        lic = held.get(c["customer_id"], [])
+        lines = [f"# Account note: {c['name']}", "",
+                 f"Customer {c['customer_id']} ({c['name']}) is a {c['tier']} account in region {c['region']}. "
+                 f"The licensing contact is {c['contact']['email']}.", "",
+                 f"They hold {len(lic)} licence(s): {', '.join(lic)}." if lic else "They hold no licence yet."]
+        if c["free_pass"].get("active"):
+            lines.append(f"A free pass is active until {c['free_pass']['valid_until']}.")
+        text = "\n".join(lines) + "\n"
+        name = f"account-{c['customer_id']}.md"
+        (U / name).write_text(text, encoding="utf-8")
+        notes.append({"file": name, "customer_id": c["customer_id"], "name": c["name"], "licences": lic})
+    # Renewal notices, for licences without a terms letter, until there are 100 documents.
+    for x in d.licences:
+        if 1 + len(d.letters) + len(notes) >= 100:
+            break
+        if x["licence_id"] in d.letters:
+            continue
+        c = d.customer(x["customer_id"])
+        name = f"renewal-{x['licence_id']}.md"
+        (U / name).write_text(
+            f"# Renewal notice: {x['licence_id']}\n\nLicensee: {c['name']} ({c['customer_id']})\n\n"
+            f"Licence {x['licence_id']} ({x['type']}, {x['region']}) expires on {x['expiry_date']}. "
+            f"Renewal requests must reach us sixty days before expiry.\n", encoding="utf-8")
+        notes.append({"file": name, "customer_id": c["customer_id"], "name": c["name"], "licences": [x["licence_id"]]})
+    for kind, folder in (("structured", S), ("semistructured", M), ("unstructured", U)):
+        exp["files"][kind] = sorted(p.name for p in folder.iterdir())
+    lic = d.licences
+    exp["facts"] = {
+        "licences_total": len(lic), "customers": len(d.customers),
+        "expired_total": sum(1 for x in lic if x["status"] == "EXPIRED"),
+        "policy_key": "ninety days", "conflicts": [list(c) for c in d.conflicts],
+        "notes": notes, "ambiguous": domain.AMBIGUOUS,
+    }
+    exp["counts"] = {k: len(v) for k, v in exp["files"].items()}
+    (base / "expected.json").write_text(json.dumps(exp, indent=1), encoding="utf-8")
+    return exp
+
+
 def write(root: str, bench: str) -> dict:
     rnd = random.Random(SEED)
     d = domain.build()

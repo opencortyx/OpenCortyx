@@ -8,7 +8,7 @@ import hashlib
 import hmac
 import os
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -33,6 +33,7 @@ class CurrentUser:
     role: str
     actor_type: str
     permissions: list
+    groups: list = field(default_factory=list)     # an API key's access groups (a person's are read per request)
 
 
 async def require_auth(
@@ -41,9 +42,17 @@ async def require_auth(
     db: AsyncSession = Depends(get_db),
 ) -> CurrentUser:
     if credentials:
-        return _verify_jwt(credentials.credentials)
-    if api_key:
-        return await _verify_api_key(api_key, db)
+        user = _verify_jwt(credentials.credentials)
+    elif api_key:
+        user = await _verify_api_key(api_key, db)
+    else:
+        user = None
+    if user is not None:
+        # Every read this request makes through NodeRepo obeys the caller's access scope
+        # (core/security/scope.py) - including routes that never mention access.
+        from opencortyx.core.security.scope import bind_request
+        await bind_request(user)
+        return user
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                         detail="Authentication required. Provide Bearer token or X-API-Key header.")
 
@@ -116,7 +125,8 @@ async def _verify_api_key(raw_key: str, db: AsyncSession) -> CurrentUser:
     scopes = key.scopes if isinstance(key.scopes, dict) else {}
     return CurrentUser(
         user_id=key.id, workspace_id=key.workspace_id, role=scopes.get("role") or "agent", actor_type="agent",
-        permissions=scopes.get("permissions", ["read"]))
+        permissions=scopes.get("permissions", ["read"]),
+        groups=[str(g) for g in (scopes.get("groups") or []) if str(g).strip()])
 
 
 def require_role(*roles: str):

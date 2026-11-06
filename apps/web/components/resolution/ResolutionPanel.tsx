@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { GitMerge, RefreshCw, Save } from "lucide-react";
+import Link from "next/link";
+import { Gauge, GitMerge, RefreshCw, Save } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { contextV2Api, type TypeResolution } from "@/lib/api/contextV2";
 
 const NO_RESOLUTION: TypeResolution = {
   identify_by: [], compare: [], ignore: [], enabled: true, scorer: "exact", auto: 0.95, review: 0.8,
+  distinguish: [], corroborate: "default", conflict_review: null, name_scope: "workspace",
 };
 
 /**
@@ -130,7 +132,50 @@ export default function ResolutionPanel({ name, flash, onSaved }: { name: string
         </div>
       )}
 
+      {spec.identify_by.length > 0 && (
+        <div className="space-y-2">
+          <span className="text-[11px] font-bold text-stone-500">Must agree</span>
+          <div className="flex flex-wrap gap-1.5">
+            {others.map((f) => {
+              const on = (spec.distinguish || []).includes(f);
+              return (
+                <button key={f} type="button" aria-pressed={on} onClick={() => set({ distinguish: toggle(spec.distinguish || [], f) })}
+                  className={`px-2 py-0.5 rounded border text-[11px] font-mono ${on ? "bg-red-600 border-red-600 text-white" : "bg-white border-stone-200 text-stone-600 hover:border-red-300"}`}>
+                  {f}
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-[11px] text-stone-400">Two records that differ on one of these are never the same thing, whatever their {spec.identify_by.join(" + ")} say (two people called John Smith with different dates of birth).</p>
+          <div className="flex flex-wrap items-center gap-3 text-[11.5px] text-stone-600">
+            <label className="flex items-center gap-1.5">Second field must agree
+              <select value={spec.corroborate || "default"} onChange={(e) => set({ corroborate: e.target.value as TypeResolution["corroborate"] })}
+                className="px-2 py-1 rounded-md border border-stone-200 bg-white">
+                <option value="default">Workspace setting</option><option value="similar">When only similar</option>
+                <option value="always">Always</option><option value="never">Never</option>
+              </select>
+            </label>
+            <label className="flex items-center gap-1.5">If other fields disagree
+              <select value={spec.conflict_review === null || spec.conflict_review === undefined ? "default" : spec.conflict_review ? "review" : "join"}
+                onChange={(e) => set({ conflict_review: e.target.value === "default" ? null : e.target.value === "review" })}
+                className="px-2 py-1 rounded-md border border-stone-200 bg-white">
+                <option value="default">Workspace setting</option><option value="review">Ask a person</option><option value="join">Join and flag</option>
+              </select>
+            </label>
+            <label className="flex items-center gap-1.5">Names from extractors
+              <select value={spec.name_scope || "workspace"} onChange={(e) => set({ name_scope: e.target.value as TypeResolution["name_scope"] })}
+                className="px-2 py-1 rounded-md border border-stone-200 bg-white">
+                <option value="workspace">One per name</option><option value="asset">One per name per file</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center justify-end gap-2">
+        <Link href={"/dashboard/review/quality" as any} className="mr-auto text-[11.5px] text-teal-700 hover:underline inline-flex items-center gap-1">
+          <Gauge size={12} /> Score these rules on labelled pairs
+        </Link>
         {saved && spec.identify_by.length > 0 && (
           <Button variant="secondary" size="sm" icon={RefreshCw} busy={busy === "run"} disabled={!!busy} onClick={runAgain}>
             Re-check existing data

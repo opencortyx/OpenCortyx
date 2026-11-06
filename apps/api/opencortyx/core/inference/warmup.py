@@ -106,11 +106,35 @@ async def _reranker() -> None:
             raise RuntimeError(f"reranker {mid} unavailable")
 
 
+async def _citation_check() -> None:
+    """The Citation check model (core/inference/nli.py), loaded before the first answer needs it:
+    loading it on first use made that answer wait ~25 s. Not applicable while the `citation_check`
+    setting is off or no such model is registered."""
+    from opencortyx.core.config import runtime as rc
+    if not rc.get("citation_check"):
+        raise _NotApplicable("the citation check is switched off")
+    from sqlalchemy import select
+    from opencortyx.core.db import V2Session
+    from opencortyx.domain import Model
+    async with V2Session() as db:
+        rows = sorted({m for (m,) in (await db.execute(select(Model.model_id).where(
+            Model.role == "verification", Model.is_default == True,       # noqa: E712
+            Model.provider.in_(("transformers", "local"))))).all()})
+    if not rows:
+        raise _NotApplicable("no citation check model is registered")
+    from opencortyx.core.inference import nli
+    # One is kept loaded per process; with several workspaces naming different ones, the first.
+    out = await nli.entails(rows[0], [("The sky is blue.", "The sky is blue.")])
+    if out is None:
+        raise RuntimeError(f"citation check model {rows[0]} could not be loaded")
+
+
 async def _run() -> None:
     # Embedder first: everything that writes a node needs it, and it is a quarter the size of the
     # reranker, so the useful half of the stack comes alive four times sooner.
     await _step("embedder", _embedder)
     await _step("reranker", _reranker)
+    await _step("citation_check", _citation_check)
 
 
 def start() -> None:
@@ -118,7 +142,7 @@ def start() -> None:
     global _TASK
     if _TASK is not None and not _TASK.done():
         return
-    for k in ("embedder", "reranker"):
+    for k in ("embedder", "reranker", "citation_check"):
         _STATE.setdefault(k, {"state": "pending", "seconds": 0.0, "detail": ""})
     try:
         _TASK = asyncio.get_running_loop().create_task(_run())

@@ -157,6 +157,8 @@ async def store_file_table(workspace_id, asset_id, *, path: str, filename: str,
     """A tabular file's rows into its managed Delta table, registered and profiled. With no key
     declared, a natural one is looked for (`key_candidates`, kept only when unique and never empty),
     so rows, their evidence and their source keys share the table's own ids."""
+    from opencortyx.core.dataplane.tombstones import guard_assets
+    await guard_assets(workspace_id, [asset_id])   # a forgotten asset writes no data
     import anyio
 
     from opencortyx.core.dataplane import assets

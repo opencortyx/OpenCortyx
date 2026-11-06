@@ -181,10 +181,14 @@ async def preview_template_ep(spec: TemplatePreviewSpec, user: CurrentUser = Dep
         text = await _first_input(user.workspace_id, spec.sample_asset, spec.source or {})
         if not text:
             raise HTTPException(status_code=422, detail="that file has nothing this extractor reads")
-    return await preview_template(user.workspace_id, {
-        "name": spec.name, "source": spec.source,
-        "mechanism": spec.mechanism, "emit": spec.emit,
-    }, text)
+    from opencortyx.core.inference import usage
+    # Counted as this extractor's preview: what it cost per record is the basis of /cost/estimate.
+    with usage.scope(user.workspace_id, purpose_name=f"preview:{spec.name or 'extractor'}"):
+        out = await preview_template(user.workspace_id, {
+            "name": spec.name, "source": spec.source,
+            "mechanism": spec.mechanism, "emit": spec.emit,
+        }, text)
+    return out
 
 
 async def _first_input(workspace_id, asset: str, source: dict) -> str:

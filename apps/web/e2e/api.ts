@@ -28,7 +28,7 @@ export async function ingestDocument(api: APIRequestContext, name: string, text:
       expect(run.status, run.error ?? "").toBe("completed");
       return { runId: run_id as string, assetId: run.source_ref as string };
     }
-    await new Promise((r) => setTimeout(r, 5000));
+    await new Promise((r) => setTimeout(r, 2000));   // under the API's 5 s keep-alive: a reused socket the server is closing hangs up
   }
   throw new Error(`ingestion run ${run_id} did not finish`);
 }

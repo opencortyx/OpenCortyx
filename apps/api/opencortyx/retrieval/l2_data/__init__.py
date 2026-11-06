@@ -175,7 +175,8 @@ def _metric_plan(question: str, schema: Schema, metric: dict) -> Optional[planne
 def _execute(workspace_id, schema: Schema, sql: str, timeout: float, tables=None):
     """Run `sql`; with `tables` (the views it reads, from the guard) only those assets are opened."""
     from opencortyx.stores.data import Views
-    opened = schema.needs(tables) if tables else {"assets": schema.refs, "logical": schema.logical}
+    opened = schema.needs(tables) if tables else {"assets": schema.refs, "logical": schema.logical,
+                                                  "hidden": schema.hidden_columns()}
     with Views(workspace_id, lock=True, **opened) as v:
         t = v.query(sql, timeout=timeout)
         return t.column_names, [[_clean(x) for x in r.values()] for r in t.to_pylist()]
@@ -198,6 +199,14 @@ async def answer(workspace_id, question: str, complete=None, *, timeout: float =
     except Exception as e:                                    # noqa: BLE001 - no data plane, no route
         log.info("data_route.schema_unavailable", error=str(e)[:200])
         return None
+    from opencortyx.core.security.scope import current as _access
+    access = _access()
+    if access is not None and access.collections is not None:
+        # The caller's access: tables in collections they may read, and tables in none.
+        from opencortyx.core.dataplane import assets
+        schema = schema.scoped([str(a.id) for a in await assets.list_assets(workspace_id)
+                                if not (a.metadata_ or {}).get("collection_id")
+                                or str((a.metadata_ or {}).get("collection_id")) in access.collections])
     if collection_ids:
         from opencortyx.core.dataplane import assets
         want = {str(c) for c in collection_ids}

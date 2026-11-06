@@ -75,6 +75,39 @@ When two records match, they are linked as the same thing, values one is missing
 other, and different values are kept on both and flagged in the Review Queue. Nothing is
 overwritten. Renaming a kind in the Mapper keeps its Resolution.
 
+**When a match is not trusted on its score alone.** A wrong link does more harm than a missing one,
+so by default:
+
+- Two records whose other fields **disagree** (two people called John Smith with different emails)
+  are not joined; the pair waits in the Review Queue.
+- Two records whose identities are only **similar** ("Andersen" and "Anderson") are joined only
+  when another field agrees; otherwise the pair waits in the Review Queue.
+- Under **Must agree**, pick fields that make two records different things whenever they differ, such
+  as a date of birth. Such a pair is never joined and never sent for review.
+- **Names from extractors** decides whether two files' "John Smith" start as one record (**One per
+  name**) or as two that only these rules can join (**One per name per file**).
+
+The first two are the Settings > Quality switches "Similar names need a second field" and
+"Disagreeing matches wait for a person"; each type can override them.
+
+### Is matching right? (Review > Quality)
+
+Tuning matching without examples is guessing. Review > **Quality** shows, for every type, the pairs
+people labelled "same" or "different" and how the type's rule scores on them.
+
+1. Labels come from your answers in the Review Queue, from **Check automatic merges** (a random
+   sample of joins nobody has looked at - answer **Same** or **Different**; "Different" also splits
+   the pair), and from **Import labelled pairs**: one pair a line as `type,first,second,same`, or the
+   JSON the API takes. Public sets such as DBLP-ACM or Abt-Buy fit this shape.
+2. Pick a type to see its score: **false merges** (labelled different, joined - each one listed),
+   precision, recall, the pairs a person would have to review, and the ones it missed.
+3. Change a setting under **Try other settings** and press **Score these settings**: the new score
+   shows beside the current one before anything is saved. **Save settings** when it is better.
+
+A merged record is rebuilt from its members whenever one joins or leaves, so splitting a member off,
+or deleting the file it came from, takes its values out of the merged record. A pair a person said
+is different is never joined again, even when the files are read again.
+
 ## Review Queue
 
 The Review Queue is where decisions that need a person wait. Nothing listed here changes your data
@@ -114,6 +147,27 @@ Work through the four tabs:
 - Adding a new version of the same file is not a conflict: its values replace the old ones, and the
   earlier version stays in the data store's history.
 - Press **Refresh** to load decisions made since you opened the page.
+
+## Citations
+
+Every sentence of an answer is checked against the sources it cites, one at a time:
+
+- each number and each name the sentence states must be in the cited source - not merely somewhere
+  in what was retrieved ("the Berlin limit is 50,000" fails when 50,000 is Munich's);
+- facts joined from several records count only when the graph links those records;
+- with a **Citation check** model, the source must not contradict the sentence, which catches "did
+  not approve" against "approved" and a wrong "yes" to a policy that says no. Add it on the Models
+  page with **Use the recommended cross-encoder/nli-deberta-v3-xsmall** (about 290 MB, runs on the
+  CPU, loaded at start-up) and press **Download**. It reads each source sentence by sentence, and a
+  sentence it finds stated is supported even when the words differ. Settings > **Use the
+  citation-check model** switches it off and on;
+- a sentence whose citation is wrong but another source supports it keeps an answer, re-attributed,
+  and the wrong citation is reported.
+
+The Assistant marks the sentences no source supports. With **Unsupported sentences** set to
+`strict`, they are removed from the answer, and it abstains when nothing supported is left. Answers
+to API keys and MCP agents are strict by default, because nobody may see the mark there. A question
+can ask for either with `citation_policy`.
 
 ## Evaluations
 

@@ -27,6 +27,7 @@ celerybeat-schedule*
 # Node
 node_modules/
 .next/
+.next-*/
 .turbo/
 dist/
 *.tsbuildinfo

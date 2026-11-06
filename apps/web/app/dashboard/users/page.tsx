@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { contextV2Api, AppUser, ApiKeyView } from "@/lib/api/contextV2";
 import {
   Users, Plus, Trash2, KeyRound, ShieldCheck, AlertCircle, Loader2, Copy, X, Ban, CheckCircle2,
 } from "lucide-react";
 import PageHeader from "@/components/layout/PageHeader";
 import Button from "@/components/ui/Button";
+import TagInput from "@/components/ui/TagInput";
+import PoliciesPanel from "@/components/access/PoliciesPanel";
 
 const ROLES = ["admin", "editor", "viewer"];
 const roleTone: Record<string, string> = {
@@ -27,7 +29,8 @@ export default function UsersPage() {
   const [busy, setBusy] = useState(false);
   // new key reveal
   const [newKey, setNewKey] = useState<{ key: string; app: string } | null>(null);
-  const [keyForm, setKeyForm] = useState({ app: "claude", role: "editor" });
+  const [keyForm, setKeyForm] = useState<{ app: string; role: string; groups: string[] }>({ app: "claude", role: "editor", groups: [] });
+  const say = useCallback((text: string, ok: boolean) => setMsg({ text, type: ok ? "ok" : "error" }), []);
 
   const load = async () => {
     setLoading(true); setDenied(false);
@@ -55,6 +58,10 @@ export default function UsersPage() {
     try { await contextV2Api.updateUser(u.id, { role }); await load(); }
     catch (e: any) { setMsg({ text: e?.response?.data?.detail || "Failed.", type: "error" }); }
   };
+  const setGroups = async (u: AppUser, groups: string[]) => {
+    try { await contextV2Api.updateUser(u.id, { groups }); await load(); }
+    catch (e: any) { setMsg({ text: e?.response?.data?.detail || "Could not save the groups.", type: "error" }); }
+  };
   const toggleStatus = async (u: AppUser) => {
     try { await contextV2Api.updateUser(u.id, { status: u.status === "active" ? "disabled" : "active" }); await load(); }
     catch (e: any) { setMsg({ text: e?.response?.data?.detail || "Failed.", type: "error" }); }
@@ -68,7 +75,7 @@ export default function UsersPage() {
   const addKey = async () => {
     setBusy(true); setMsg({ text: "", type: "" });
     try {
-      const res = await contextV2Api.createApiKey(keyForm.app.trim() || "claude", keyForm.role);
+      const res = await contextV2Api.createApiKey(keyForm.app.trim() || "claude", keyForm.role, keyForm.groups);
       setNewKey({ key: res.key, app: res.app }); await load();
     } catch (e: any) { setMsg({ text: e?.response?.data?.detail || "Failed to create key.", type: "error" }); }
     finally { setBusy(false); }
@@ -93,7 +100,7 @@ export default function UsersPage() {
       <PageHeader
         title="Users & Access"
         icon={Users}
-        description="Register people for this workspace and set their role. Issue API keys for agents (Claude / MCP)."
+        description="Register people for this workspace, set their role and groups, decide which groups read which collection, and issue API keys for agents (Claude / MCP)."
       />
 
       {msg.text && (
@@ -127,9 +134,12 @@ export default function UsersPage() {
           <div className="space-y-2">
             {users.map((u) => (
               <div key={u.id} className="bg-white border border-stone-200 rounded-xl shadow-sm p-4 flex items-center justify-between gap-3">
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <div className="font-semibold text-stone-800 truncate">{u.email}</div>
                   <div className="text-xs text-stone-400">{u.status === "active" ? "active" : "disabled"}{u.created_at ? ` · joined ${new Date(u.created_at).toLocaleDateString()}` : ""}</div>
+                  <div className="mt-1.5 max-w-md" title="Access groups: a policy below gives a group its collections">
+                    <TagInput value={u.groups || []} onChange={(g) => setGroups(u, g)} placeholder="Add a group (e.g. finance)…" />
+                  </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   <select value={u.role} onChange={(e) => setRole(u, e.target.value)}
@@ -146,11 +156,18 @@ export default function UsersPage() {
         )}
       </div>
 
+      {/* who reads which collection */}
+      <div className="bg-white border border-stone-200 rounded-xl shadow-sm p-5">
+        <h2 className="text-sm font-bold text-stone-700 uppercase tracking-wide mb-3 flex items-center gap-2"><ShieldCheck size={15} className="text-emerald-500" /> Who reads which collection</h2>
+        {!loading && <PoliciesPanel users={users} onMessage={say} />}
+      </div>
+
       {/* API keys */}
       <div>
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-bold text-stone-700 uppercase tracking-wide flex items-center gap-2"><KeyRound size={15} className="text-teal-500" /> Agent API keys</h2>
           <div className="flex items-center gap-2">
+            <div className="w-56"><TagInput value={keyForm.groups} onChange={(g) => setKeyForm({ ...keyForm, groups: g })} placeholder="Groups the key reads as…" /></div>
             <select value={keyForm.role} onChange={(e) => setKeyForm({ ...keyForm, role: e.target.value })} className="border border-stone-200 rounded-lg px-2 py-1.5 text-sm bg-white">
               {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
             </select>
@@ -173,7 +190,8 @@ export default function UsersPage() {
         <div className="space-y-2">
           {keys.map((k) => (
             <div key={k.id} className="bg-white border border-stone-200 rounded-xl shadow-sm p-3 flex items-center justify-between gap-3">
-              <div className="text-sm text-stone-700"><span className="font-semibold">{k.app}</span> <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border ml-1 ${roleTone[k.role] || ""}`}>{k.role}</span></div>
+              <div className="text-sm text-stone-700"><span className="font-semibold">{k.app}</span> <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border ml-1 ${roleTone[k.role] || ""}`}>{k.role}</span>
+                {(k.groups || []).length > 0 && <span className="text-xs text-stone-500 ml-2">groups: {(k.groups || []).join(", ")}</span>}</div>
               <button onClick={() => revokeKey(k.id)} className="text-xs text-red-600 hover:underline">Revoke</button>
             </div>
           ))}

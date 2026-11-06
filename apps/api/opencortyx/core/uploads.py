@@ -78,6 +78,18 @@ def digests_in(value) -> set[str]:
     return out
 
 
+def remove(digests) -> int:
+    """Delete these stored files now (a forgotten asset's original). Returns how many were there."""
+    n = 0
+    for d in digests or ():
+        try:
+            _path(str(d)).unlink()
+            n += 1
+        except (FileNotFoundError, ValueError, OSError):
+            pass
+    return n
+
+
 def sweep(keep: set[str], older_than_hours: float | None = None) -> dict:
     """Remove stored files not renewed for `older_than_hours` and not in `keep`, and stale partial
     writes. Returns counts."""

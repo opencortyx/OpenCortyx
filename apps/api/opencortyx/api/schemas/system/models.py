@@ -53,6 +53,7 @@ class HFDownload(BaseModel):
     """A Hugging Face model to download into OpenCortyx's model cache."""
     repo: str                               # e.g. Qwen/Qwen2.5-0.5B-Instruct
     token: Optional[str] = None             # only for gated models; used for this download, not stored
+    role: str = "generation"                # what it is for: generation, or verification (citation check)
 
 
 class FastembedDownload(BaseModel):

@@ -73,23 +73,32 @@ def _options(tok, max_tokens: int, temperature: float) -> dict:
     return opts
 
 
-def _generate(model_id: str, prompt: str, system: str | None, max_tokens: int, temperature: float) -> str:
+def _generate(model_id: str, prompt: str, system: str | None, max_tokens: int, temperature: float) -> tuple:
+    """(text, (prompt tokens, generated tokens)) - counted by the model's own tokenizer."""
     import torch
     tok, model = _load(model_id)
     enc = _encode(tok, prompt, system)
     with _gen_lock, torch.inference_mode():
         out = model.generate(**enc, **_options(tok, max_tokens, temperature))
-    return tok.decode(out[0][enc["input_ids"].shape[-1]:], skip_special_tokens=True)
+    n_in = int(enc["input_ids"].shape[-1])
+    generated = out[0][n_in:]
+    return tok.decode(generated, skip_special_tokens=True), (n_in, int(generated.shape[-1]))
+
+
+async def complete_counted(model_id: str, prompt: str, system: str | None = None, max_tokens: int = 256,
+                           temperature: float = 0.2) -> tuple:
+    return await asyncio.to_thread(_generate, model_id, prompt, system, max_tokens, temperature)
 
 
 async def complete(model_id: str, prompt: str, system: str | None = None, max_tokens: int = 256,
                    temperature: float = 0.2) -> str:
-    return await asyncio.to_thread(_generate, model_id, prompt, system, max_tokens, temperature)
+    return (await complete_counted(model_id, prompt, system, max_tokens, temperature))[0]
 
 
 async def stream(model_id: str, prompt: str, system: str | None = None, max_tokens: int = 256,
-                 temperature: float = 0.2):
-    """Yield text as it is generated. On a CPU the first words arrive long before the last."""
+                 temperature: float = 0.2, counts: dict | None = None):
+    """Yield text as it is generated. On a CPU the first words arrive long before the last.
+    `counts`, when given, receives {"in", "out"} token counts from the tokenizer at the end."""
     import torch
     from transformers import TextIteratorStreamer
 
@@ -108,11 +117,19 @@ async def stream(model_id: str, prompt: str, system: str | None = None, max_toke
 
     threading.Thread(target=run, daemon=True).start()
     chunks = iter(streamer)
+    produced = []
     while True:
         text = await asyncio.to_thread(next, chunks, None)
         if text is None:
             break
         if text:
+            produced.append(text)
             yield text
     if failed:
         raise failed[0]
+    if counts is not None:
+        try:
+            counts["in"] = int(enc["input_ids"].shape[-1])
+            counts["out"] = len(tok("".join(produced), add_special_tokens=False)["input_ids"])
+        except Exception:                           # noqa: BLE001 - the meter estimates instead
+            pass

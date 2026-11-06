@@ -72,32 +72,39 @@ async def edit_overview_ep(source_id: uuid.UUID, patch: OverviewEdit,
 @router.get("/assets/{asset_id}/delete-preview")
 async def preview_asset_delete_ep(asset_id: uuid.UUID, user: CurrentUser = Depends(require_write)):
     """What deleting this asset WOULD remove (nodes by type + edges) — powers the confirm dialog."""
-    from opencortyx.ingest.runs.asset_purge import preview_asset_delete
-    res = await preview_asset_delete(user.workspace_id, asset_id)
+    from opencortyx.knowledge.forget import preview_asset
+    res = await preview_asset(user.workspace_id, asset_id)
     if res is None:
         raise HTTPException(status_code=404, detail="Asset not found")
     return res
 
 
 @router.delete("/assets/{asset_id}")
-async def delete_asset_ep(asset_id: uuid.UUID, user: CurrentUser = Depends(require_write)):
-    """PERMANENTLY delete an asset: the asset node and every node that exists only because of it
-    (chunks, properties/rows, entities, claims, summaries, profile sections, comments), all their
-    edges, its Progress runs, and its entry in any sync manifest. Not recoverable. Idempotent."""
-    from opencortyx.ingest.runs.asset_purge import purge_asset_full
-    res = await purge_asset_full(user.workspace_id, asset_id)
+async def delete_asset_ep(asset_id: uuid.UUID, forget: bool = False, user: CurrentUser = Depends(require_write)):
+    """PERMANENTLY delete an asset from every store (knowledge/forget.py): its nodes and edges, search
+    points, data rows - vacuumed at once, so no older table version still holds them - evidence,
+    cached extraction answers, the stored upload, labels, chat citations, audit references, runs and
+    manifest entries. Merged records it was part of are rebuilt without it. Not recoverable.
+
+    `forget=true` also tombstones it: it is never read back, even if it is still in a synced folder
+    or uploaded again. Without it the same file can be added again (to replace it with a corrected
+    one). The response is the deletion job, with a proof that nothing is left."""
+    from opencortyx.knowledge.forget import forget_asset
+    if forget and user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can forget an asset permanently.")
+    res = await forget_asset(user.workspace_id, asset_id, by=str(user.user_id), tombstone=forget)
     if res is None:
         raise HTTPException(status_code=404, detail="Asset not found")
-    await audit(user.workspace_id, user.user_id, "asset/delete", node_id=asset_id,
-                meta={"label": res.get("label"), "type": res.get("type"),
-                       "nodes": res["nodes"], "edges": res["edges"], "runs": res["runs"]})
-    return res
+    purge = (res.get("steps") or {}).get("graph") or {}
+    await audit(user.workspace_id, user.user_id, "asset/forget" if forget else "asset/delete", node_id=None,
+                meta={"job_id": res["id"], "status": res["status"], "nodes": purge.get("count", 0)})
+    return {**res, "deleted": True, "nodes": purge.get("count", 0)}
 
 
 @router.delete("/sources/{source_id}")
 async def delete_source_ep(source_id: uuid.UUID, user: CurrentUser = Depends(require_write)):
     """Alias of DELETE /assets/{id} — same full purge, kept for existing callers."""
-    return await delete_asset_ep(source_id, user)
+    return await delete_asset_ep(source_id, False, user)
 
 
 @router.get("/assets/{asset_id}/data")
@@ -113,13 +120,26 @@ async def asset_data_ep(asset_id: uuid.UUID, offset: int = 0, limit: int = 50,
     row = await _assets.get(user.workspace_id, asset_id)
     if row is None:
         return {"available": False}
+    from opencortyx.core.security import scope as _scope
+    hidden: dict = {}
+    if _scope.current() is not None:
+        # An asset outside the caller's scope is not found; inside it, its personal-data columns
+        # stay out unless the scope reaches "confidential" (as for questions).
+        if await NodeRepo().get(user.workspace_id, asset_id) is None and                 await NodeRepo()._raw_get(user.workspace_id, asset_id) is not None:
+            raise HTTPException(status_code=404, detail="Asset not found.")
+        try:
+            from opencortyx.retrieval.l2_data.schema import load as load_schema
+            hidden = {k: v for k, v in (await load_schema(user.workspace_id)).hidden_columns().items()
+                      if k == str(asset_id)}
+        except Exception:                                     # noqa: BLE001 - no schema: no rows
+            return {"available": False}
     limit, offset = max(1, min(int(limit), 500)), max(0, int(offset))
     refs = await _assets.refs(user.workspace_id, ids=[asset_id])
     order = {"unstructured": '"ordinal"', "structured": '"_row_key"', "semistructured": '"record_id"'}
     by = order.get(row.kind, "1") if row.storage == "managed" else "1"
 
     def go():
-        with Views(user.workspace_id, refs, lock=True) as v:
+        with Views(user.workspace_id, refs, lock=True, hidden=hidden) as v:
             view = next(iter(v.names), None)
             if view is None:
                 return [], [], 0

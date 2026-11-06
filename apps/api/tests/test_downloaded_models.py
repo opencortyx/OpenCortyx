@@ -24,9 +24,9 @@ def test_complete_and_stream_run_a_downloaded_model_in_process(monkeypatch):
 
     async def fake_complete(model_id, prompt, system=None, max_tokens=256, temperature=0.2):
         seen.append(("complete", model_id))
-        return "ok"
+        return "ok", (3, 1)               # the text, and the tokenizer's counts for the meter
 
-    async def fake_stream(model_id, prompt, system=None, max_tokens=256, temperature=0.2):
+    async def fake_stream(model_id, prompt, system=None, max_tokens=256, temperature=0.2, counts=None):
         seen.append(("stream", model_id))
         for t in ("o", "k"):
             yield t
@@ -34,7 +34,7 @@ def test_complete_and_stream_run_a_downloaded_model_in_process(monkeypatch):
     async def no_server(*a, **k):
         raise AssertionError("a downloaded model must not be sent to an HTTP endpoint")
 
-    monkeypatch.setattr(local_llm, "complete", fake_complete)
+    monkeypatch.setattr(local_llm, "complete_counted", fake_complete)
     monkeypatch.setattr(local_llm, "stream", fake_stream)
     monkeypatch.setattr(llm, "_openai_complete", no_server)
     spec = {"provider": "transformers", "model_id": "org/tiny"}
@@ -111,7 +111,7 @@ def test_info_says_whether_a_model_can_run_in_opencortyx(monkeypatch, task, file
 
 
 def test_start_refuses_a_model_that_cannot_run_here(monkeypatch):
-    monkeypatch.setattr(hf_hub, "info", lambda repo, token=None: {
+    monkeypatch.setattr(hf_hub, "info", lambda repo, token=None, role="generation": {
         "repo": repo, "runs_in_opencortyx": False, "why_not": "it has no safetensors weights"})
     with pytest.raises(ValueError, match="cannot run in OpenCortyx"):
         hf_hub.start("org/gguf-only")

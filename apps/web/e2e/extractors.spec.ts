@@ -90,7 +90,7 @@ test("Try it sends the unsaved form and shows things, connections and the input'
   await page.getByRole("button", { name: "Run" }).click();
   const tryIt = page.getByRole("region", { name: "Try it" });
   await expect(tryIt.getByText("Things (3)")).toBeVisible();
-  await expect(tryIt.getByText("24 months")).toBeVisible();
+  await expect(tryIt.getByText("term 24 months")).toBeVisible();
   await expect(tryIt.getByText("new kind")).toHaveCount(1);          // Jurisdiction: not one this form names
   await expect(tryIt.getByText("—HAS_PARTY→")).toBeVisible();
   await expect(tryIt.getByText("the input").first()).toBeVisible();
@@ -110,7 +110,7 @@ test("nothing is saved without a name, under a taken name, or with a pattern tha
   await page.goto("/dashboard/custom-assets");
   await page.getByRole("button", { name: "New extractor" }).first().click();
   const save = page.getByRole("button", { name: "Save extractor" });
-  const problems = page.getByRole("alert");
+  const problems = page.locator('[role="alert"]:not(#__next-route-announcer__)');   // Next.js keeps an empty one
 
   await save.click();
   await expect(problems).toContainText("Give the extractor a name.");

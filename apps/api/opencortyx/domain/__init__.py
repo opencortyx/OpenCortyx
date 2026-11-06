@@ -21,7 +21,8 @@ from opencortyx.domain.graph_clusters import (
 from opencortyx.domain.graph_tree import (
     GraphAsset, GraphAssetTag, GraphRoot, GraphTagRequest, GraphTreeRun,
 )
-from opencortyx.domain.resolution import ResolutionDecision, ResolutionKey
+from opencortyx.domain.resolution import ResolutionDecision, ResolutionKey, ResolutionLabel
+from opencortyx.domain.governance import DeletionJob, LlmCache, LlmUsage, Tombstone
 from opencortyx.domain.chat import ChatMessage, ChatThread
 from opencortyx.domain.data import DataAsset, Evidence, SourceKey
 
@@ -33,7 +34,8 @@ __all__ = [
     "ASSET_TYPES", "TypeRegistry", "base_type_of", "is_asset_node",
     "GraphCluster", "GraphClusterLink", "GraphClusterMember", "GraphClusterRun",
     "GraphAsset", "GraphAssetTag", "GraphRoot", "GraphTagRequest", "GraphTreeRun",
-    "ResolutionDecision", "ResolutionKey",
+    "ResolutionDecision", "ResolutionKey", "ResolutionLabel",
+    "DeletionJob", "LlmCache", "LlmUsage", "Tombstone",
     "ChatMessage", "ChatThread",
     "DataAsset", "Evidence", "SourceKey",
 ]

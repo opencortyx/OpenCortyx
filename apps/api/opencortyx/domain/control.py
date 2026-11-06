@@ -68,6 +68,9 @@ class User(V2Base):
     email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(20), default="viewer")    # admin | editor | viewer
+    #: The access groups the person is in (team names). A Policy names a group; the role is always
+    #: one of the person's groups as well, so a policy on "viewer" still works.
+    groups: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]")
     status: Mapped[str] = mapped_column(String(20), default="active")  # active | disabled
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

@@ -123,7 +123,25 @@ class Schema:
                 want.add(t.asset_id)
         names = {t.asset_id: t.view for t in self.tables.values() if t.kind != "object"}
         return {"assets": [r for r in self.refs if r.asset_id in want], "logical": logical,
-                "view_names": {a: names[a] for a in want if a in names}}
+                "view_names": {a: names[a] for a in want if a in names},
+                "hidden": self.hidden_columns()}
+
+    def hidden_columns(self) -> dict:
+        """{asset_id: [column]} the current caller may not read: personal-data columns, unless the
+        access scope reaches "confidential" (core/security/scope.py). They are left out of the
+        views themselves, so no SQL - `SELECT *` included - can return them."""
+        from opencortyx.core.security.scope import current
+        s = current()
+        if s is None or s.level >= 2:          # the platform's own work, or a caller cleared for it
+            return {}
+        out: dict = {}
+        for t in self.tables.values():
+            if t.kind == "object":
+                continue
+            cols = [c.name for c in t.columns if c.pii]
+            if cols:
+                out.setdefault(t.asset_id, []).extend(cols)
+        return out
 
     def objects(self) -> list:
         """The object-type tables: one per accepted type of the semantic layer."""

@@ -26,11 +26,17 @@ function why(d: ResolutionDecision): string {
   if (d.relation === "SAME") return `${a} is the same ${d.node_type} as ${b}${identity ? ` (matched on ${identity})` : ""}.`;
   if (d.relation === "SUPPORTS") return `${d.attribute} agrees with ${b}: ${String(d.evidence?.value)}.`;
   if (d.relation === "EXTENDS") return `${d.attribute} was added to ${b}: ${String(d.evidence?.value)}.`;
+  if (d.relation === "DISTINCT") {
+    if (d.evidence?.by_person) return `${a} and ${b} were marked different by a person: they are never joined again.`;
+    const diff = (d.evidence?.differ || []).map((x: any) => `${x.attribute} ${x.value} vs ${x.other}`).join(", ");
+    return `${a} and ${b} share an identity but are different things${diff ? ` (${diff} must agree)` : ""}.`;
+  }
   return `${d.attribute} differs: ${String(d.evidence?.value)} vs ${String(d.evidence?.other)}.`;
 }
 const RELATION_STYLE: Record<string, string> = {
   SAME: "bg-sky-50 text-sky-700", SUPPORTS: "bg-emerald-50 text-emerald-700",
   EXTENDS: "bg-violet-50 text-violet-700", CONTRADICTS: "bg-rose-50 text-rose-700",
+  DISTINCT: "bg-amber-50 text-amber-700",
 };
 
 export default function ReviewInboxPage() {
@@ -198,6 +204,9 @@ export default function ReviewInboxPage() {
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-stone-800">Possibly the same {d.node_type}: <b>{d.subject_label}</b> and <b>{d.target_label}</b></p>
                     <p className="mt-1 text-[11px] text-stone-500"><span className="font-mono">score {Math.round((d.confidence ?? 0) * 100)}%</span>{d.source_label ? ` · from ${d.source_label}` : ""}</p>
+                    {(d.evidence?.reasons || []).length > 0 && (
+                      <p className="mt-1 text-[11.5px] text-amber-700">Not joined automatically: {(d.evidence.reasons as string[]).join("; ")}.</p>
+                    )}
                   </div>
                 ) : (
                   <div className="flex-1 min-w-0">

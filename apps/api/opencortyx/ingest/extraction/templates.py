@@ -29,6 +29,7 @@ from opencortyx.core.db import V2Session
 from opencortyx.core.substrate import NodeRepo
 from opencortyx.core.substrate import document as _node_document
 from opencortyx.core.inference.llm import complete
+from opencortyx.core.inference.usage import BudgetExceeded
 from opencortyx.core.inference.registry import NoModelConfigured
 from opencortyx.stores.graph import NodeQuery
 from opencortyx.stores.graph.query import normalize_name
@@ -361,6 +362,8 @@ async def _model_records(text: str, mech: dict | None = None, model_spec: dict |
                              json_mode=True, temperature=0.0, model_spec=model_spec)
     except NoModelConfigured:
         raise                                        # the run must say what to connect, not find nothing
+    except BudgetExceeded:
+        raise
     except Exception as e:                           # noqa: BLE001 - one input that fails reads as nothing
         log.warning("extract.model_failed", error=str(e)[:300])
         return {"records": [], "links": []}
@@ -883,6 +886,8 @@ async def _gen_attr_value(workspace_id, override: dict, attr_key: str, ctx: dict
     try:
         raw = await complete(prompt, max_tokens=600, temperature=0.1, model_spec=spec,
                              json_mode=wants_json)
+    except BudgetExceeded:
+        raise
     except Exception:
         return None
     raw = (raw or "").strip()
@@ -944,6 +949,8 @@ async def _gen_attr_values(workspace_id, overrides: dict, keys, ctx: dict) -> di
             raw = await complete("\n".join(parts), system="You output one JSON object. JSON only.",
                                  max_tokens=1200, json_mode=True, temperature=0.1, model_spec=spec)
             parsed = _parse_json(raw)
+        except BudgetExceeded:
+            raise
         except Exception:                                            # noqa: BLE001 — fall back below
             parsed = {}
         for k, ov in items:
@@ -1023,8 +1030,38 @@ def entity_id(workspace_id, type_name: str, name: str) -> uuid.UUID:
     return uuid.uuid5(_NAMED_NS, f"{workspace_id}:{type_name}:{normalize_name(name)}")
 
 
-def _named_id(workspace_id, node_type: str, name: str, collection_id=None):
-    """The id of the one node of `node_type` called `name` (per collection when given)."""
+_NAME_SCOPES: dict = {}       # workspace -> (read_at, {type: "workspace" | "asset"})
+
+
+async def _name_asset(workspace_id, node_type: str):
+    """The asset a named node of `node_type` is scoped to, or None (one node per name in the
+    workspace, the default). A type whose resolution rule says `name_scope: asset` gets one node per
+    name PER FILE, so two files' "John Smith" stay two nodes until resolution - with its gates and
+    labels - says they are one (resolution/spec.py)."""
+    import time as _t
+    key = str(workspace_id)
+    hit = _NAME_SCOPES.get(key)
+    if hit is None or _t.monotonic() - hit[0] > 60.0:
+        try:
+            from opencortyx.resolution.spec import load_specs
+            async with V2Session() as db:
+                specs = await load_specs(db, uuid.UUID(key))
+            hit = (_t.monotonic(), {t: s.name_scope for t, s in specs.items()})
+        except Exception:                                    # noqa: BLE001 - unknown: the default
+            hit = (_t.monotonic(), {})
+        _NAME_SCOPES[key] = hit
+    if hit[1].get(str(node_type)) != "asset":
+        return None
+    from opencortyx.core.dataplane import evidence as _ev
+    cur = _ev.current()
+    return cur.asset_id if cur is not None else None
+
+
+def _named_id(workspace_id, node_type: str, name: str, collection_id=None, asset_id=None):
+    """The id of the one node of `node_type` called `name` (per collection when given, per asset
+    when the type's names are scoped to the file they appear in)."""
+    if asset_id:
+        return _det_id(workspace_id, str(node_type).lower(), f"asset:{asset_id}:{normalize_name(name)}")
     if not collection_id:
         # one id per (type, normalised name): "The Nightingale" from any extractor or file is one node
         return entity_id(workspace_id, str(node_type), str(name))
@@ -1037,7 +1074,7 @@ async def named_node(workspace_id, name: str, *, node_type: str = "Entity", enti
     edge endpoint and an emitted entity with the same name are one node. No lookup and no matching:
     which DIFFERENT names are the same thing is decided after the asset, by the resolution step."""
     node_type = entity_type or node_type                   # a typed name ("Person") is a node of that type
-    nid = _named_id(workspace_id, node_type, name, collection_id)
+    nid = _named_id(workspace_id, node_type, name, collection_id, await _name_asset(workspace_id, node_type))
     if await _repo.get(workspace_id, nid) is None:
         await _repo.upsert_node(node_id=nid, workspace_id=workspace_id, type=node_type, label=str(name).strip()[:200],
                                 entity_type=entity_type or None, collection_id=collection_id, confidence=0.85,
@@ -1213,6 +1250,8 @@ async def _relate_pairs(mech: dict, text: str, from_cands: list, to_cands: list,
     try:
         raw = await complete(prompt, system="You extract relationships between listed items. JSON only.",
                              max_tokens=900, json_mode=True, temperature=0.1, model_spec=model_spec)
+    except BudgetExceeded:
+        raise
     except Exception:
         return []
     parsed = _parse_json(raw)
@@ -1516,7 +1555,7 @@ async def _apply_emit_unit(db, workspace_id, tmpl, *, source_node, parsed, ctx, 
             # every emitted node: a deterministic id, then an upsert
             key = label if resolve else spec.get("key") or (
                 (":".join(_s(rec.get(f)) for f in idfields) or label) if idfields else label)
-            nid = (_named_id(workspace_id, rtype, key, collection_id) if resolve
+            nid = (_named_id(workspace_id, rtype, key, collection_id, await _name_asset(workspace_id, rtype)) if resolve
                    else _det_id(workspace_id, rtype.lower(), key.strip().lower()) if is_global
                    else _det_id(workspace_id, rtype.lower(),
                                 f"{source_node.id if source_node else 'global'}:{tmpl.name}:{key}"))
@@ -1624,6 +1663,8 @@ async def _apply_emit_unit(db, workspace_id, tmpl, *, source_node, parsed, ctx, 
                                 gen_rel = str(raw_rel or "").strip().strip('"').strip("'")
                                 if gen_rel:
                                     rec_etype = gen_rel
+                            except BudgetExceeded:
+                                raise
                             except Exception:
                                 pass
                 if not rec_etype:
@@ -1735,6 +1776,18 @@ async def _apply_emit_unit(db, workspace_id, tmpl, *, source_node, parsed, ctx, 
 async def run_template(workspace_id: uuid.UUID, template, *, collection_id=None, limit: int = _RUN_LIMIT,
                        source_key: str | None = None, node_ids: list | None = None,
                        attrs=None, deadline: float | None = None, done=()) -> dict:
+    """`_run_template`, with every model call it makes counted as this extractor's
+    ("extract:<name>" in llm_usage), so its cost per record can be read and estimated."""
+    from opencortyx.core.inference import usage
+    with usage.scope(workspace_id, purpose_name=f"extract:{getattr(template, 'name', '') or 'extractor'}"):
+        return await _run_template(workspace_id, template, collection_id=collection_id, limit=limit,
+                                   source_key=source_key, node_ids=node_ids, attrs=attrs,
+                                   deadline=deadline, done=done)
+
+
+async def _run_template(workspace_id: uuid.UUID, template, *, collection_id=None, limit: int = _RUN_LIMIT,
+                        source_key: str | None = None, node_ids: list | None = None,
+                        attrs=None, deadline: float | None = None, done=()) -> dict:
     """Run ONE executable template. Independent templates (seed.literal / source=null) emit once;
     bound templates iterate the nodes they select — optionally scoped to one `source_key`, or to an
     explicit set of `node_ids` (DAG chaining: run a task over a prior step's exact output). Any
@@ -1807,6 +1860,15 @@ async def run_template(workspace_id: uuid.UUID, template, *, collection_id=None,
                 for k in ("attributes", "nodes", "edges"):
                     totals[k] += c[k]
                 await db.commit()
+            except BudgetExceeded as e:
+                # Not this node's fault, and every next node would fail the same way: stop here, keep
+                # what was read, and report it so the run can be resumed once the budget allows.
+                read.pop()
+                totals["nodes_seen"] -= 1
+                await db.rollback()
+                log.warning("enrich.paused_budget", template=str(template.name), error=str(e))
+                return {"status": "paused", "reason": "budget", "detail": str(e), "name": template.name,
+                        "done": sorted(done | set(read)), **totals}
             except Exception as e:                       # noqa: BLE001 — isolate per-node failures
                 totals["errors"] += 1
                 log.warning("enrich.template_failed", template=str(template.name), node_id=str(node.id), error=str(e))
@@ -2259,6 +2321,8 @@ async def run_named_templates_on_chunks(workspace_id: uuid.UUID, names, pairs, c
                     max_tokens=min(4000, 800 + 400 * len(members)),
                     json_mode=True, temperature=0.1, model_spec=specs[members[0].name])
             parsed = _parse_json(raw)
+        except BudgetExceeded:
+            raise
         except Exception as e:                        # noqa: BLE001 — whole call failed → all fall back
             log.warning("enrich.group_call_failed", chunk_id=str(cid), error=str(e))
         for t in members:

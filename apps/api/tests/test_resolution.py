@@ -164,14 +164,15 @@ def test_resolve_asset_is_one_lookup_and_one_write_per_type():
     old = N({"customer_no": "C-1", "region": "eu"}, age=-100)
     nodes = [N({"customer_no": "C-1", "region": "ap"}), N({"customer_no": "C-2"}),
              N({"sku": "S-1"}, type_="Product"), N({"text": "chunk"}, type_="Chunk")]
-    store = FakeStore({"Customer": SPEC, "Product": ResolutionSpec(identify_by=("sku",))}, nodes,
+    lenient = ResolutionSpec(identify_by=("customer_no",), ignore=("notes",), conflict_review=False)
+    store = FakeStore({"Customer": lenient, "Product": ResolutionSpec(identify_by=("sku",))}, nodes,
                       index={records.key_of(nodes[0], SPEC): old.id}, known={old.id: old})
     out = asyncio.run(resolve_asset(ORG, SRC, store=store))
     assert sorted(t for t, _ in store.lookups) == ["Customer", "Product"]
     assert len(store.applied) == 2
     assert out["types"]["Customer"]["same"] == 1 and out["types"]["Customer"]["contradicts"] == 1
-    assert out["types"]["Product"] == {"same": 0, "supports": 0, "extends": 0, "contradicts": 0, "review": 0,
-                                       "unidentified": 0}
+    assert out["types"]["Product"] == {"same": 0, "supports": 0, "extends": 0, "contradicts": 0, "distinct": 0,
+                                       "review": 0, "unidentified": 0}
     assert store.statements_for == [SRC]                               # statements always run
     assert store.resolved == (SRC, out["types"])                       # the asset says it was resolved
 
@@ -244,10 +245,37 @@ def test_a_spec_round_trips_with_its_gate():
 
 def test_resolve_asset_uses_the_block_pool_for_similar():
     old, new = N({"company": "Acme Corporation"}, age=-10), N({"company": "Acme Corporation."})
+    spec = ResolutionSpec(identify_by=("company",), scorer="similar", auto=0.95, review=0.80, corroborate="never")
+    store = FakeStore({"Customer": spec}, [new], known={old.id: old})
+    store.pool = {records.block_of(old, spec): [old.id]}
+    out = asyncio.run(resolve_asset(ORG, SRC, store=store))
+    assert out["types"]["Customer"]["same"] == 1
+
+
+def test_by_default_a_disagreeing_match_waits_for_a_person_instead_of_joining():
+    """Two customers with one number but different regions: by default not joined automatically."""
+    old = N({"customer_no": "C-1", "region": "eu"}, age=-100)
+    new = N({"customer_no": "C-1", "region": "ap"})
+    store = FakeStore({"Customer": SPEC}, [new], index={records.key_of(new, SPEC): old.id}, known={old.id: old})
+    out = asyncio.run(resolve_asset(ORG, SRC, store=store))
+    assert out["types"]["Customer"]["same"] == 0 and out["types"]["Customer"]["review"] == 1
+    (_, plan), = store.applied
+    (d,) = plan.decisions
+    assert d["needs_review"] and "disagrees on region" in d["evidence"]["reasons"][0]
+
+
+def test_by_default_a_similar_identity_needs_a_second_field_to_agree():
+    old, new = N({"company": "Acme Corporation"}, age=-10), N({"company": "Acme Corporation."})
     store = FakeStore({"Customer": SIMILAR}, [new], known={old.id: old})
     store.pool = {records.block_of(old, SIMILAR): [old.id]}
     out = asyncio.run(resolve_asset(ORG, SRC, store=store))
-    assert out["types"]["Customer"]["same"] == 1
+    assert out["types"]["Customer"]["same"] == 0 and out["types"]["Customer"]["review"] == 1
+    old2 = N({"company": "Acme Corporation", "vat": "GB1"}, age=-10)
+    new2 = N({"company": "Acme Corporation.", "vat": "GB1"})
+    store = FakeStore({"Customer": SIMILAR}, [new2], known={old2.id: old2})
+    store.pool = {records.block_of(old2, SIMILAR): [old2.id]}
+    out = asyncio.run(resolve_asset(ORG, SRC, store=store))
+    assert out["types"]["Customer"]["same"] == 1, "the VAT number agrees: joined"
 
 
 # ── wiring ────────────────────────────────────────────────────────────────────────────────────

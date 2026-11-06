@@ -9,6 +9,7 @@ import IngestOutcomeCard from "@/components/authoring/IngestOutcomeCard";
 import {
   contextV2Api, type IngestOutcome, type OutcomeStep, type Pipeline, type SchemaMappingRecord, type UploadBatch,
 } from "@/lib/api/contextV2";
+import { costApi, tokens, usd, type CostEstimate } from "@/lib/api/governance";
 import { uploadAll } from "@/lib/uploadQueue";
 import { FULL_UI } from "@/lib/simple";
 import { buildStages, newStage, type PipelineKind } from "@/components/pipelines/model";
@@ -54,9 +55,10 @@ function kindOf(file: File): FileKind {
 
 /** Custom: what a person who knows they want it can set. Empty = the defaults. */
 /** `inputs`: per extractor, the columns or keys (tables, JSON) or sections (documents) it reads; empty = all */
+/** `collectionId`: the collection the files go in - what access policies give groups (Users & access) */
 type CustomOptions = { pipelines: PipelineChoice; mappings: string[]; extractors: string[]; inputs: Record<string, string>;
-                       tags: string[] };
-const NO_CUSTOM: CustomOptions = { pipelines: { ...NO_CHOICE }, mappings: [], extractors: [], inputs: {}, tags: [] };
+                       tags: string[]; collectionId: string };
+const NO_CUSTOM: CustomOptions = { pipelines: { ...NO_CHOICE }, mappings: [], extractors: [], inputs: {}, tags: [], collectionId: "" };
 
 /** The columns (CSV header) or top-level keys (first JSON record) of the dropped files, as suggestions. */
 async function fieldsOf(files: File[]): Promise<string[]> {
@@ -195,6 +197,7 @@ function uploadOptions(graph: GraphOptions, custom: CustomOptions) {
     extractorInputs: Object.fromEntries(custom.extractors.map((n) => [n, (custom.inputs[n] || "").split(",")
       .map((x) => x.trim()).filter(Boolean)])),
     extractKnowledge: graph.knowledge, wholeData: graph.wholeData,
+    ...(custom.collectionId ? { collectionId: custom.collectionId } : {}),
   };
 }
 
@@ -314,8 +317,25 @@ function CustomSection({ kinds, files, value, onChange }: {
     }
   }, [open, records.length, documents, mappings, extractors]);  // eslint-disable-line react-hooks/exhaustive-deps
 
+  const [collections, setCollections] = useState<{ id: string; name: string }[] | null>(null);
+  useEffect(() => {
+    if (open && collections === null) {
+      contextV2Api.collections().then((r: any) => setCollections((r?.collections || []).map((c: any) => ({ id: String(c.id), name: c.name }))))
+        .catch(() => setCollections([]));
+    }
+  }, [open, collections]);
+  // What each chosen extractor cost per 1,000 records on its last calls (previews included).
+  const [costs, setCosts] = useState<Record<string, CostEstimate | null>>({});
+  useEffect(() => {
+    for (const n of value.extractors) {
+      if (n in costs) continue;
+      setCosts((c) => ({ ...c, [n]: null }));
+      costApi.estimate(`extract:${n}`, 1000).then((e) => setCosts((c) => ({ ...c, [n]: e }))).catch(() => {});
+    }
+  }, [value.extractors]);  // eslint-disable-line react-hooks/exhaustive-deps
+
   const set = Object.values(value.pipelines).filter(Boolean).length + value.mappings.length
-    + value.extractors.length + (value.tags.length ? 1 : 0);
+    + value.extractors.length + (value.tags.length ? 1 : 0) + (value.collectionId ? 1 : 0);
   const toggle = (list: string[], v: string) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
   const [saved, setSaved] = useState("");
   const saveSetup = async () => {
@@ -400,12 +420,36 @@ function CustomSection({ kinds, files, value, onChange }: {
                     list="add-fields" value={value.inputs[n] || ""}
                     placeholder={records.length ? "all columns / keys, or e.g. notes, summary" : "all sections, or e.g. Pricing, Terms"}
                     onChange={(e) => onChange({ ...value, inputs: { ...value.inputs, [n]: e.target.value } })} />
+                  <span className="shrink-0 text-[11px] text-stone-400" title="Measured on this extractor's last calls; a preview counts">
+                    {costs[n]?.estimate ? `≈ ${tokens(costs[n]!.estimate!.tokens)} tokens${costs[n]!.estimate!.cost_usd ? ` (${usd(costs[n]!.estimate!.cost_usd)})` : ""} per 1,000 records`
+                      : costs[n] ? "cost not measured yet - preview it first" : ""}
+                  </span>
                 </label>
               ))}
               <datalist id="add-fields">{fields.map((f) => <option key={f} value={f} />)}</datalist>
             </div>
           )}
 
+          <div>
+            <label htmlFor="add-collection" className="block text-sm font-medium text-stone-800 dark:text-stone-200 mb-1">Collection</label>
+            <select id="add-collection" value={value.collectionId}
+              onChange={async (e) => {
+                if (e.target.value !== "__new") { onChange({ ...value, collectionId: e.target.value }); return; }
+                const name = prompt("Name the new collection")?.trim();
+                if (!name) return;
+                try {
+                  const c = await contextV2Api.createCollection(name);
+                  setCollections((cs) => [...(cs || []), { id: c.id, name: c.name }]);
+                  onChange({ ...value, collectionId: c.id });
+                } catch (err: any) { alert(err?.response?.data?.detail || "Could not create the collection."); }
+              }}
+              className="w-full rounded border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-900 px-2 py-1.5 text-sm">
+              <option value="">None - the whole workspace reads it</option>
+              {(collections || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              <option value="__new">+ New collection…</option>
+            </select>
+            <p className="text-[11px] text-stone-400 mt-1">Who reads a collection is set in Settings → Users &amp; access.</p>
+          </div>
           <div>
             <label htmlFor="add-tags" className="block text-sm font-medium text-stone-800 dark:text-stone-200 mb-1">Tags</label>
             <TagInput id="add-tags" value={value.tags} onChange={(tags) => onChange({ ...value, tags })}

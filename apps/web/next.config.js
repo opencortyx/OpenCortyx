@@ -1,5 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Two `next dev` servers in one checkout overwrite each other's bundle; a second one sets its own.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   output: "standalone",
   images: { unoptimized: true },
   reactStrictMode: true,

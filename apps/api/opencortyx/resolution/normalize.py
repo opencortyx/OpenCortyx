@@ -65,6 +65,21 @@ def identity_block(values) -> str | None:
     return hashlib.sha256(("block:" + text.replace(" ", "")[:4]).encode()).hexdigest()
 
 
+def identity_blocks(values) -> list[str]:
+    """Every block a similar identity is filed and looked up under: the first four characters of
+    the whole identity (as `identity_block`), and of its last word. One block alone misses a match
+    whose first word is spelled differently ("Catherine Zeta" / "Katherine Zeta"); the second finds
+    it, and `similarity` still decides."""
+    text = identity_text(values)
+    if text is None:
+        return []
+    out = [identity_block(values)]
+    last = text.replace("", " ").split()
+    if len(last) > 1:
+        out.append(hashlib.sha256(("block:last:" + last[-1][:4]).encode()).hexdigest())
+    return out
+
+
 _DIGITS = re.compile(r"\d+")
 #: Words shorter than this are matched exactly: a letter changed on a short word is another word.
 MIN_FUZZY_WORD = 5

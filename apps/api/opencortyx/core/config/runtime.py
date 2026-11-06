@@ -70,6 +70,12 @@ _DEFAULTS = {
     "knowledge_detect": True,          # after ingestion: propose entity types, keys and links (metadata)
     "knowledge_publish": False,        # ...and publish the confident ones to the graph (Mode A.1)
     "name_match_threshold": 0.85,      # named things of one type whose names are this alike: one cluster
+    "resolution_corroborate": True,    # a similar (not equal) identity is applied only when another field agrees
+    "resolution_conflict_review": True,  # a match whose compared fields disagree waits for a person
+    "citation_policy": "flag",         # answers: 'flag' unsupported sentences, or 'strict' (drop them / abstain)
+    "citation_policy_agents": "strict",  # the same for API keys and MCP agents
+    "citation_check": True,            # use the Citation check model (Models page), when one is registered
+    "llm_cache": True,                 # extraction: answer an identical deterministic model request from cache
     "defer_extraction": True,
     # ── Chunking (read when a file is read or embedded; files already in keep theirs) ─────────
     "chunk_window_chars": 800,         # longest paragraph kept as one node / text embedded as one vector
@@ -305,6 +311,33 @@ SCHEMA: list[dict[str, Any]] = [
      "help": "How alike two names of one type must be to be joined as the same thing (one master, MEMBER_OF): "
      "\"Kristin Hannah\" and \"Kristen Hannah\". Exact names, ignoring case, punctuation and articles, are "
      "always one node. 1.0 links only exact names."},
+    {"key": "resolution_corroborate", "label": "Similar names need a second field", "kind": "bool",
+     "group": "Quality",
+     "help": "Two records whose identities are only SIMILAR (\"Andersen\" and \"Anderson\") are joined "
+     "automatically only when another compared field holds the same value. Otherwise the pair waits in "
+     "Review. Equal identities are not affected. On by default: a wrong link does more harm than a "
+     "missing one."},
+    {"key": "resolution_conflict_review", "label": "Disagreeing matches wait for a person", "kind": "bool",
+     "group": "Quality",
+     "help": "Two records that match on identity but DISAGREE on another compared field (two people "
+     "called John Smith with different emails) are not joined automatically; the pair waits in Review. "
+     "Fields a type lists under 'must agree' always keep two records apart when they differ."},
+    {"key": "citation_policy", "label": "Unsupported sentences (people)", "kind": "select",
+     "options": ["flag", "strict"], "group": "Quality",
+     "help": "What happens to an answer sentence that none of its sources supports. 'flag' shows it "
+     "marked as unsupported; 'strict' removes it, and abstains when nothing supported is left."},
+    {"key": "citation_policy_agents", "label": "Unsupported sentences (API keys and agents)",
+     "kind": "select", "options": ["flag", "strict"], "group": "Quality",
+     "help": "The same for answers given to an API key or an MCP agent, which may not show the flag to "
+     "anyone. 'strict' by default."},
+    {"key": "citation_check", "label": "Use the citation-check model", "kind": "bool", "group": "Quality",
+     "help": "Check each answer sentence with the Citation check model on the Models page (it catches "
+     "'did not approve' against 'approved'). Off: numbers, names, words and similarity only. Does "
+     "nothing until a Citation check model is registered."},
+    {"key": "llm_cache", "label": "Reuse identical extraction answers", "kind": "bool", "group": "Caching",
+     "help": "When extraction sends a model exactly the request it sent before (same record, same "
+     "extractor, same model), use the answer it gave then instead of paying for it again. Cached "
+     "answers are deleted with the file they were read from."},
     {"key": "structured_default_max_rows", "label": "Default rows sampled per table", "kind": "int",
      "min": 0, "max": 100000000, "group": "Structured",
      "help": "How many rows become nodes when no pipeline says otherwise. 0 = every row. A sample "
@@ -524,6 +557,15 @@ def knowledge_publish() -> bool: return bool(get("knowledge_publish"))
 def name_match_threshold() -> float:
     v = get("name_match_threshold")
     return max(0.5, min(1.0, float(0.85 if v is None else v)))
+def resolution_corroborate() -> bool: return bool(get("resolution_corroborate"))
+def resolution_conflict_review() -> bool: return bool(get("resolution_conflict_review"))
+
+
+def citation_policy(agent: bool = False) -> str:
+    v = str(get("citation_policy_agents" if agent else "citation_policy") or "flag")
+    return v if v in ("flag", "strict") else "flag"
+
+
 def chunk_window_chars() -> int: return max(200, min(8000, int(get("chunk_window_chars") or 800)))
 def chunk_overlap_chars() -> int:
     return max(0, min(chunk_window_chars() // 2, int(get("chunk_overlap_chars") or 0)))

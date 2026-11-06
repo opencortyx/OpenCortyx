@@ -27,7 +27,7 @@ import {
   Network,
   LayoutGrid,
   Workflow,
-  Fingerprint, Sparkles, Wand2, X } from "lucide-react";
+  Fingerprint, Sparkles, Wand2, X, Coins, Eraser } from "lucide-react";
 
 const SECTIONS = [
   {
@@ -77,6 +77,8 @@ const SECTIONS = [
     items: [
       { href: "/dashboard/users", label: "Users & Access", icon: UserCog, adminOnly: true },
       { href: "/dashboard/models", label: "Models", icon: Cpu, adminOnly: true },
+      { href: "/dashboard/cost", label: "Cost & usage", icon: Coins },
+      { href: "/dashboard/forget", label: "Data deletion", icon: Eraser, adminOnly: true },
       { href: "/dashboard/health", label: "System Health", icon: HeartPulse },
     ],
   },

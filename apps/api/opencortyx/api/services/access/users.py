@@ -4,6 +4,7 @@ from sqlalchemy import func, select
 
 def user_view(u) -> dict:
     return {"id": str(u.id), "email": u.email, "role": u.role, "status": u.status,
+            "groups": list(getattr(u, "groups", None) or []),
             "created_at": u.created_at.isoformat() if u.created_at else None}
 
 
