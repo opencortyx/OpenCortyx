@@ -6,7 +6,6 @@ check each change is caught. No model or network: similarity uses a word-count e
 verification model is a stand-in that reads negation.
 """
 import asyncio
-import math
 import re
 import uuid
 

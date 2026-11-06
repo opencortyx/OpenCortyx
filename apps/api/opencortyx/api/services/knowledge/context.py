@@ -2,9 +2,7 @@
 import uuid
 
 from fastapi import HTTPException, Request
-from sqlalchemy import select
 
-from opencortyx.domain.control import AuditLog
 from opencortyx.core.security.auth import CurrentUser
 from opencortyx.core.contracts import RetrieveContext
 from opencortyx.core.db import V2Session

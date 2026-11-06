@@ -100,7 +100,7 @@ def _require(model_spec: dict | None) -> tuple:
 
 
 async def _openai_complete(prompt, system, max_tokens, json_mode, model, temperature,
-                           base_url=None, api_key=None) -> str:
+                           base_url=None, api_key=None) -> tuple[str, tuple | None]:
     """Every OpenAI-compatible endpoint (a self-hosted server, OpenAI, Together, Groq, Azure) via base_url.
 
     The system prompt is sent as its own message rather than concatenated into the user turn, and
@@ -124,7 +124,7 @@ async def _openai_complete(prompt, system, max_tokens, json_mode, model, tempera
     return (resp.choices[0].message.content or ""), counts
 
 
-async def _anthropic_complete(prompt, system, max_tokens, model, temperature, api_key=None) -> str:
+async def _anthropic_complete(prompt, system, max_tokens, model, temperature, api_key=None) -> tuple[str, tuple | None]:
     from anthropic import AsyncAnthropic
     client = AsyncAnthropic(api_key=api_key)
     msg = await client.messages.create(
@@ -348,7 +348,8 @@ async def stream_complete(prompt: str, system: Optional[str] = None, max_tokens:
     from opencortyx.core.inference import usage
     spec = {**(model_spec or {}), "model_id": mid}
     await usage.check_budget(spec, usage.estimate(prompt) + usage.estimate(system) + int(max_tokens or 0))
-    meter, parts, counts = usage.Meter(spec, prompt, system), [], {}
+    meter, parts = usage.Meter(spec, prompt, system), []
+    counts: dict = {}
     try:
         if prov == "anthropic":
             async for c in _anthropic_stream(prompt, system, max_tokens, mid, temp, key, counts):

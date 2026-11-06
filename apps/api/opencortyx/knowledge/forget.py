@@ -33,8 +33,6 @@ forgotten and tombstoned, and the response says the source itself still holds it
 """
 from __future__ import annotations
 
-import hashlib
-import time
 import uuid
 from datetime import datetime, timezone
 from typing import Iterable, Optional
@@ -50,7 +48,7 @@ _TTL = 30.0
 
 
 from opencortyx.core.dataplane.tombstones import (  # noqa: E402 - the primitives live in core
-    Forgotten, _tombstones, add_tombstones, guard_assets, is_tombstoned, key_hash, lift_tombstone,
+    Forgotten, add_tombstones, guard_assets, is_tombstoned, key_hash, lift_tombstone,
 )
 from opencortyx.core.dataplane import tombstones as _tomb  # noqa: E402
 

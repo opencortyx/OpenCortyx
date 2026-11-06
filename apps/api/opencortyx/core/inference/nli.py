@@ -44,7 +44,7 @@ def _load(model_id: str):
 def _score(model_id: str, pairs: list) -> list:
     import torch
     tok, model, ent, con = _load(model_id)
-    out = []
+    out: list = []
     for i in range(0, len(pairs), 16):
         batch = pairs[i:i + 16]
         enc = tok([p[:PREMISE_CHARS] for p, _ in batch], [h for _, h in batch], truncation=True,

@@ -11,7 +11,7 @@ import uuid
 from typing import Iterable
 
 def key_hash(value) -> str:
-    from opencortyx.resolution.normalize import norm
+    from opencortyx.core.values import norm
     v = norm(value) if not isinstance(value, uuid.UUID) else str(value)
     return hashlib.sha256(str(v if v is not None else value).encode("utf-8")).hexdigest()
 
